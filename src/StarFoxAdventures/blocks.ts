@@ -358,10 +358,15 @@ export class EARLY1BLOCKFETCHER implements BlockFetcher {
             const modNum = getModFileNum(mod);
             const tabPath = `${subdir}/root_mod${modNum}.tab`;
             const binPath = `${subdir}/root_mod${modNum}.bin`;
-            const [blockColl, _] = await Promise.all([
-                BlockCollection.create(this.gameInfo, dataFetcher, tabPath, binPath, this.materialFactory, this.texFetcher, ModelVersion.Early1),
-                this.texFetcher.loadSubdirs([subdir], dataFetcher),
-            ]);
+const blockColl = await BlockCollection.create(
+    this.gameInfo,
+    dataFetcher,
+    tabPath,
+    binPath,
+    this.materialFactory,
+    this.texFetcher,
+    ModelVersion.Early1
+);
             this.blockColls[mod] = blockColl;
         }
 

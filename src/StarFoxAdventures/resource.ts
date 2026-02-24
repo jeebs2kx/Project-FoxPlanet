@@ -37,7 +37,7 @@ function loadZLB(compData: ArrayBufferSlice): ArrayBufferLike {
     const header = new ZLBHeader(dv);
 
     if (header.magic != stringToFourCC('ZLB\0')) {
-        throw Error(`Invalid magic identifier 0x${hexzero(header.magic, 8)}`);
+      //  throw Error(`Invalid magic identifier 0x${hexzero(header.magic, 8)}`);
     }
 
     return Deflate.decompress(compData.subarray(ZLBHeader.SIZE, header.size)).arrayBuffer;
@@ -68,7 +68,7 @@ export function loadRes(data: ArrayBufferSlice): ArrayBufferSlice {
         // LZO occurs in the demo only.
         return new ArrayBufferSlice(loadLZOn(data, 0));
     default:
-        console.warn(`Invalid magic identifier 0x${hexzero(magic, 8)}`);
+       // console.warn(`Invalid magic identifier 0x${hexzero(magic, 8)}`);
         return data;
     }
 }

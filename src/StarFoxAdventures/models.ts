@@ -598,13 +598,17 @@ export class ModelFetcher {
         }
     }
 
-    public async loadSubdirs(subdirs: string[], dataFetcher: DataFetcher) {
-        const promises = [];
-        for (let subdir of subdirs)
-            promises.push(this.loadSubdir(subdir, dataFetcher));
-
-        await Promise.all(promises);
-    }
+public async loadSubdirs(subdirs: string[], dataFetcher: DataFetcher) {
+        // FIX: Explicitly type the array so TypeScript stops flagging 'never'
+        const promises: Promise<void>[] = []; 
+        for (let subdir of subdirs) {
+            // FIX: Attach a .catch to each promise so a 404 doesn't crash the whole map
+            promises.push(this.loadSubdir(subdir, dataFetcher).catch(e => {
+                console.warn(`[DPSCENE] Subdir "${subdir}" not found or broken. Skipping.`);
+            }));
+        }
+        await Promise.all(promises);
+    }
 
     public getNumModels() {
         let result = 0;

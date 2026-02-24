@@ -1,5 +1,6 @@
 import * as Viewer from '../viewer.js';
 import * as UI from '../ui.js';
+import { getSubdir } from './resource.js';
 import { DataFetcher } from '../DataFetcher.js';
 import { GfxRenderInstManager } from "../gfx/render/GfxRenderInstManager.js";
 import { fillSceneParamsDataOnTemplate } from '../gx/gx_render.js';
@@ -13,9 +14,10 @@ import { SFARenderer, SceneRenderContext, SFARenderLists } from './render.js';
 import { BlockFetcher, SFABlockFetcher, SwapcircleBlockFetcher, AncientBlockFetcher, EARLYDFPT, EARLYFEAR, EARLYDUPBLOCKFETCHER, EARLY1BLOCKFETCHER, EARLY2BLOCKFETCHER, EARLY3BLOCKFETCHER, EARLY4BLOCKFETCHER,DPBlockFetcher  } from './blocks.js';
 import { SFA_GAME_INFO, SFADEMO_GAME_INFO, DP_GAME_INFO, GameInfo } from './scenes.js';import { MaterialFactory } from './materials.js';
 import { SFAAnimationController } from './animation.js';
-import { SFATextureFetcher } from './textures.js';
-import { ModelRenderContext, ModelInstance } from './models.js';
+import { SFATextureFetcher, FakeTextureFetcher } from './textures.js';
+import { Model,ModelRenderContext, ModelInstance } from './models.js';
 import { World } from './world.js';
+
 import { AABB } from '../Geometry.js';
 import { LightType } from './WorldLights.js';
 import { computeViewMatrix } from '../Camera.js';
@@ -264,32 +266,64 @@ for (let b of this.iterateBlocks()) {
 
 
 
-   public async reloadBlocks(dataFetcher: DataFetcher) {
-  this.clearBlocks();
+public async reloadBlocks(dataFetcher: DataFetcher) {
+    this.clearBlocks();
 
-  for (let z = 0; z < this.numRows; z++) {
-    // Pre-size the row so x indices are stable even when blocks are missing.
-    const row: (ModelInstance | null)[] = new Array(this.numCols).fill(null);
-    this.blocks.push(row);
+    const overlay = document.createElement('div');
+    overlay.style.cssText = `
+        position: fixed; bottom: 20px; right: 20px; 
+        padding: 15px 25px; background: rgba(0, 40, 80, 0.9); 
+        color: #00d0ff; font-family: 'Segoe UI', Tahoma, sans-serif; 
+        border: 2px solid #00d0ff; border-radius: 5px; 
+        z-index: 10000; box-shadow: 0 0 15px rgba(0, 200, 255, 0.5);
+        font-weight: bold; text-transform: uppercase; letter-spacing: 1px;
+    `;
+    overlay.innerText = 'Initializing...';
+    document.body.appendChild(overlay);
 
-    for (let x = 0; x < this.numCols; x++) {
-      const blockInfo = this.blockInfoTable[z][x];
-      if (blockInfo == null) {
-        row[x] = null;
-        continue;
-      }
+    let total = 0;
+    let completed = 0;
 
-      try {
-        const blockModel = await this.blockFetcher.fetchBlock(blockInfo.mod, blockInfo.sub, dataFetcher);
-        row[x] = blockModel ? new ModelInstance(blockModel) : null;
-      } catch (e) {
-        row[x] = null;
-        console.warn(`Skipping block at ${x},${z} due to exception:`);
-        console.error(e);
-      }
+    // Count blocks first
+    for (let z = 0; z < this.numRows; z++) {
+        this.blocks[z] = new Array(this.numCols).fill(null);
+        for (let x = 0; x < this.numCols; x++) {
+            if (this.blockInfoTable[z][x])
+                total++;
+        }
     }
-  }
+
+    const tasks: Promise<void>[] = [];
+
+    for (let z = 0; z < this.numRows; z++) {
+        for (let x = 0; x < this.numCols; x++) {
+            const blockInfo = this.blockInfoTable[z][x];
+            if (!blockInfo) continue;
+
+            const task = this.blockFetcher.fetchBlock(blockInfo.mod, blockInfo.sub, dataFetcher)
+.then(model => {
+    this.blocks[z][x] = model ? new ModelInstance(model) : null;
+    completed++;
+    overlay.innerText =
+        `Synchronizing Map Data: ${Math.round((completed / total) * 100)}%`;
+})
+.catch(() => {
+    this.blocks[z][x] = null;
+    completed++;
+    overlay.innerText =
+        `Synchronizing Map Data: ${Math.round((completed / total) * 100)}%`;
+});
+
+            tasks.push(task);
+        }
+    }
+
+    await Promise.all(tasks);
+
+    document.body.removeChild(overlay);
 }
+
+
 
 
     public destroy(device: GfxDevice) {
@@ -379,7 +413,6 @@ const track = MAP_MUSIC[resolvedKey];
         }, step);
     }
 
-    // 🔥 NEW: If map has no music, fade out current track
     if (!track) {
         if (musicState.audio)
             fadeOut(musicState.audio, FADE_TIME);
@@ -632,7 +665,6 @@ getBlockInfoAt(col: number, row: number): BlockInfo | null {
     mapRenderer.mapNum = -999; 
     const texFetcher = await SFATextureFetcher.create(this.gameInfo, context.dataFetcher, true);
     await texFetcher.loadSubdirs(['swapcircle'], context.dataFetcher);
-    texFetcher.logAllTex1TextureIDs();
 
     const blockFetcher = await SwapcircleBlockFetcher.create(
       this.gameInfo, context.dataFetcher, materialFactory, texFetcher
@@ -644,12 +676,12 @@ getBlockInfoAt(col: number, row: number): BlockInfo | null {
 }
 
 const ANCIENT_TEXTURE_FOLDERS: Record<string, string[]> = {
-  "0": ["warlock"],
+  "0": ["willow"],
   "2": ["icemountain"],
-  "3": ["swaphol","crfort"],
+"3": ["swaphol", "gpshrine",],
   "5": ["warlock", "shop"],
   "6": ["shop"],
-  "7": ["crfort", "swaphol"],
+  "7": ["crfort", "swaphol", "gpshrine"],
   "8": ["icemountain"],
   "9": ["capeclaw"],
   "10": ["icemountain"],
@@ -723,10 +755,11 @@ const texFetcher = await SFATextureFetcher.create(this.gameInfo, dataFetcher, fa
 texFetcher.setModelVersion(ModelVersion.AncientMap);
 
 const folders = ANCIENT_TEXTURE_FOLDERS[String(this.mapKey)] ?? [];
-await texFetcher.loadSubdirs(folders, dataFetcher);
-
-texFetcher.logAllTex1TextureIDs();
-texFetcher.setPngOverride(4100, 'textures/ribbon.png');
+if (Number(this.mapKey) !== 0) {
+    await texFetcher.loadSubdirs(folders, dataFetcher);
+}
+if (Number(this.mapKey) === 5) {
+ texFetcher.setPngOverride(4100, 'textures/ribbon.png');
 texFetcher.setPngOverride(618, 'textures/walls.png');
 texFetcher.setPngOverride(617, 'textures/floor1.png');
 texFetcher.setPngOverride(616, 'textures/pillar.png');
@@ -764,12 +797,17 @@ texFetcher.setPngOverride(582, 'textures/kraz2.png');
 texFetcher.setPngOverride(581, 'textures/kraz3.png');
 texFetcher.setPngOverride(580, 'textures/port.png');
 texFetcher.setPngOverride(579, 'textures/floor6.png');
+}
+if (Number(this.mapKey) === 6) {
 texFetcher.setPngOverride(3001, 'textures/shoppurple.png'); 
 texFetcher.setPngOverride(3002, 'textures/shopwood.png'); 
 texFetcher.setPngOverride(3003, 'textures/shoppurple2.png'); 
 texFetcher.setPngOverride(3004, 'textures/shoppurple3.png'); 
 texFetcher.setPngOverride(3005, 'textures/shoppurple4.png'); 
 texFetcher.setPngOverride(3006, 'textures/shoppurple5.png'); 
+}
+
+if (Number(this.mapKey) === 0) {
 texFetcher.setPngOverride(2037, 'textures/wgfloor1.png');
 texFetcher.setPngOverride(2036, 'textures/wgfloor2.png');
 texFetcher.setPngOverride(2035, 'textures/wgfloor3.png');
@@ -808,7 +846,7 @@ texFetcher.setPngOverride(2003, 'textures/wghead.png');
 texFetcher.setPngOverride(2002, 'textures/wghead2.png');
 texFetcher.setPngOverride(2001, 'textures/wghead3.png');
 texFetcher.setPngOverride(2000, 'textures/wghead4.png');
-
+}
 await texFetcher.preloadPngOverrides((materialFactory as any).cache ?? (materialFactory as any).getCache?.(), dataFetcher);
 
 const blockFetcher = await AncientBlockFetcher.create(
@@ -863,7 +901,6 @@ if (musicState.audio) {
         const texFetcher = await SFATextureFetcher.create(this.gameInfo, context.dataFetcher, false);
   texFetcher.setModelVersion(ModelVersion.fear);
 await texFetcher.loadSubdirs([ 'mmshrine'],  context.dataFetcher);
-texFetcher.logAllTex1TextureIDs();
         const blockFetcher = await EARLYFEAR.create(this.gameInfo,context.dataFetcher, device, materialFactory, animController, Promise.resolve(texFetcher));
         await mapRenderer.create(mapSceneInfo, this.gameInfo, context.dataFetcher, blockFetcher);
 
@@ -901,7 +938,6 @@ mapRenderer.mapNum = -998;
   const texFetcher = await SFATextureFetcher.create(this.gameInfo, context.dataFetcher, false);
   texFetcher.setModelVersion(ModelVersion.dfpt);
 await texFetcher.loadSubdirs([''], context.dataFetcher);
-texFetcher.logAllTex1TextureIDs();
 
   texFetcher.setPngOverride(4000, 'textures/dfprim.png');
   texFetcher.setPngOverride(4001, 'textures/dfpwall.png');
@@ -1029,17 +1065,40 @@ mapRenderer.mapNum = `dup_${this.mapNum}`;
 
     texFetcher.setModelVersion(ModelVersion.dup);
     texFetcher.setCurrentModelID(this.mapNum);  
-    await texFetcher.loadSubdirs([''], context.dataFetcher);
-    texFetcher.logAllTex1TextureIDs();
+// Get first real block mod from layout
+let firstMod: number | null = null;
 
-texFetcher.setPngOverride(3614, 'textures/MMSHfloor.png');
+for (let row = 0; row < mapSceneInfo.getNumRows(); row++) {
+  for (let col = 0; col < mapSceneInfo.getNumCols(); col++) {
+    const b = mapSceneInfo.getBlockInfoAt(col, row);
+    if (b) {
+      firstMod = b.mod;
+      break;
+    }
+  }
+  if (firstMod !== null) break;
+}
+if (firstMod !== null) {
+    const subdir = getSubdir(firstMod, this.gameInfo);
+    if (this.mapNum === 32 || subdir === 'mmshrine') {
+              await texFetcher.loadSubdirs([subdir], context.dataFetcher);
+    } else {
+        await texFetcher.loadSubdirs([subdir, 'Copy of swaphol'], context.dataFetcher);
+    }
+    if (subdir === 'gpshrine') {
+        await texFetcher.loadSubdirs(['dragrock'], context.dataFetcher);
+    } else if (subdir === 'mmshrine') {
+        await texFetcher.loadSubdirs(['gpshrine'], context.dataFetcher);
+    }
+} else {
+    await texFetcher.loadSubdirs(['Copy of swaphol'], context.dataFetcher);
+}
+
 
      await texFetcher.preloadPngOverrides(
       (materialFactory as any).cache ?? (materialFactory as any).getCache?.(),
       context.dataFetcher
     );
-
-  // Build with the same texFetcher instance (and keep it for rebuilds/toggles).
   const blockFetcher = await EARLYDUPBLOCKFETCHER.create(
     this.gameInfo, context.dataFetcher, device, materialFactory, animController, Promise.resolve(texFetcher)
   );
@@ -1051,7 +1110,6 @@ texFetcher.setPngOverride(3614, 'textures/MMSHfloor.png');
 
   await mapRenderer.create(mapSceneInfo, this.gameInfo, context.dataFetcher, blockFetcher);
 
-  // Texture toggle UI — exactly like Early1: will rebuild with the same fetcher so overrides persist.
   ensureTextureToggleUI(async (enabled: boolean) => {
     texFetcher.setTexturesEnabled(enabled);
     (materialFactory as any).texturesEnabled = enabled;
@@ -1136,13 +1194,11 @@ if (musicState.audio) {
 
 
       default: {
-        // Fallback to the map's native layout
         mapSceneInfo = await loadMap(this.gameInfo, context.dataFetcher, this.mapNum);
         break;
       }
     }
 
-    // --- Renderer + textures (same as before) ---
     const mapRenderer = new MapSceneRenderer(context, animController, materialFactory);
 mapRenderer.mapNum = `early1_${this.mapNum}`;
 
@@ -1150,17 +1206,111 @@ mapRenderer.mapNum = `early1_${this.mapNum}`;
 
     texFetcher.setModelVersion(ModelVersion.Early1);
     texFetcher.setCurrentModelID(this.mapNum);  
-    await texFetcher.loadSubdirs([''], context.dataFetcher);
-    texFetcher.logAllTex1TextureIDs();
+let firstMod: number | null = null;
 
-const SWAPHOL_EARLY1_MAPNUM =  7;
+for (let row = 0; row < mapSceneInfo.getNumRows(); row++) {
+  for (let col = 0; col < mapSceneInfo.getNumCols(); col++) {
+    const b = mapSceneInfo.getBlockInfoAt(col, row);
+    if (b) {
+      firstMod = b.mod;
+      break;
+    }
+  }
 
+if (firstMod !== null) {
+    const subdir = getSubdir(firstMod, this.gameInfo);
+    
+    if (this.mapNum === 15) {
+        await texFetcher.loadSubdirs([subdir, 'cloudtreasure'], context.dataFetcher);
+    } else {
+        await texFetcher.loadSubdirs([subdir], context.dataFetcher);
+    }
 
-if (this.mapNum === SWAPHOL_EARLY1_MAPNUM) {
-  await texFetcher.loadSubdirs(['swaphol'], context.dataFetcher);
-  texFetcher.preferCopyOfSwapholForModelIDs([SWAPHOL_EARLY1_MAPNUM]);
+    if (subdir === 'clouddungeon' || subdir === 'cloudrace') {
+        await texFetcher.loadSubdirs(['crfort'], context.dataFetcher);
+    } else if (subdir === 'icemountain') {
+        await texFetcher.loadSubdirs(['nwastes'], context.dataFetcher);
+    } else if (subdir === 'desert') {
+        await texFetcher.loadSubdirs(['dfptop', 'volcano'], context.dataFetcher);
+    } else if (subdir === 'crfort') {
+        await texFetcher.loadSubdirs(['gpshrine'], context.dataFetcher);
+    } else if (subdir === 'linkb' || subdir === 'linkf') {
+        await texFetcher.loadSubdirs(['volcano'], context.dataFetcher);
+    } else if (subdir === 'shipbattle') {
+        await texFetcher.loadSubdirs([''], context.dataFetcher);
+    } else if (subdir === 'linkc') {
+        await texFetcher.loadSubdirs(['nwastes'], context.dataFetcher);
+    } else if (subdir === 'mmpass') {
+        await texFetcher.loadSubdirs(['shop', 'warlock'], context.dataFetcher);
+    } else if (subdir === 'swaphol') {
+        await texFetcher.loadSubdirs(['Copy of swaphol', 'nwastes', 'mmpass'], context.dataFetcher);
+    } else if (subdir === 'swapholbot' || subdir === 'shop') {
+        await texFetcher.loadSubdirs(['Copy of swaphol', 'swaphol', 'ecshrine'], context.dataFetcher);
+    } else if (subdir === 'wallcity') {
+        await texFetcher.loadSubdirs(['gpshrine'], context.dataFetcher);
+    } else if (subdir === 'darkicemines') {
+        await texFetcher.loadSubdirs(['shop', 'nwastes'], context.dataFetcher);
+    } else if (subdir === 'bossgaldon') {
+        await texFetcher.loadSubdirs(['dragrock'], context.dataFetcher);
+    } else if (subdir === 'nwastes') {
+        await texFetcher.loadSubdirs(['icemountain'], context.dataFetcher);
+    }
+}
+const SWAPHOL_EARLY1_MAPNUM = 7;
+const SWAPHOLBOT_EARLY1_MAPNUM = 8;
+const KRAZOA_PALACE_EARLY1_MAPNUM = 11;
+const CLOUD_RACE_EARLY1_MAPNUM = 43;      
+const CLOUD_TREASURE_EARLY1_MAPNUM = 15;
+const CLOUD_DUNGEON_EARLY1_MAPNUM = 16;   
+const CAPE_CLAW_EARLY1_MAPNUM = 29;
+const LINK_LEVEL_EARLY1_MAPNUM = 64;
+const DRAGON_ROCK_BOTTOM_EARLY1_MAPNUM = 52; 
+
+// Add this block with your other map checks
+if (this.mapNum === DRAGON_ROCK_BOTTOM_EARLY1_MAPNUM) {
+    await texFetcher.loadSubdirs(['dragrockbot'], context.dataFetcher);
+    texFetcher.preferCopyOfSwapholForModelIDs([DRAGON_ROCK_BOTTOM_EARLY1_MAPNUM]);
 }
 
+if (this.mapNum === SWAPHOL_EARLY1_MAPNUM) {
+    await texFetcher.loadSubdirs(['swaphol'], context.dataFetcher);
+    texFetcher.preferCopyOfSwapholForModelIDs([SWAPHOL_EARLY1_MAPNUM]);
+}
+
+if (this.mapNum === SWAPHOLBOT_EARLY1_MAPNUM) {
+    await texFetcher.loadSubdirs(['swapholbot'], context.dataFetcher);
+    texFetcher.preferCopyOfSwapholForModelIDs([SWAPHOLBOT_EARLY1_MAPNUM]);
+}
+
+
+if (this.mapNum === KRAZOA_PALACE_EARLY1_MAPNUM) {
+    await texFetcher.loadSubdirs(['warlock'], context.dataFetcher);
+    texFetcher.preferCopyOfSwapholForModelIDs([KRAZOA_PALACE_EARLY1_MAPNUM]);
+}
+
+if (this.mapNum === CLOUD_RACE_EARLY1_MAPNUM || this.mapNum === CLOUD_DUNGEON_EARLY1_MAPNUM) {
+    await texFetcher.loadSubdirs(['crfort'], context.dataFetcher); 
+    texFetcher.preferCopyOfSwapholForModelIDs([this.mapNum as number]);
+}
+
+
+if (this.mapNum === CLOUD_TREASURE_EARLY1_MAPNUM) {
+    await texFetcher.loadSubdirs(['cloudtreasure'], context.dataFetcher);
+    texFetcher.preferCopyOfSwapholForModelIDs([CLOUD_TREASURE_EARLY1_MAPNUM]);
+}
+
+
+if (this.mapNum === CAPE_CLAW_EARLY1_MAPNUM) {
+    await texFetcher.loadSubdirs(['capeclaw'], context.dataFetcher);
+    texFetcher.preferCopyOfSwapholForModelIDs([CAPE_CLAW_EARLY1_MAPNUM]);
+}
+
+
+if (this.mapNum === LINK_LEVEL_EARLY1_MAPNUM) {
+    await texFetcher.loadSubdirs(['linklevel'], context.dataFetcher);
+    texFetcher.preferCopyOfSwapholForModelIDs([LINK_LEVEL_EARLY1_MAPNUM]);
+}
+}
     texFetcher.setPngOverride(3000, 'textures/wcblue.png');
     texFetcher.setPngOverride(3500, 'textures/wcfloor.png');
         texFetcher.setPngOverride(3501, 'textures/wcredrims.png');
@@ -1247,9 +1397,33 @@ if (musicState.audio) {
 
         const texFetcher = await SFATextureFetcher.create(this.gameInfo, context.dataFetcher, false);
        texFetcher.setModelVersion(ModelVersion.Early2);
-await texFetcher.loadSubdirs([''], context.dataFetcher);
-texFetcher.logAllTex1TextureIDs();
-    
+// Get first real block mod
+let firstMod: number | null = null;
+
+for (let row = 0; row < mapSceneInfo.getNumRows(); row++) {
+  for (let col = 0; col < mapSceneInfo.getNumCols(); col++) {
+    const b = mapSceneInfo.getBlockInfoAt(col, row);
+    if (b) {
+      firstMod = b.mod;
+      break;
+    }
+  }
+  if (firstMod !== null) break;
+}
+
+if (firstMod !== null) {
+  const subdir = getSubdir(firstMod, this.gameInfo);
+  await texFetcher.loadSubdirs([subdir], context.dataFetcher);
+
+
+  if (subdir === 'clouddungeon') {
+    await texFetcher.loadSubdirs(['crfort'], context.dataFetcher);
+    }
+  if (subdir === 'crfort') {
+    await texFetcher.loadSubdirs(['gpshrine'], context.dataFetcher);
+
+  }
+}    
         const blockFetcher = await EARLY2BLOCKFETCHER.create(this.gameInfo,context.dataFetcher, device, materialFactory, animController, Promise.resolve(texFetcher));
         await mapRenderer.create(mapSceneInfo, this.gameInfo, context.dataFetcher, blockFetcher);
 
@@ -1317,7 +1491,6 @@ mapRenderer.mapNum = this.mapNum;
     const texFetcher = await SFATextureFetcher.create(this.gameInfo, context.dataFetcher, false);
     texFetcher.setModelVersion(ModelVersion.Early3);
     await texFetcher.loadSubdirs([''], context.dataFetcher);
-    texFetcher.logAllTex1TextureIDs();
 
     texFetcher.setPngOverride(3600, 'textures/dim2wall.png');
     texFetcher.setPngOverride(3500, 'textures/wcfloor.png');
@@ -1378,7 +1551,6 @@ if (musicState.audio) {
                 const texFetcher = await SFATextureFetcher.create(this.gameInfo, context.dataFetcher, false);
     texFetcher.setModelVersion(ModelVersion.Early4);
     await texFetcher.loadSubdirs([''], context.dataFetcher);
-    texFetcher.logAllTex1TextureIDs();
 texFetcher.setCurrentModelID(this.mapNum);
 
     texFetcher.setPngOverride(3610, 'textures/wcbluehead.png');
@@ -1406,35 +1578,28 @@ texFetcher.setCurrentModelID(this.mapNum);
 
 
 export class DPMapSceneDesc implements Viewer.SceneDesc {
-    constructor(public mapNum: number, public id: string, public name: string, private gameInfo?: GameInfo) {
-    }
+    constructor(public mapNum: number, public id: string, public name: string, private gameInfo?: GameInfo) {}
 
     public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
-    const gInfo = this.gameInfo ?? DP_GAME_INFO;
+        const gInfo = this.gameInfo ?? DP_GAME_INFO;
+        const animController = new SFAAnimationController();
+        const materialFactory = new MaterialFactory(device);
+        const mapSceneInfo = await loadMap(gInfo, context.dataFetcher, this.mapNum);
+        const mapRenderer = new MapSceneRenderer(context, animController, materialFactory);        
+        
+        const texFetcher = await SFATextureFetcher.create(gInfo, context.dataFetcher, false);
+        texFetcher.setModelVersion(ModelVersion.DinosaurPlanet);
+        
+(texFetcher as any).dataFetcherRef = context.dataFetcher;
+        const blockFetcher = await DPBlockFetcher.create(
+            gInfo, context.dataFetcher, materialFactory, Promise.resolve(texFetcher)
+        );
 
-    const animController = new SFAAnimationController();
-    const materialFactory = new MaterialFactory(device);
-    
-    const mapSceneInfo = await loadMap(gInfo, context.dataFetcher, this.mapNum);
-    const mapRenderer = new MapSceneRenderer(context, animController, materialFactory);        
-    
-    const texFetcher = await SFATextureFetcher.create(gInfo, context.dataFetcher, true);
-    
+        if (texFetcher.textureHolder)
+            mapRenderer.textureHolder = texFetcher.textureHolder;
 
-    await texFetcher.loadSubdirs([''], context.dataFetcher);
-
-    texFetcher.setModelVersion(ModelVersion.DinosaurPlanet);
-    
-    const blockFetcher = await DPBlockFetcher.create(
-        gInfo, context.dataFetcher, materialFactory, Promise.resolve(texFetcher)
-    );
-
-    await mapRenderer.create(mapSceneInfo, gInfo, context.dataFetcher, blockFetcher);
-
-
-
-    return mapRenderer;
-    
+        await mapRenderer.create(mapSceneInfo, gInfo, context.dataFetcher, blockFetcher);
+        return mapRenderer;
     }
 }
 
@@ -1520,7 +1685,7 @@ inst.setMatrix(m);
         this.loading.set(p.key, prom);
         return prom;
     }
-public async loadAllMaps(concurrency: number = 4): Promise<void> {
+public async loadAllMaps(concurrency: number = 12): Promise<void> {
     const queue = this.placed.slice();
     let idx = 0;
 
@@ -1592,7 +1757,7 @@ for (const [key, inst] of this.loaded) {
         (d <= 2)  ? 1 :   
         (d <= 8)  ? 1 :  
         (d <= 20) ? 1 :  
-                  6;    
+                  1;    
 
     inst.addRenderInsts(device, renderInstManager, renderLists, modelCtx, stride);
 }
@@ -1653,9 +1818,7 @@ const placed: DPPlacedMap[] = valid.map((e) => {
 
         const animController = new SFAAnimationController();
         const materialFactory = new MaterialFactory(device);
-        const texFetcher = await SFATextureFetcher.create(gInfo, dataFetcher, true);
-        await texFetcher.loadSubdirs([''], dataFetcher);
-        texFetcher.setModelVersion(ModelVersion.DinosaurPlanet);
+const texFetcher = new FakeTextureFetcher();
 
         const blockFetcher = await DPBlockFetcher.create(
             gInfo, dataFetcher, materialFactory, Promise.resolve(texFetcher)

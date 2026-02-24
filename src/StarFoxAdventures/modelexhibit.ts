@@ -8,8 +8,8 @@ import { Color, White, colorCopy, colorNewCopy } from '../Color.js';
 import { getDebugOverlayCanvas2D, drawWorldSpaceLine, drawWorldSpacePoint } from '../DebugJunk.js';
 import { fillSceneParamsDataOnTemplate } from "../gx/gx_render.js"; // Corrected import syntax
 import { Light, lightSetDistAttn, lightSetSpot } from '../gx/gx_material.js';
-
-import { GameInfo, SFA_GAME_INFO } from './scenes.js';
+import { DataFetcher } from '../DataFetcher.js';
+import { GameInfo, SFA_GAME_INFO, DP_GAME_INFO } from './scenes.js';
 import { Anim, SFAAnimationController, AnimCollection, AmapCollection, ModanimCollection, applyAnimationToModel } from './animation.js';
 import { SFARenderer, SceneRenderContext, SFARenderLists } from './render.js';
 import { ModelFetcher, ModelInstance, ModelRenderContext, ModelShapes, } from './models.js';
@@ -17,7 +17,7 @@ import { Shape, } from './shapes.js';
 import { MaterialFactory } from './materials.js';
 import { dataSubarray, readUint16 } from './util.js';
 import { TextureFetcher, SFATextureFetcher } from './textures.js';
-import { ModelVersion } from "./modelloader.js"; // Corrected import syntax
+import { ModelVersion, loadModel } from "./modelloader.js";
 import { downloadBufferSlice } from '../DownloadUtils.js';
 import ArrayBufferSlice from '../ArrayBufferSlice.js';
 
@@ -274,7 +274,7 @@ downloadBufferSlice(`model_${this.modelNum}${this.modelInst.model.version === Mo
 
     private getGlobalAnimNum(modelAnimNum: number): number | undefined {
         if (!this.modanim) {
-            console.warn("modanim is not loaded for getGlobalAnimNum. Returning undefined.");
+       //     console.warn("modanim is not loaded for getGlobalAnimNum. Returning undefined.");
             return undefined;
         }
         if (modelAnimNum * 2 >= this.modanim.byteLength) {
@@ -363,20 +363,12 @@ protected override update(viewerInput: Viewer.ViewerRenderInput) {
 
     }
 
-    protected override addWorldRenderInsts(device: GfxDevice, renderInstManager: GfxRenderInstManager, renderLists: SFARenderLists, sceneCtx: SceneRenderContext) {
-        console.log(`Adding world render insts for model ${this.modelNum}. Model instance defined: ${this.modelInst !== undefined && this.modelInst !== null}`);
+protected override addWorldRenderInsts(device: GfxDevice, renderInstManager: GfxRenderInstManager, renderLists: SFARenderLists, sceneCtx: SceneRenderContext) {
         if (this.modelInst === undefined) {
             try {
-                this.modelAnimNum = 0; // Reset anim when model changes
+                this.modelAnimNum = 0;
                 this.modanim = this.modanimColl.getModanim(this.modelNum);
                 this.amap = this.amapColl.getAmap(this.modelNum);
-
-                if (!this.modanim) {
-                    // console.warn(`MODANIM data for model ${this.modelNum} is missing or invalid. Animation might not work.`);
-                }
-                if (!this.amap && !this.autogenAmap) {
-                    // console.warn(`AMAP data for model ${this.modelNum} is missing or invalid. Animation might not work.`);
-                }
 
                 const potentialModelInstance = this.modelFetcher.createModelInstance(this.modelNum);
 
@@ -406,107 +398,85 @@ protected override update(viewerInput: Viewer.ViewerRenderInput) {
             return;
         }
 
-        if (this.modelInst === null) {
-            return;
-        }
-        if (this.modelInst === undefined) {
+        if (this.modelInst === null || this.modelInst === undefined) {
             return;
         }
 
-        // NEW: Adjust camera to frame the model on initial load
+        // --- FIXED CAMERA BOUNDING BOX LOGIC ---
         if (!this.hasInitializedCamera) {
-            // Using 'as any' to bypass TS error if bbox isn't directly on 'Model' type
             const bbox = (this.modelInst.model as any).bbox; 
             if (bbox) {
-                const center = vec3.create();
-                vec3.add(center, bbox.min, bbox.max);
-                vec3.scale(center, center, 0.5); // (min + max) / 2
+                // Safely calculate center using discrete min/max properties instead of arrays
+                const center = vec3.fromValues(
+                    (bbox.minX + bbox.maxX) * 0.5,
+                    (bbox.minY + bbox.maxY) * 0.5,
+                    (bbox.minZ + bbox.maxZ) * 0.5
+                );
 
-                const dimensions = vec3.create();
-                vec3.sub(dimensions, bbox.max, bbox.min);
-
-                const maxDim = Math.max(dimensions[0], dimensions[1], dimensions[2]);
-                // A common formula to fit an object in view is:
-                // distance = (object_size / 2) / Math.tan(fovY / 2)
-                // We'll use maxDim for object_size and a multiplier for FOV adjustment.
+                const maxDim = Math.max(
+                    bbox.maxX - bbox.minX,
+                    bbox.maxY - bbox.minY,
+                    bbox.maxZ - bbox.minZ
+                );
+                
                 const fovFactor = 0.5 * (1 / Math.tan(sceneCtx.viewerInput.camera.fovY / 2));
-                const zoomDistance = maxDim * fovFactor;
+                let zoomDistance = maxDim * fovFactor;
+                // Failsafe in case geometry has zero size
+                if (zoomDistance === 0 || Number.isNaN(zoomDistance)) zoomDistance = 1000; 
 
                 const camera = sceneCtx.viewerInput.camera;
-                
-                // Explicitly set pitch and yaw for a consistent initial viewing angle
-                (camera as any).pitch = Math.PI / 8; // Look slightly down (e.g., 22.5 degrees)
-                (camera as any).yaw = Math.PI * 0.25; // Look from a quarter turn around (e.g., 45 degrees)
-
-                // Set the camera's target to the center of the model
+                (camera as any).pitch = Math.PI / 8;
+                (camera as any).yaw = Math.PI * 0.25;
                 (camera as any).target = center;
-                // Set the camera's zoom (distance from target)
-                (camera as any).zoom = zoomDistance * 1.5; // Multiplier to ensure it's not too tight
+                (camera as any).zoom = zoomDistance * 1.5;
 
                 this.hasInitializedCamera = true;
-                console.log("Initial camera position set to frame model.");
-            } else {
-                console.warn(`Model ${this.modelNum} has no bounding box data. Cannot auto-frame camera.`);
             }
         }
 
+        const animate = (this.animController.animController as any).playbackEnabled;
+        const canAnimate = animate && !!this.modelInst?.model?.joints && this.modelInst.model.joints.length > 0;
 
-// Only attempt animation if playback is enabled AND the model actually has joints.
-const animate = (this.animController.animController as any).playbackEnabled;
-const canAnimate =
-    animate &&
-    !!this.modelInst?.model?.joints &&
-    this.modelInst.model.joints.length > 0;
+        if (!canAnimate) {
+            if (this.anim !== null && this.modelInst) this.modelInst.resetPose();
+            this.anim = null;
+        } else {
+            if (this.anim === null) {
+                try {
+                    let globalAnimNum: number | undefined;
+                    if (this.useGlobalAnimNum) {
+                        globalAnimNum = this.modelAnimNum;
+                    } else {
+                        globalAnimNum = this.getGlobalAnimNum(this.modelAnimNum);
+                    }
 
-if (!canAnimate) {
-    // No skeleton or playback disabled → keep pose static and avoid touching anim data.
-    if (this.anim !== null && this.modelInst) this.modelInst.resetPose();
-    this.anim = null;
-} else {
-    // Lazy-load the animation once.
-    if (this.anim === null) {
-        try {
-            let globalAnimNum: number | undefined;
-            if (this.useGlobalAnimNum) {
-                globalAnimNum = this.modelAnimNum;
-            } else {
-                // If modanim is missing or out of range, getGlobalAnimNum() already returns undefined.
-                globalAnimNum = this.getGlobalAnimNum(this.modelAnimNum);
-            }
-
-            if (globalAnimNum !== undefined) {
-                // This may throw on junk anims → guarded.
-                this.anim = this.animColl.getAnim(globalAnimNum);
-
-                // Basic sanity: must have at least one keyframe with poses.
-                if (!this.anim?.keyframes?.[0]?.poses) {
+                    if (globalAnimNum !== undefined) {
+                        this.anim = this.animColl.getAnim(globalAnimNum);
+                        if (!this.anim?.keyframes?.[0]?.poses) {
+                            this.anim = null;
+                        }
+                    } else {
+                        this.anim = null;
+                    }
+                } catch (e) {
                     this.anim = null;
                 }
-            } else {
-                this.anim = null;
             }
-        } catch (e) {
-            console.warn(`[ANIM_SKIP] getAnim failed: ${(e as Error).message}`);
-            this.anim = null;
-        }
-    }
 
-    if (this.anim !== null) {
-        try {
-            applyAnimationToModel(
-                this.animController.animController.getTimeInSeconds() * 0.60,
-                this.modelInst,
-                this.anim,
-                this.modelAnimNum
-            );
-        } catch (e) {
-            console.warn(`[ANIM_SKIP] applyAnimation failed: ${(e as Error).message}`);
-            this.anim = null;
-            if (this.modelInst) this.modelInst.resetPose();
+            if (this.anim !== null) {
+                try {
+                    applyAnimationToModel(
+                        this.animController.animController.getTimeInSeconds() * 0.60,
+                        this.modelInst,
+                        this.anim,
+                        this.modelAnimNum
+                    );
+                } catch (e) {
+                    this.anim = null;
+                    if (this.modelInst) this.modelInst.resetPose();
+                }
+            }
         }
-    }
-}
-
 
         const template = renderInstManager.pushTemplateRenderInst();
         fillSceneParamsDataOnTemplate(template, sceneCtx.viewerInput);
@@ -516,109 +486,71 @@ if (!canAnimate) {
             showDevGeometry: this.displayBones,
             ambienceIdx: 0,
             showMeshes: true,
-            outdoorAmbientColor: White, // This sets the global ambient color for the scene
-            setupLights: (lights: Light[], typeMask: number) => { // Reinstated and corrected setupLights callback
-               // console.log(`setupLights callback invoked for model ${this.modelNum}. Initial lights array length: ${lights.length}`);
-                
-                // The framework might pre-fill the 'lights' array with objects, some of which might be partially
-                // initialized or become stale. We need to ensure that *every* Light object up to a reasonable
-                // expected maximum (e.g., 8, based on the initial length log) has its Position and Direction
-                // properties explicitly initialized as vec3 instances to prevent "undefined" errors.
-
-                const expectedMaxLights = 8; // Based on observed "Existing lights array length: 8"
-                
+            outdoorAmbientColor: White,
+            setupLights: (lights: Light[], typeMask: number) => { 
+                const expectedMaxLights = 8; 
                 for (let i = 0; i < expectedMaxLights; i++) {
-                    // Ensure the Light object exists at this index. If not, create a new one.
-                    if (!lights[i]) {
-                        lights[i] = new Light();
-                      //  console.warn(`lights[${i}] was null/undefined, created a new Light object.`);
-                    }
-
+                    if (!lights[i]) lights[i] = new Light();
                     const currentLight = lights[i];
 
-                    // Crucially, ensure Position and Direction are vec3 instances
-                    if (!currentLight.Position) {
-                        currentLight.Position = vec3.create();
-                     //   console.log(`lights[${i}].Position was undefined, initialized it.`);
-                    }
-                    if (!currentLight.Direction) {
-                        currentLight.Direction = vec3.create();
-                       // console.log(`lights[${i}].Direction was undefined, initialized it.`);
-                    }
+                    if (!currentLight.Position) currentLight.Position = vec3.create();
+                    if (!currentLight.Direction) currentLight.Direction = vec3.create();
 
-                    // Reset all other properties to a default state before configuring
-                    currentLight.Color = colorNewCopy(White); // Fresh color instance
+                    currentLight.Color = colorNewCopy(White); 
                     vec3.set(currentLight.Position, 0, 0, 0);
                     vec3.set(currentLight.Direction, 0, 0, 0);
-                    lightSetDistAttn(currentLight, 0, 0, 0); // Reset attenuation
-                    lightSetSpot(currentLight, 0, 0);         // Reset spot
+                    lightSetDistAttn(currentLight, 0, 0, 0); 
+                    lightSetSpot(currentLight, 0, 0);        
                 }
 
-                // Now, configure our primary ambient and directional lights
-                // Ambient Light (lights[0])
                 const ambientLight = lights[0];
-                ambientLight.Color.r *= 0.5; // Slightly dim ambient
+                ambientLight.Color.r *= 0.5; 
                 ambientLight.Color.g *= 0.5;
                 ambientLight.Color.b *= 0.5;
-                ambientLight.Color.a = 1.0; // Ensure full alpha
-              //  console.log(`Ambient light configured at lights[0].`);
+                ambientLight.Color.a = 1.0; 
 
-                // Directional Light (lights[1])
                 const dirLight = lights[1];
                 dirLight.Color.r = 1.0;
                 dirLight.Color.g = 1.0;
                 dirLight.Color.b = 1.0;
-                dirLight.Color.a = 1.0; // Max brightness
+                dirLight.Color.a = 1.0; 
                 vec3.set(dirLight.Direction, 0.5, -1.0, 0.5);
                 vec3.normalize(dirLight.Direction, dirLight.Direction);
-               // console.log(`Directional light configured at lights[1].`);
 
-                // Disable any lights beyond our controlled two by setting their alpha to 0.0
-                // This prevents unexpected lighting contributions from stale internal lights.
                 for (let i = 2; i < expectedMaxLights; i++) {
-                    lights[i].Color.a = 0.0; // Make it completely transparent
-                   // console.log(`Disabled light at lights[${i}] (set alpha to 0).`);
+                    lights[i].Color.a = 0.0; 
                 }
-
-                // IMPORTANT: Do NOT change lights.length here if the framework expects a fixed size,
-                // as it might still reference elements beyond lights[1]. By setting alpha to 0.0,
-                // we effectively disable them without removing them from the array.
-               // console.log(`Finished configuring lights. Final lights array length (unchanged): ${lights.length}`);
             },
             mapLights: undefined, 
             cullByAabb: false,
-            // Removed: showWireframe: this.showWireframe, // Pass the wireframe toggle state
         };
 
-// Build model matrix (turntable rotation around bbox center when enabled)
-const mtx = mat4.create();
+        // --- FIXED TURNTABLE BOUNDING BOX LOGIC ---
+        const mtx = mat4.create();
 
-if (this.turntableEnabled) {
-    // Default center is origin
-    const center = vec3.create();
+        if (this.turntableEnabled) {
+            const center = vec3.create();
+            const bbox = (this.modelInst?.model as any)?.bbox;
+            if (bbox) {
+                // Use explicit properties instead of arrays
+                center[0] = (bbox.minX + bbox.maxX) * 0.5;
+                center[1] = (bbox.minY + bbox.maxY) * 0.5;
+                center[2] = (bbox.minZ + bbox.maxZ) * 0.5;
+            }
 
-    // If bbox exists, rotate around its center
-    const bbox = (this.modelInst?.model as any)?.bbox;
-    if (bbox) {
-        vec3.add(center, bbox.min, bbox.max);
-        vec3.scale(center, center, 0.5);
-    }
+            const toOrigin = mat4.create();
+            const backToCenter = mat4.create();
+            const rotY = mat4.create();
 
-    // mtx = T(center) * R_y(angle) * T(-center)
-    const toOrigin = mat4.create();
-    const backToCenter = mat4.create();
-    const rotY = mat4.create();
+            const negCenter = vec3.fromValues(-center[0], -center[1], -center[2]);
+            mat4.fromTranslation(toOrigin, negCenter);
+            mat4.fromTranslation(backToCenter, center);
+            mat4.fromYRotation(rotY, this.turntableAngle);
 
-    const negCenter = vec3.fromValues(-center[0], -center[1], -center[2]);
-    mat4.fromTranslation(toOrigin, negCenter);
-    mat4.fromTranslation(backToCenter, center);
-    mat4.fromYRotation(rotY, this.turntableAngle);
-
-    mat4.mul(mtx, rotY, toOrigin);
-    mat4.mul(mtx, backToCenter, mtx);
-}
+            mat4.mul(mtx, rotY, toOrigin);
+            mat4.mul(mtx, backToCenter, mtx);
+        }
         
-        // Force shape visibility ON, even if it's private or not typed
         const modelShapes = (this.modelInst as any).modelShapes;
         if (modelShapes && typeof modelShapes.fillMaterialParams === 'function') {
             modelShapes.fillMaterialParams();
@@ -921,6 +853,8 @@ if (this.turntableEnabled) {
     }
 }
 
+
+
 export class SFAModelExhibitSceneDesc implements Viewer.SceneDesc {
     constructor(public id: string, public name: string, private modelVersion: ModelVersion, private gameInfo: GameInfo = SFA_GAME_INFO) {
     }
@@ -1011,5 +945,73 @@ await modelFetcher.loadSubdirs(selectedSubdirs, context.dataFetcher);
 const animColl = await AnimCollection.create(this.gameInfo, context.dataFetcher, selectedSubdirs);
 
 return new ModelExhibitRenderer(context, animController, materialFactory, texFetcher, modelFetcher, animColl, amapColl, modanimColl, this.gameInfo, this.modelVersion);
+    }
+}
+export class DPModelFetcher {
+    public constructor(
+        private gameInfo: GameInfo,
+        private dataFetcher: DataFetcher,
+        private texFetcher: TextureFetcher,
+        private materialFactory: MaterialFactory
+    ) {}
+
+    public static async create(gameInfo: GameInfo, dataFetcher: DataFetcher, texFetcher: TextureFetcher, materialFactory: MaterialFactory): Promise<DPModelFetcher> {
+        return new DPModelFetcher(gameInfo, dataFetcher, texFetcher, materialFactory);
+    }
+
+    public async createModelInstance(modelNum: number): Promise<ModelInstance | null> {
+        const url = `${this.gameInfo.pathBase}/uncompressed_models/${modelNum}.bin`;
+        
+        try {
+            const buffer = await this.dataFetcher.fetchData(url, { allow404: true }); 
+            if (buffer.byteLength === 0) return null;
+
+            const dv = buffer.createDataView();
+            
+            // This is the secret! DP Character models are just GameCube Beta models.
+            // By passing ModelVersion.Beta, it uses the standard, working SFA parser.
+            const model = loadModel(dv, this.texFetcher, this.materialFactory, ModelVersion.DinosaurPlanet);
+            
+            return new ModelInstance(model);
+        } catch (e: any) {
+            console.error(`[DPModelFetcher] Failed to parse model ${modelNum}:`, e);
+            return null;
+        }
+    }
+}
+
+export class DPModelExhibitSceneDesc implements Viewer.SceneDesc {
+    constructor(public id: string, public name: string, private gameInfo: GameInfo = DP_GAME_INFO) {
+    }
+
+    public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+        const materialFactory = new MaterialFactory(device);
+        materialFactory.initialize();
+
+        const animController = new SFAAnimationController();
+        
+        // DUMMY ANIMATION COLLECTIONS
+        const dummyModanimColl = { getModanim: () => null } as any;
+        const dummyAmapColl = { getAmap: () => null } as any;
+        const dummyAnimColl = { getAnim: () => null } as any;
+
+        const texFetcher = await SFATextureFetcher.create(this.gameInfo, context.dataFetcher, true);
+        await texFetcher.loadSubdirs([''], context.dataFetcher);
+        texFetcher.setModelVersion(ModelVersion.DinosaurPlanet);
+
+        const modelFetcher = await DPModelFetcher.create(this.gameInfo, context.dataFetcher, texFetcher, materialFactory);
+
+        return new ModelExhibitRenderer(
+            context, 
+            animController, 
+            materialFactory, 
+            texFetcher, 
+            modelFetcher as any, 
+            dummyAnimColl,    
+            dummyAmapColl,    
+            dummyModanimColl, 
+            this.gameInfo, 
+            ModelVersion.DinosaurPlanet
+        );
     }
 }

@@ -570,13 +570,7 @@ world.mapNum = this.mapNum;
             const obj = world.objectMan.getObjectType(objType, skipObjindex);
             console.log(`Object ${objType}: ${obj.name} (type ${obj.typeNum} class ${obj.objClass})`);
         };
-        // Console helper: list/load ALL textures from tables into the UI panel
-(window.main as any).showAllTextures = (useTex1: boolean = false) => {
-    // Cast so we can call the helper we added on SFATextureFetcher
-    const texFetcher = world.resColl.texFetcher as SFATextureFetcher;
-    const { attempted, shown } = texFetcher.loadAllFromTables(materialFactory.cache, useTex1);
-    //console.log(`[ShowAllTextures] Bank=${useTex1 ? 'TEX1' : 'TEX0/TEXPRE'} attempted=${attempted} registered=${shown}`);
-};
+     
 
 // Console helper: list/load ALL textures from tables into the UI panel
 (window.main as any).showAllTextures = (useTex1: boolean = false) => {

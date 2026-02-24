@@ -140,7 +140,7 @@ function generateVat(old: boolean, nbt: boolean): GX_VtxAttrFmt[][] {
 
   vat[0][GX.Attr.POS] = { compType: GX.CompType.S16, compShift: 0, compCnt: GX.CompCnt.POS_XYZ };
   vat[0][GX.Attr.CLR0] = { compType: GX.CompType.RGBA8, compShift: 0, compCnt: GX.CompCnt.CLR_RGBA };
-  vat[0][GX.Attr.TEX0] = { compType: GX.CompType.S16, compShift: 7, compCnt: GX.CompCnt.TEX_ST };
+  vat[0][GX.Attr.TEX0] = { compType: GX.CompType.S16, compShift: 10, compCnt: GX.CompCnt.TEX_ST };
 
   vat[1][GX.Attr.POS] = { compType: GX.CompType.S16, compShift: 2, compCnt: GX.CompCnt.POS_XYZ };
   vat[1][GX.Attr.CLR0] = { compType: GX.CompType.RGBA8, compShift: 0, compCnt: GX.CompCnt.CLR_RGBA };
@@ -732,108 +732,531 @@ function loadDinosaurPlanetModel(
   materialFactory: MaterialFactory,
 ): Model {
   const model = new Model(ModelVersion.DinosaurPlanet);
-  model.isMapBlock = true;
 
-  const cmdOff = readU32BE(data, 0x00);
-  const vtxOff = readU32BE(data, 0x04);
-  const triOff = readU32BE(data, 0x08);
-  const batOff = readU32BE(data, 0x0C);
+  const ptr00 = data.getUint32(0x00);
+  const ptr0C = data.getUint32(0x0C);
 
-  const batchCount = ((cmdOff - batOff) / 0x18) | 0;
-  if (batchCount <= 0) throw new Error(`DP: bad batchCount=${batchCount}`);
+  const isCharacter = ptr0C > ptr00;
 
-  const lastRec = batOff + (batchCount - 1) * 0x18;
-  const totalVerts = readU16BE(data, lastRec + 0x04); 
-  const totalTris = readU16BE(data, lastRec + 0x06);
+  if (isCharacter) {
+        // ==========================================
+        // DINOSAUR PLANET CHARACTER PARSER
+        // ==========================================
+        model.isMapBlock = false;
+        
+        const matOff = data.getUint32(0x00); 
+        const vtxOff = data.getUint32(0x04);
+        const faceOff = data.getUint32(0x08);
+        const dlOff = data.getUint32(0x0C); 
+        const jointOff = data.getUint32(0x20);
 
-  const posAB = new ArrayBuffer(totalVerts * 6);
-  const posDV = new DataView(posAB);
-  const clrAB = new ArrayBuffer(totalVerts * 4);
-  const clrDV = new DataView(clrAB);
-  const texAB = new ArrayBuffer(totalVerts * 4);
-  const texDV = new DataView(texAB);
+        const faceCount = Math.min(data.getUint16(0x64), 2000); 
+        const jointCount = Math.min(data.getUint8(0x6F), 200); 
 
-  for (let i = 0; i < totalVerts; i++) {
-    const o = vtxOff + i * 16;
-    posDV.setInt16(i * 6 + 0, readS16BE(data, o + 0x00), false);
-    posDV.setInt16(i * 6 + 2, readS16BE(data, o + 0x02), false);
-    posDV.setInt16(i * 6 + 4, readS16BE(data, o + 0x04), false);
+        model.joints = [];
+        model.skeleton = new Skeleton();
+        model.invBindTranslations = nArray(jointCount, () => vec3.create());
 
-    // UV Parsing
-    texDV.setInt16(i * 4 + 0, readS16BE(data, o + 0x08), false);
-    texDV.setInt16(i * 4 + 2, readS16BE(data, o + 0x0A), false);
+        const globalJoints: vec3[] = [];
+        for (let i = 0; i < jointCount; i++) {
+            const o = jointOff + i * 16;
+            if (o + 16 > data.byteLength) { globalJoints.push(vec3.create()); continue; }
+            
+            const p = data.getInt8(o + 0); 
+            const lx = data.getFloat32(o + 4, false);
+            const ly = data.getFloat32(o + 8, false);
+            const lz = data.getFloat32(o + 12, false);
+            
+            const gPos = vec3.fromValues(lx, ly, lz);
+            if (p !== -1 && p < i && p < globalJoints.length) vec3.add(gPos, gPos, globalJoints[p]);
+            globalJoints.push(gPos);
 
-    clrDV.setUint8(i * 4 + 0, data.getUint8(o + 0x0C));
-    clrDV.setUint8(i * 4 + 1, data.getUint8(o + 0x0D));
-    clrDV.setUint8(i * 4 + 2, data.getUint8(o + 0x0E));
-    clrDV.setUint8(i * 4 + 3, data.getUint8(o + 0x0F));
-  }
+            model.joints.push({
+                parent: p !== -1 ? p : 0xff,
+                boneNum: i,
+                translation: vec3.fromValues(lx, ly, lz),
+                bindTranslation: vec3.create() 
+            });
+            model.skeleton.addJoint(p !== -1 ? p : undefined, vec3.fromValues(lx, ly, lz));
+        }
 
-  const tris: DPTri[] = [];
-  for (let i = 0; i < totalTris; i++) {
-    const o = triOff + i * 8;
-    const f = data.getUint8(o + 0);
-    tris.push({ flip: !!(f & 0x80), i0: data.getUint8(o + 1), i1: data.getUint8(o + 2), i2: data.getUint8(o + 3) });
-  }
+        interface Facebatch { 
+            materialID: number; 
+            jointA: number; jointB: number; jointC: number;
+            jointB_start: number; jointC_start: number;
+            baseVertexID: number;
+            tagC: number;
+            dlStartCmd: number; 
+        }
+        
+        const facebatches: Facebatch[] = [];
+        for (let i = 0; i < faceCount; i++) {
+            const o = faceOff + i * 16; 
+            if (o + 16 > data.byteLength) break;
+            
+            const matIdx = data.getUint8(o + 0);
+            const jointA = data.getInt8(o + 1);
+            const jointB = data.getInt8(o + 2);
+            const jointC = data.getInt8(o + 3);
+            const jointB_start = data.getUint8(o + 4);
+            const jointC_start = data.getUint8(o + 5);
+            const baseVertexID = data.getInt16(o + 6, false);
+            const dlStartCmd = data.getInt16(o + 8, false);
+            const tagC = data.getInt32(o + 0x0C, false);
 
-  const batches: DPBatch[] = [];
-  let prevV = 0, prevT = 0;
-  for (let i = 0; i < batchCount; i++) {
-    const o = batOff + i * 0x18;
-    const flags = readU16BE(data, o + 0x00);
-    const materialId = readU16BE(data, o + 0x02);
-    const vEnd = readU16BE(data, o + 0x04);
-    const tEnd = readU16BE(data, o + 0x06);
-    if (vEnd !== prevV || tEnd !== prevT) {
-      batches.push({ flags, materialId, vStart: prevV, vEnd, tStart: prevT, tEnd });
+            const matStructOff = matOff + (matIdx * 8); 
+            let globalTexId = 0;
+            if (matStructOff + 4 <= vtxOff) {
+                globalTexId = data.getUint32(matStructOff, false) & 0xFFFF; 
+            }
+
+            facebatches.push({ 
+                materialID: globalTexId, 
+                jointA, jointB, jointC, 
+                jointB_start, jointC_start, 
+                baseVertexID, tagC, dlStartCmd 
+            });
+        }
+        facebatches.sort((a, b) => a.dlStartCmd - b.dlStartCmd);
+        
+        const outPos: number[] = [];
+        const outClr: number[] = [];
+        const outTex: number[] = [];
+        const outTris: DPTri[] = [];
+        const batches: DPBatch[] = [];
+
+        const vtxCache = new Int32Array(64).fill(0); 
+        let fbIndex = 0;
+        let currentFb: Facebatch | null = null;
+        let currentMaterial = -1;
+        let batchStartTri = 0;
+
+        let minX = Infinity, minY = Infinity, minZ = Infinity;
+        let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+
+        let cmdOffset = dlOff;
+        let cmdIdx = 0;
+        
+        while (cmdOffset + 8 <= data.byteLength) {
+            while (fbIndex < facebatches.length && cmdIdx >= facebatches[fbIndex].dlStartCmd) {
+                currentFb = facebatches[fbIndex];
+                if (currentFb.materialID !== currentMaterial) {
+                    if (outTris.length > batchStartTri) {
+                        batches.push({ flags: currentFb.tagC, materialId: currentMaterial, vStart: 0, vEnd: 0, tStart: batchStartTri, tEnd: outTris.length });
+                    }
+                    currentMaterial = currentFb.materialID;
+                    batchStartTri = outTris.length;
+                }
+                fbIndex++;
+            }
+
+            const w0 = data.getUint32(cmdOffset);
+            const w1 = data.getUint32(cmdOffset + 4);
+            const opcode = w0 >>> 24;
+
+            if (opcode === 0xDF) break; // G_ENDDL
+
+            if (opcode === 0x01) { // G_VTX
+                const num = (w0 >>> 12) & 0xFF;
+                const v0_encoded = (w0 >>> 1) & 0x7F; 
+                const v0 = v0_encoded - num;
+
+                const fileOffset = w1 & 0x00FFFFFF;
+                let baseVtxIndex = Math.floor(fileOffset / 16);
+                if (fileOffset >= vtxOff) {
+                    baseVtxIndex = Math.floor((fileOffset - vtxOff) / 16);
+                }
+                
+                for (let v = 0; v < num; v++) {
+                    const romIdx = baseVtxIndex + v;
+                    const cacheIdx = v0 + v; 
+                    const o = vtxOff + romIdx * 16;
+                    if (o + 16 > data.byteLength) continue;
+
+                    let activeJoint = currentFb ? currentFb.jointA : 0;
+                    if (currentFb) {
+                        const relIdx = romIdx - currentFb.baseVertexID;
+                        if (currentFb.jointC_start > 0 && relIdx >= currentFb.jointC_start) {
+                            activeJoint = currentFb.jointC;
+                        } else if (currentFb.jointB_start > 0 && relIdx >= currentFb.jointB_start) {
+                            activeJoint = currentFb.jointB;
+                        }
+                    }
+
+                    let vx = data.getInt16(o + 0, false);
+                    let vy = data.getInt16(o + 2, false);
+                    let vz = data.getInt16(o + 4, false);
+
+                    if (activeJoint >= 0 && activeJoint < globalJoints.length) {
+                        vx += globalJoints[activeJoint][0];
+                        vy += globalJoints[activeJoint][1];
+                        vz += globalJoints[activeJoint][2];
+                    }
+
+                    minX = Math.min(minX, vx); minY = Math.min(minY, vy); minZ = Math.min(minZ, vz);
+                    maxX = Math.max(maxX, vx); maxY = Math.max(maxY, vy); maxZ = Math.max(maxZ, vz);
+
+                    const newIdx = outPos.length / 3;
+                    outPos.push(vx, vy, vz);
+                    outTex.push(data.getInt16(o + 8, false), data.getInt16(o + 10, false));
+                    outClr.push(255, 255, 255, 255);
+
+                    if (cacheIdx < 64) vtxCache[cacheIdx] = newIdx;
+                }
+            }
+            else if (opcode === 0x05) { // G_TRI1
+                const i0 = ((w0 >>> 16) & 0xFF) / 2; 
+                const i1 = ((w0 >>> 8) & 0xFF) / 2;
+                const i2 = ((w0 >>> 0) & 0xFF) / 2;
+                outTris.push({ flip: false, i0: vtxCache[i0], i1: vtxCache[i1], i2: vtxCache[i2] });
+            }
+            else if (opcode === 0x06) { // G_TRI2
+                const i0 = ((w0 >>> 16) & 0xFF) / 2;
+                const i1 = ((w0 >>> 8) & 0xFF) / 2;
+                const i2 = ((w0 >>> 0) & 0xFF) / 2;
+                outTris.push({ flip: false, i0: vtxCache[i0], i1: vtxCache[i1], i2: vtxCache[i2] });
+
+                const i3 = ((w1 >>> 16) & 0xFF) / 2;
+                const i4 = ((w1 >>> 8) & 0xFF) / 2;
+                const i5 = ((w1 >>> 0) & 0xFF) / 2;
+                outTris.push({ flip: false, i0: vtxCache[i3], i1: vtxCache[i4], i2: vtxCache[i5] });
+            }
+            cmdOffset += 8;
+            cmdIdx++;
+        }
+        
+        if (outTris.length > batchStartTri) {
+            batches.push({ flags: currentFb ? currentFb.tagC : 0, materialId: currentMaterial === -1 ? 0 : currentMaterial, vStart: 0, vEnd: 0, tStart: batchStartTri, tEnd: outTris.length });
+        }
+
+        const finalVerts = outPos.length / 3;
+        const posAB = new ArrayBuffer(finalVerts * 6);
+        const clrAB = new ArrayBuffer(finalVerts * 4);
+        const texAB = new ArrayBuffer(finalVerts * 4);
+        const posDV = new DataView(posAB);
+        const clrDV = new DataView(clrAB);
+        const texDV = new DataView(texAB);
+
+        for(let j=0; j < finalVerts; j++) {
+            posDV.setInt16(j*6 + 0, outPos[j*3+0], false);
+            posDV.setInt16(j*6 + 2, outPos[j*3+1], false);
+            posDV.setInt16(j*6 + 4, outPos[j*3+2], false);
+            texDV.setInt16(j*4 + 0, outTex[j*2+0], false);
+            texDV.setInt16(j*4 + 2, outTex[j*2+1], false);
+            clrDV.setUint8(j*4 + 0, outClr[j*4+0]);
+            clrDV.setUint8(j*4 + 1, outClr[j*4+1]);
+            clrDV.setUint8(j*4 + 2, outClr[j*4+2]);
+            clrDV.setUint8(j*4 + 3, outClr[j*4+3]);
+        }
+
+        (model as any).bbox = new AABB(minX, minY, minZ, maxX, maxY, maxZ);
+
+        const vcd: GX_VtxDesc[] = nArray(GX.Attr.MAX + 1, () => ({ type: GX.AttrType.NONE }));
+        vcd[GX.Attr.POS].type = GX.AttrType.INDEX16;
+        vcd[GX.Attr.CLR0].type = GX.AttrType.INDEX16;
+        vcd[GX.Attr.TEX0].type = GX.AttrType.INDEX16;
+
+        const vat: GX_VtxAttrFmt[][] = nArray(8, () => nArray(GX.Attr.MAX + 1, () => ({ compType: GX.CompType.U8, compShift: 0, compCnt: 0 } as GX_VtxAttrFmt)));
+        vat[0][GX.Attr.POS] = { compType: GX.CompType.S16, compShift: 0, compCnt: GX.CompCnt.POS_XYZ };
+        vat[0][GX.Attr.CLR0] = { compType: GX.CompType.RGBA8, compShift: 0, compCnt: GX.CompCnt.CLR_RGBA };
+        vat[0][GX.Attr.TEX0] = { compType: GX.CompType.S16, compShift: 10, compCnt: GX.CompCnt.TEX_ST };
+
+        const vtxArrays: GX_Array[] = [];
+        vtxArrays[GX.Attr.POS] = { buffer: ArrayBufferSlice.fromView(new DataView(posAB)), offs: 0, stride: 6 };
+        vtxArrays[GX.Attr.CLR0] = { buffer: ArrayBufferSlice.fromView(new DataView(clrAB)), offs: 0, stride: 4 };
+        vtxArrays[GX.Attr.TEX0] = { buffer: ArrayBufferSlice.fromView(new DataView(texAB)), offs: 0, stride: 4 };
+
+        model.createModelShapes = () => {
+            const shapes = new ModelShapes(model, new DataView(posAB), undefined);
+            shapes.shapes[0] = []; shapes.shapes[1] = []; shapes.shapes[2] = [];
+
+            for (const b of batches) {
+                const finalTexId = b.materialId & 0xFFFF;
+                const isDoubleSided = (b.flags & 0x80) !== 0; 
+                
+                const shader: Shader = {
+                    layers: [{ texId: finalTexId, tevMode: 0, enableScroll: 0 }],
+                    flags: !isDoubleSided ? ShaderFlags.CullBackface : 0x10, 
+                    attrFlags: ShaderAttrFlags.CLR | (ShaderAttrFlags as any).TEX0, 
+                    hasHemisphericProbe: false, hasReflectiveProbe: false, reflectiveProbeMaskTexId: null,
+                    reflectiveProbeIdx: 0, reflectiveAmbFactor: 0.0, hasNBTTexture: false, nbtTexId: null,
+                    nbtParams: 0, furRegionsTexId: null, color: { r: 1, g: 1, b: 1, a: 1 },
+                    normalFlags: 0, lightFlags: 0, texMtxCount: 0,
+                };
+                const material = materialFactory.buildMapMaterial(shader, texFetcher);
+
+                const triCount = (b.tEnd - b.tStart);
+                const vtxCountOut = triCount * 3;
+                
+                const out = new Uint8Array(3 + vtxCountOut * 6); 
+                let p = 0;
+                out[p++] = 0x90;
+                out[p++] = (vtxCountOut >>> 8) & 0xFF;
+                out[p++] = (vtxCountOut >>> 0) & 0xFF;
+
+                for (let ti = b.tStart; ti < b.tEnd; ti++) {
+                    let { flip, i0, i1, i2 } = outTris[ti];
+                    if (flip) { const tmp = i1; i1 = i2; i2 = tmp; }
+                    for (const idx of [i0, i1, i2]) {
+                        const safeIdx = Math.min(Math.max(0, idx), finalVerts - 1);
+                        out[p++] = (safeIdx >>> 8) & 0xFF; out[p++] = safeIdx & 0xFF; 
+                        out[p++] = (safeIdx >>> 8) & 0xFF; out[p++] = safeIdx & 0xFF; 
+                        out[p++] = (safeIdx >>> 8) & 0xFF; out[p++] = safeIdx & 0xFF; 
+                    }
+                }
+                const geom = new ShapeGeometry(vtxArrays, vcd, vat, new DataView(out.buffer), false);
+                
+                const pnMatrixMap = nArray(10, () => 0);
+                geom.setPnMatrixMap(pnMatrixMap, false, false);
+
+                shapes.shapes[0].push(new Shape(geom, new ShapeMaterial(material), false));
+            }
+            return shapes;
+        };
+        model.sharedModelShapes = model.createModelShapes();
+        return model;
+
+ return model;
+
+  } else {
+        // ==========================================
+        // DINOSAUR PLANET MAP BLOCK PARSER
+        // ==========================================
+        model.isMapBlock = true;
+
+        const matOff = data.getUint32(0x00); 
+        const vtxOff = data.getUint32(0x04); 
+        const triOff = data.getUint32(0x08); 
+        const batOff = data.getUint32(0x0C); 
+        const materialCount = data.getUint8(0x4A); 
+
+        const batchCount = ((matOff - batOff) / 0x18) | 0;
+        if (batchCount <= 0) throw new Error(`DP Map: bad batchCount=${batchCount}`);
+
+        const totalVerts = ((triOff - vtxOff) / 16) | 0;
+        const totalTris  = ((batOff - triOff) / 8)  | 0;
+
+        const posAB = new ArrayBuffer(totalVerts * 6);
+        const posDV = new DataView(posAB);
+        const clrAB = new ArrayBuffer(totalVerts * 4);
+        const clrDV = new DataView(clrAB);
+        const texAB = new ArrayBuffer(totalVerts * 4);
+        const texDV = new DataView(texAB);
+
+        type DPMapBatch = {
+            isOpaque: boolean; 
+            pixelFormat: number; 
+            drawMode: number;
+            materialId: number; 
+            blendMaterialId: number;
+            vStart: number; vEnd: number; 
+            tStart: number; tEnd: number;
+        };
+
+        const batches: DPMapBatch[] = [];
+        const requestedTextures = new Set<number>();
+        
+        const vertScaleS = new Float32Array(totalVerts).fill(1.0);
+        const vertScaleT = new Float32Array(totalVerts).fill(1.0);
+
+        for (let i = 0; i < batchCount; i++) {
+            const o = batOff + i * 0x18;
+
+            const vStart = data.getUint16(o + 0x04, false);
+            const tStart = data.getUint16(o + 0x06, false);
+
+            const nextO = batOff + (i + 1) * 0x18;
+            const vEnd = (i + 1 < batchCount) ? data.getUint16(nextO + 0x04, false) : totalVerts;
+            const tEnd = (i + 1 < batchCount) ? data.getUint16(nextO + 0x06, false) : totalTris;
+
+            const drawMode = data.getUint8(o + 0x03); 
+            const matIdx = data.getUint8(o + 0x12);
+            const blendMatIdx = data.getUint8(o + 0x15); 
+
+            let globalTexId = -1;
+            let blendGlobalTexId = -1;
+            let isOpaque = true;
+            let pixelFormat = 0;
+            let texW = 32, texH = 32;
+
+            if (matIdx < materialCount) {
+                const matStructOff = matOff + (matIdx * 0x0C);
+                if (matStructOff + 0x0B < data.byteLength) {
+                    globalTexId = data.getUint32(matStructOff + 0x00, false) & 0xFFFF;
+                    texW = data.getUint8(matStructOff + 0x08);
+                    texH = data.getUint8(matStructOff + 0x09);
+                    
+                    const matFormat = data.getUint8(matStructOff + 0x0A);
+                    isOpaque = (matFormat & 0x10) !== 0;
+                    pixelFormat = (matFormat & 0x0F);
+
+                    if (globalTexId >= 0 && globalTexId < 10000) {
+                        requestedTextures.add(globalTexId);
+                    } else {
+                        globalTexId = -1;
+                    }
+                }
+            }
+
+            if (blendMatIdx !== 0x00 && blendMatIdx !== 0xFF && blendMatIdx < materialCount) {
+                const blendMatStructOff = matOff + (blendMatIdx * 0x0C);
+                blendGlobalTexId = data.getUint32(blendMatStructOff + 0x00, false) & 0xFFFF;
+                if (blendGlobalTexId >= 0 && blendGlobalTexId < 10000) {
+                    requestedTextures.add(blendGlobalTexId);
+                } else {
+                    blendGlobalTexId = -1;
+                }
+            }
+
+            if (texW <= 0) texW = 32;
+            if (texH <= 0) texH = 32;
+
+            for (let v = vStart; v < vEnd && v < totalVerts; v++) {
+                vertScaleS[v] = 32.0 / texW;
+                vertScaleT[v] = 32.0 / texH;
+            }
+
+            if (vEnd > vStart && tEnd > tStart) {
+                batches.push({ isOpaque, pixelFormat, drawMode, materialId: globalTexId, blendMaterialId: blendGlobalTexId, vStart, vEnd, tStart, tEnd });
+            }
+        }
+
+        for (let i = 0; i < totalVerts; i++) {
+            const o = vtxOff + i * 16;
+            posDV.setInt16(i * 6 + 0, data.getInt16(o + 0, false), false);
+            posDV.setInt16(i * 6 + 2, data.getInt16(o + 2, false), false);
+            posDV.setInt16(i * 6 + 4, data.getInt16(o + 4, false), false);
+            
+            const rawS = data.getInt16(o + 8, false);
+            const rawT = data.getInt16(o + 10, false);
+            
+            texDV.setInt16(i * 4 + 0, Math.round(rawS * vertScaleS[i]), false);
+            texDV.setInt16(i * 4 + 2, Math.round(rawT * vertScaleT[i]), false);
+            
+            clrDV.setUint8(i * 4 + 0, data.getUint8(o + 0x0C));
+            clrDV.setUint8(i * 4 + 1, data.getUint8(o + 0x0D));
+            clrDV.setUint8(i * 4 + 2, data.getUint8(o + 0x0E));
+            clrDV.setUint8(i * 4 + 3, data.getUint8(o + 0x0F));
+        }
+
+        const tris: DPTri[] = [];
+        for (let i = 0; i < totalTris; i++) {
+            const o = triOff + i * 8;
+            const f = data.getUint8(o + 0);
+            tris.push({
+                flip: !!(f & 0x80),
+                i0: data.getUint8(o + 1),
+                i1: data.getUint8(o + 2),
+                i2: data.getUint8(o + 3),
+            });
+        }
+
+        const vcd: GX_VtxDesc[] = nArray(GX.Attr.MAX + 1, () => ({ type: GX.AttrType.NONE }));
+        vcd[GX.Attr.POS].type = GX.AttrType.INDEX16;
+        vcd[GX.Attr.CLR0].type = GX.AttrType.INDEX16;
+        vcd[GX.Attr.TEX0].type = GX.AttrType.INDEX16;
+        vcd[GX.Attr.TEX1].type = GX.AttrType.INDEX16; 
+
+        const vat: GX_VtxAttrFmt[][] = nArray(8, () => nArray(GX.Attr.MAX + 1, () => ({ compType: GX.CompType.U8, compShift: 0, compCnt: 0 } as GX_VtxAttrFmt)));
+        vat[0][GX.Attr.POS] = { compType: GX.CompType.S16, compShift: 0, compCnt: GX.CompCnt.POS_XYZ };
+        vat[0][GX.Attr.CLR0] = { compType: GX.CompType.RGBA8, compShift: 0, compCnt: GX.CompCnt.CLR_RGBA };
+        vat[0][GX.Attr.TEX0] = { compType: GX.CompType.S16, compShift: 10, compCnt: GX.CompCnt.TEX_ST };
+        vat[0][GX.Attr.TEX1] = { compType: GX.CompType.S16, compShift: 10, compCnt: GX.CompCnt.TEX_ST }; 
+
+        const vtxArrays: GX_Array[] = [];
+        vtxArrays[GX.Attr.POS] = { buffer: ArrayBufferSlice.fromView(new DataView(posAB)), offs: 0, stride: 6 };
+        vtxArrays[GX.Attr.CLR0] = { buffer: ArrayBufferSlice.fromView(new DataView(clrAB)), offs: 0, stride: 4 };
+        vtxArrays[GX.Attr.TEX0] = { buffer: ArrayBufferSlice.fromView(new DataView(texAB)), offs: 0, stride: 4 };
+        vtxArrays[GX.Attr.TEX1] = { buffer: ArrayBufferSlice.fromView(new DataView(texAB)), offs: 0, stride: 4 }; 
+
+        model.createModelShapes = () => {
+            const shapes = new ModelShapes(model, new DataView(posAB), undefined);
+            shapes.shapes[0] = []; shapes.shapes[1] = []; shapes.shapes[2] = [];
+
+            for (const b of batches) {
+                
+              const layers: any[] = [];
+                let activeTexFlags = 0;
+                
+                if (b.materialId !== -1) {
+                    layers.push({ texId: b.materialId, tevMode: 0, enableScroll: 0 });
+                    activeTexFlags |= (ShaderAttrFlags as any).TEX0;
+                }
+                if (b.blendMaterialId !== -1) {
+                    layers.push({ texId: b.blendMaterialId, tevMode: 0, enableScroll: 0 });
+                    activeTexFlags |= (ShaderAttrFlags as any).TEX1; 
+                }
+                
+                let isTrueTrans = false;
+                let isCutout = false;
+
+                if (b.blendMaterialId !== -1) {
+                    isTrueTrans = true; // Dual-texture Water
+                } else if (!b.isOpaque) {
+                    // THE FINAL SPLIT: 
+                    // Format 1 (RGBA16), 7 (CI4), and 8 (CI8) are used for sharp Cutouts (Trees/Fences).
+                    // Format 0 (RGBA32) and everything else are used for smooth Transparency (Waterfalls).
+                    if (b.pixelFormat === 1 || b.pixelFormat === 7 || b.pixelFormat === 8) {
+                        isCutout = true;
+                    } else {
+                        isTrueTrans = true;
+                    }
+                }
+                
+                let shaderFlags = 0;
+                let targetList = 0;
+                
+                if (isTrueTrans) {
+                    shaderFlags |= 0x40000000; // Blend ON, Z-Write OFF
+                    targetList = 1; // Draw waterfalls last so they overlap everything
+                } else if (isCutout) {
+                    shaderFlags |= ShaderFlags.AlphaCompare; // Cutout ON, Z-Write ON
+                    targetList = 0; // Draw trees with the solid walls so they sort properly
+                } else {
+                    shaderFlags |= 0x10; // Solid walls
+                    targetList = 0;
+                }
+                // === STOP REPLACING HERE (Leave const shader: Shader = ... alone) ===
+                
+                const shader: Shader = {
+                    layers: layers,
+                    flags: shaderFlags,
+                    attrFlags: ShaderAttrFlags.CLR | activeTexFlags, 
+                    hasHemisphericProbe: false, hasReflectiveProbe: false, reflectiveProbeMaskTexId: null,
+                    reflectiveProbeIdx: 0, reflectiveAmbFactor: 0.0, hasNBTTexture: false, nbtTexId: null,
+                    nbtParams: 0, furRegionsTexId: null, color: { r: 1, g: 1, b: 1, a: 1 },
+                    normalFlags: 0, lightFlags: 0, texMtxCount: 0,
+                };
+                
+                const material = materialFactory.buildMapMaterial(shader, texFetcher);
+                
+                const triCount = (b.tEnd - b.tStart);
+                const vtxCount = triCount * 3;
+                const out = new Uint8Array(3 + vtxCount * 8);
+                let p = 0;
+                out[p++] = 0x90;
+                out[p++] = (vtxCount >>> 8) & 0xFF;
+                out[p++] = (vtxCount >>> 0) & 0xFF;
+                
+                for (let ti = b.tStart; ti < b.tEnd; ti++) {
+                    let { flip, i0, i1, i2 } = tris[ti];
+                    if (flip) { const tmp = i1; i1 = i2; i2 = tmp; }
+                    const a = b.vStart + i0, bb = b.vStart + i1, c = b.vStart + i2;
+                    for (const idx of [a, bb, c]) {
+                        out[p++] = (idx >>> 8) & 0xFF; out[p++] = idx & 0xFF; // POS
+                        out[p++] = (idx >>> 8) & 0xFF; out[p++] = idx & 0xFF; // CLR
+                        out[p++] = (idx >>> 8) & 0xFF; out[p++] = idx & 0xFF; // TEX0
+                        out[p++] = (idx >>> 8) & 0xFF; out[p++] = idx & 0xFF; // TEX1
+                    }
+                }
+                const geom = new ShapeGeometry(vtxArrays, vcd, vat, new DataView(out.buffer), false);
+                
+shapes.shapes[targetList].push(new Shape(geom, new ShapeMaterial(material), false));            }
+            return shapes;
+        };
+        model.sharedModelShapes = model.createModelShapes();
+        return model;
     }
-    prevV = vEnd;
-    prevT = tEnd;
-  }
-
-  const vcd: GX_VtxDesc[] = nArray(GX.Attr.MAX + 1, () => ({ type: GX.AttrType.NONE }));
-  vcd[GX.Attr.POS].type = GX.AttrType.INDEX16;
-  vcd[GX.Attr.CLR0].type = GX.AttrType.INDEX16;
-  vcd[GX.Attr.TEX0].type = GX.AttrType.INDEX16;
-
-  const vat: GX_VtxAttrFmt[][] = nArray(8, () => nArray(GX.Attr.MAX + 1, () => ({ compType: GX.CompType.U8, compShift: 0, compCnt: 0 } as GX_VtxAttrFmt)));
-  vat[0][GX.Attr.POS] = { compType: GX.CompType.S16, compShift: 0, compCnt: GX.CompCnt.POS_XYZ };
-  vat[0][GX.Attr.CLR0] = { compType: GX.CompType.RGBA8, compShift: 0, compCnt: GX.CompCnt.CLR_RGBA };
-  
-  // FIXED: Shift 10 significantly enlarges the texture on the polygons
-  vat[0][GX.Attr.TEX0] = { compType: GX.CompType.S16, compShift: 10, compCnt: GX.CompCnt.TEX_ST };
-
-  const vtxArrays: GX_Array[] = [];
-  vtxArrays[GX.Attr.POS] = { buffer: ArrayBufferSlice.fromView(new DataView(posAB)), offs: 0, stride: 6 };
-  vtxArrays[GX.Attr.CLR0] = { buffer: ArrayBufferSlice.fromView(new DataView(clrAB)), offs: 0, stride: 4 };
-  vtxArrays[GX.Attr.TEX0] = { buffer: ArrayBufferSlice.fromView(new DataView(texAB)), offs: 0, stride: 4 };
-
-  model.createModelShapes = () => {
-    const shapes = new ModelShapes(model, new DataView(posAB), undefined);
-    shapes.shapes[0] = []; shapes.shapes[1] = []; shapes.shapes[2] = [];
-
-    for (const b of batches) {
-      const shader: Shader = {
-        layers: [{ texId: b.materialId, tevMode: 0, enableScroll: 0 }],
-        flags: ShaderFlags.Water,
-        attrFlags: ShaderAttrFlags.CLR | (ShaderAttrFlags as any).TEX0, 
-        hasHemisphericProbe: false, hasReflectiveProbe: false, reflectiveProbeMaskTexId: null,
-        reflectiveProbeIdx: 0, reflectiveAmbFactor: 0.0, hasNBTTexture: false, nbtTexId: null,
-        nbtParams: 0, furRegionsTexId: null, color: { r: 1, g: 1, b: 1, a: 1 },
-        normalFlags: 0, lightFlags: 0, texMtxCount: 0,
-      };
-      const material = materialFactory.buildMapMaterial(shader, texFetcher);
-
-      const dlBytes = buildGXTrianglesDL(b, tris);
-      const geom = new ShapeGeometry(vtxArrays, vcd, vat, new DataView(dlBytes.buffer), false);
-      
-      shapes.shapes[0].push(new Shape(geom, new ShapeMaterial(material), false));
-    }
-    return shapes;
-  };
-
-  model.sharedModelShapes = model.createModelShapes();
-  return model;
 }
 // ===== end DP loader =====
 
@@ -1865,7 +2288,7 @@ if (usingDummyClr) {
 
           // Sanity: warn if VCD asks for buffers that don't exist
           if (vcd[GX.Attr.CLR0]?.type !== GX.AttrType.NONE && clrCount === 0)
-            console.error('[ATTR] CLR0 requested but clrCount==0');
+          //  console.error('[ATTR] CLR0 requested but clrCount==0');
           if (vcd[GX.Attr.NRM]?.type !== GX.AttrType.NONE && !fields.hasNormals)
             console.error('[ATTR] NRM requested but hasNormals==false');
 
@@ -2185,13 +2608,13 @@ const tunedVcd = tuneVCDForDL(data, dlInfo.offset, dlInfo.size, vcd, fields, cur
 
   if (model.sharedModelShapes) {
     const countStep = (arr?: Shape[]) => (arr ? arr.length : 0);
-   console.warn(
+//   console.warn(
       `[RESULT] opaque0=${countStep(model.sharedModelShapes.shapes[0])} ` +
      `pass1=${countStep(model.sharedModelShapes.shapes[1])} ` +
       `pass2=${countStep(model.sharedModelShapes.shapes[2])} ` +
       `waters=${model.sharedModelShapes.waters.length} ` +
       `furs=${model.sharedModelShapes.furs.length}`
-    );
+ //   );
   }
 
   return model; 

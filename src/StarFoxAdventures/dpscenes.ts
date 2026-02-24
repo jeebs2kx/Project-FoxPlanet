@@ -6,7 +6,7 @@ export interface GameInfo {
 }
 
 export const DP_GAME_INFO: GameInfo = {
-    pathBase: 'DinosaurPlanet',
+    pathBase: 'dinosaurplanet',
     subdirs: {},
 };
 
@@ -34,7 +34,24 @@ function makeLazyDPFullWorldSceneDesc(id: string, name: string, gameInfo: GameIn
     };
 }
 
+// Add this new lazy loader function
+function makeLazyDPModelExhibitSceneDesc(id: string, name: string, gameInfo: GameInfo): Viewer.SceneDesc {
+    return {
+        id,
+        name,
+        createScene: async (device: any, context: any) => {
+            const m = await import('./modelexhibit.js');
+            const real = new m.DPModelExhibitSceneDesc(id, name, gameInfo);
+            return real.createScene(device, context);
+        },
+    };
+}
+
 const sceneDescs: (string | Viewer.SceneDesc)[] = [
+    'Dinosaur Planet Map + Model Viewer ',
+    // Add the model viewer entry here
+    makeLazyDPModelExhibitSceneDesc('dp_models', 'DP: Models (in progress)', DP_GAME_INFO),
+
     'Full World Maps (experimental)',
     makeLazyDPFullWorldSceneDesc('dp_full_world', 'DP: Full World', DP_GAME_INFO),
 

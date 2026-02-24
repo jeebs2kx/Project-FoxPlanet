@@ -4,8 +4,9 @@ import { LGTPointLgt, LGTProjecte, Torch, Torch2 } from './Lights.js';
 import { ObjectInstance } from '../objects.js';
 import { angle16ToRads, readUint32 } from '../util.js';
 import { World } from '../world.js';
-import { getRandomInt } from '../../SuperMarioGalaxy/ActorUtil.js';
-import { MaterialRenderContext, StandardMaterial } from '../materials.js';
+function getRandomInt(min: number, max: number): number {
+    return (Math.random() * (max - min + 1) + min) | 0;
+}import { MaterialRenderContext, StandardMaterial } from '../materials.js';
 import * as GX from '../../gx/gx_enum.js';
 import { SFAClass } from './SFAClass.js';
 import { SFAMaterialBuilder } from '../MaterialBuilder.js';
@@ -14,7 +15,6 @@ export const SFA_CLASSES: {[num: number]: typeof SFAClass} = {
     [77]: commonClass(0x3d, 0x3e),
     [198]: commonClass(),
     [201]: commonClass(0x2a),
-    [203]: commonClass(0x18),
     [204]: commonClass(0x2a),
     [207]: commonClass(0x28), // CannonClawO
     [209]: class extends SFAClass { // TumbleWeedB
@@ -34,7 +34,6 @@ export const SFA_CLASSES: {[num: number]: typeof SFAClass} = {
     },
     [214]: commonClass(0x1a, 0x19, 0x18),
     [222]: commonClass(),
-    [224]: decorClass(0.0025),
     [227]: commonClass(),
     [231]: class extends SFAClass { // BurnableVin
         constructor(obj: ObjectInstance, data: DataView) {
@@ -65,8 +64,6 @@ export const SFA_CLASSES: {[num: number]: typeof SFAClass} = {
         }
     },
     [240]: commonClass(0x18),
-    [241]: decorClass(0.0025),
-    [242]: decorClass(0.0025),
     [244]: commonClass(0x18), // VFP_RoundDo
     [248]: commonClass(),
     [249]: class extends SFAClass { // ProjectileS
@@ -104,7 +101,6 @@ export const SFA_CLASSES: {[num: number]: typeof SFAClass} = {
     },
     [260]: commonClass(0x18),
     [261]: commonClass(0x18),
-    [263]: decorClass(0.0025),
     [266]: class extends SFAClass { // Fall_Ladder
         constructor(obj: ObjectInstance, data: DataView) {
             super(obj, data);
@@ -113,7 +109,6 @@ export const SFA_CLASSES: {[num: number]: typeof SFAClass} = {
             obj.setModelNum(data.getInt8(0x19));
         }
     },
-    [267]: decorClass(0.0025),
     [269]: class extends SFAClass { // PortalSpell
         constructor(obj: ObjectInstance, data: DataView) {
             super(obj, data);
@@ -141,7 +136,6 @@ export const SFA_CLASSES: {[num: number]: typeof SFAClass} = {
     [283]: commonClass(),
     [284]: commonClass(0x18),
     [285]: commonClass(0x18),
-    [286]: commonClass(),
     [287]: commonClass(0x23), // MagicCaveTo
     [289]: commonClass(0x18),
     [288]: commonClass(0x19), // TrickyGuard
@@ -243,7 +237,6 @@ export const SFA_CLASSES: {[num: number]: typeof SFAClass} = {
         // TODO: implement unmount
     },
     [309]: commonClass(),
-    
     [312]: commonClass(),
     [313]: commonClass(),
     [316]: commonClass(),
@@ -297,7 +290,6 @@ export const SFA_CLASSES: {[num: number]: typeof SFAClass} = {
         }
     },
     [347]: commonClass(0x18),
-    [352]: decorClass(0.0025),
     [356]: class extends SFAClass { // CFLevelCont
         constructor(obj: ObjectInstance, data: DataView) {
             super(obj, data);
@@ -326,7 +318,6 @@ export const SFA_CLASSES: {[num: number]: typeof SFAClass} = {
         }
     },
     [373]: commonClass(),
-    [381]: commonClass(),
     [382]: class extends SFAClass { // MMP_levelco
         constructor(obj: ObjectInstance, data: DataView) {
             super(obj, data);
@@ -367,7 +358,6 @@ export const SFA_CLASSES: {[num: number]: typeof SFAClass} = {
             obj.world.envfxMan.loadEnvfx(0x241);
         }
     },
-    [405]: commonClass(),
     [415]: class extends SFAClass { // NW_treebrid
         constructor(obj: ObjectInstance, data: DataView) {
             super(obj, data);
@@ -448,7 +438,6 @@ export const SFA_CLASSES: {[num: number]: typeof SFAClass} = {
     [445]: commonClass(0x18),
     [447]: commonClass(0x1c),
     [448]: commonClass(),
-    [450]: commonClass(0x18),
     [451]: commonClass(0x18),
     [452]: commonClass(0x18),
     [453]: commonClass(0x18),
@@ -494,7 +483,7 @@ export const SFA_CLASSES: {[num: number]: typeof SFAClass} = {
         constructor(obj: ObjectInstance, data: DataView) {
             super(obj, data);
             commonSetup(obj, data, 0x18);
-            const modelNum = data.getInt8(0x19) !== 0 ? 1 : 0;
+            const modelNum = data.getInt8(0x19) != 0 ? 1 : 0;
             obj.setModelNum(modelNum);
         }
     },
@@ -557,7 +546,6 @@ export const SFA_CLASSES: {[num: number]: typeof SFAClass} = {
             obj.roll = angle16ToRads(data.getInt16(0x1c));
         }
     },
-    [545]: commonClass(),
     [549]: commonClass(),
     [550]: class extends SFAClass { // VFP_lavapoo
         constructor(obj: ObjectInstance, data: DataView) {
@@ -575,16 +563,6 @@ export const SFA_CLASSES: {[num: number]: typeof SFAClass} = {
         }
     },
     [552]: commonClass(0x18), // VFPSpPl
-    [562]: class extends SFAClass { // 
-        constructor(obj: ObjectInstance, data: DataView) {
-            super(obj, data);
-            commonSetup(obj, data, 0x18, 0x19);
-            obj.roll = 0;
-            const scaleParam = data.getInt16(0x1c);
-            if (scaleParam !== 0)
-                obj.scale *= 0.1 ;
-        }
-    },
     [576]: commonClass(),
     [579]: commonClass(0x18),
     [597]: commonClass(0x18),
@@ -620,7 +598,7 @@ export const SFA_CLASSES: {[num: number]: typeof SFAClass} = {
             commonSetup(obj, data, 0x18, 0x19);
             obj.roll = 0;
             const scaleParam = data.getInt16(0x1c);
-            if (scaleParam !== 0)
+            if (scaleParam != 0)
                 obj.scale *= 0.1 * scaleParam;
         }
     },
@@ -707,7 +685,6 @@ export const SFA_CLASSES: {[num: number]: typeof SFAClass} = {
         }
     },
     [666]: commonClass(),
-    [670]: decorClass(0.0025),
     [671]: commonClass(0x18),
     [672]: class extends SFAClass { // ARWGoldRing
         constructor(obj: ObjectInstance, data: DataView) {
@@ -761,12 +738,4 @@ export const SFA_CLASSES: {[num: number]: typeof SFAClass} = {
                 obj.yaw = angle16ToRads(data.getInt16(0x1c));
         }
     },
-    [765]: decorClass(0.0025),
-     [766]: decorClass(0.0025),
-     [767]: decorClass(0.0025),
-
-
-    
-
-
 };

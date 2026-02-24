@@ -11,7 +11,7 @@ export interface GameInfo {
     subdirs: {[key: number]: string};
 }
 export const DP_GAME_INFO: GameInfo = {
-    pathBase: 'DinosaurPlanet', 
+    pathBase: 'dinosaurplanet', 
     subdirs: {}, 
     }
 
@@ -98,6 +98,7 @@ export const SFADEMO_GAME_INFO: GameInfo = {
     pathBase: 'StarFoxAdventuresDemo',
     subdirs: {
         0: 'animtest',
+        411: 'animtest',
         1: 'animtest',
         2: 'animtest',
         3: 'arwing',
@@ -152,6 +153,7 @@ export const SFADEMO_GAME_INFO: GameInfo = {
         52: 'animtest',
         53: 'bosstrex',
         54: 'linkb', // 54: 'animtest',
+        56: 'animtest',
         // The following entries are missing from the demo executable.
         57: 'arwingdarkice',
         58: 'arwingcloud',

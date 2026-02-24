@@ -830,8 +830,9 @@ export class StandardMapMaterial extends StandardMaterial {
         else
             this.addTevStagesForNonLava();
 
-        if (this.shader.flags & ShaderFlags.ReflectSkyscape)
-            console.log(`TODO: skyscape reflection?`);
+if (this.shader.flags & ShaderFlags.ReflectSkyscape) {
+    // TODO: skyscape reflection
+}
         else if (this.shader.flags & ShaderFlags.Caustic)
             this.addTevStagesForCaustic();
         else {
