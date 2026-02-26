@@ -125,11 +125,17 @@ export class Sky {
                 setupLights: () => {}, // Lights are not used when rendering skyscape objects (?)
             }
 
-            const eyePos = scratchVec0;
+const eyePos = scratchVec0;
             getCamPos(eyePos, sceneCtx.viewerInput.camera);
+            
             for (let i = 0; i < this.world.envfxMan.skyscape.objects.length; i++) {
                 const obj = this.world.envfxMan.skyscape.objects[i];
-                obj.setPosition(eyePos);
+                
+                // Set the object's position to the camera's position so it appears infinitely far away
+                if (typeof (obj as any).setPosition === 'function') {
+                    (obj as any).setPosition(eyePos);
+                } 
+                
                 obj.addRenderInsts(device, renderInstManager, null, objectCtx);
             }
 

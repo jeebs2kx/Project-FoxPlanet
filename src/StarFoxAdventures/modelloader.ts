@@ -1016,7 +1016,7 @@ function loadDinosaurPlanetModel(
         model.sharedModelShapes = model.createModelShapes();
         return model;
 
- return model;
+
 
   } else {
         // ==========================================
@@ -1036,12 +1036,10 @@ function loadDinosaurPlanetModel(
         const totalVerts = ((triOff - vtxOff) / 16) | 0;
         const totalTris  = ((batOff - triOff) / 8)  | 0;
 
-        const posAB = new ArrayBuffer(totalVerts * 6);
+ const posAB = new ArrayBuffer(totalVerts * 6);
         const posDV = new DataView(posAB);
         const clrAB = new ArrayBuffer(totalVerts * 4);
         const clrDV = new DataView(clrAB);
-        const texAB = new ArrayBuffer(totalVerts * 4);
-        const texDV = new DataView(texAB);
 
         type DPMapBatch = {
             isOpaque: boolean; 
@@ -1051,6 +1049,8 @@ function loadDinosaurPlanetModel(
             blendMaterialId: number;
             vStart: number; vEnd: number; 
             tStart: number; tEnd: number;
+            texW: number; texH: number;           // NEW
+            blendTexW: number; blendTexH: number; // NEW
         };
 
         const batches: DPMapBatch[] = [];
@@ -1073,11 +1073,12 @@ function loadDinosaurPlanetModel(
             const matIdx = data.getUint8(o + 0x12);
             const blendMatIdx = data.getUint8(o + 0x15); 
 
-            let globalTexId = -1;
+           let globalTexId = -1;
             let blendGlobalTexId = -1;
             let isOpaque = true;
             let pixelFormat = 0;
             let texW = 32, texH = 32;
+            let blendTexW = 32, blendTexH = 32; // NEW
 
             if (matIdx < materialCount) {
                 const matStructOff = matOff + (matIdx * 0x0C);
@@ -1101,6 +1102,8 @@ function loadDinosaurPlanetModel(
             if (blendMatIdx !== 0x00 && blendMatIdx !== 0xFF && blendMatIdx < materialCount) {
                 const blendMatStructOff = matOff + (blendMatIdx * 0x0C);
                 blendGlobalTexId = data.getUint32(blendMatStructOff + 0x00, false) & 0xFFFF;
+                blendTexW = data.getUint8(blendMatStructOff + 0x08); // NEW
+                blendTexH = data.getUint8(blendMatStructOff + 0x09); // NEW
                 if (blendGlobalTexId >= 0 && blendGlobalTexId < 10000) {
                     requestedTextures.add(blendGlobalTexId);
                 } else {
@@ -1110,28 +1113,18 @@ function loadDinosaurPlanetModel(
 
             if (texW <= 0) texW = 32;
             if (texH <= 0) texH = 32;
-
-            for (let v = vStart; v < vEnd && v < totalVerts; v++) {
-                vertScaleS[v] = 32.0 / texW;
-                vertScaleT[v] = 32.0 / texH;
-            }
+            if (blendTexW <= 0) blendTexW = 32;
+            if (blendTexH <= 0) blendTexH = 32;
 
             if (vEnd > vStart && tEnd > tStart) {
-                batches.push({ isOpaque, pixelFormat, drawMode, materialId: globalTexId, blendMaterialId: blendGlobalTexId, vStart, vEnd, tStart, tEnd });
+                batches.push({ isOpaque, pixelFormat, drawMode, materialId: globalTexId, blendMaterialId: blendGlobalTexId, vStart, vEnd, tStart, tEnd, texW, texH, blendTexW, blendTexH });
             }
-        }
-
-        for (let i = 0; i < totalVerts; i++) {
+ }
+for (let i = 0; i < totalVerts; i++) {
             const o = vtxOff + i * 16;
             posDV.setInt16(i * 6 + 0, data.getInt16(o + 0, false), false);
             posDV.setInt16(i * 6 + 2, data.getInt16(o + 2, false), false);
             posDV.setInt16(i * 6 + 4, data.getInt16(o + 4, false), false);
-            
-            const rawS = data.getInt16(o + 8, false);
-            const rawT = data.getInt16(o + 10, false);
-            
-            texDV.setInt16(i * 4 + 0, Math.round(rawS * vertScaleS[i]), false);
-            texDV.setInt16(i * 4 + 2, Math.round(rawT * vertScaleT[i]), false);
             
             clrDV.setUint8(i * 4 + 0, data.getUint8(o + 0x0C));
             clrDV.setUint8(i * 4 + 1, data.getUint8(o + 0x0D));
@@ -1163,11 +1156,6 @@ function loadDinosaurPlanetModel(
         vat[0][GX.Attr.TEX0] = { compType: GX.CompType.S16, compShift: 10, compCnt: GX.CompCnt.TEX_ST };
         vat[0][GX.Attr.TEX1] = { compType: GX.CompType.S16, compShift: 10, compCnt: GX.CompCnt.TEX_ST }; 
 
-        const vtxArrays: GX_Array[] = [];
-        vtxArrays[GX.Attr.POS] = { buffer: ArrayBufferSlice.fromView(new DataView(posAB)), offs: 0, stride: 6 };
-        vtxArrays[GX.Attr.CLR0] = { buffer: ArrayBufferSlice.fromView(new DataView(clrAB)), offs: 0, stride: 4 };
-        vtxArrays[GX.Attr.TEX0] = { buffer: ArrayBufferSlice.fromView(new DataView(texAB)), offs: 0, stride: 4 };
-        vtxArrays[GX.Attr.TEX1] = { buffer: ArrayBufferSlice.fromView(new DataView(texAB)), offs: 0, stride: 4 }; 
 
         model.createModelShapes = () => {
             const shapes = new ModelShapes(model, new DataView(posAB), undefined);
@@ -1175,7 +1163,10 @@ function loadDinosaurPlanetModel(
 
             for (const b of batches) {
                 
-              const layers: any[] = [];
+           const isSoftFormat = (b.pixelFormat !== 1 && b.pixelFormat !== 7 && b.pixelFormat !== 8);
+                const isWaterBlend = (b.blendMaterialId !== -1 && isSoftFormat);
+
+                const layers: any[] = [];
                 let activeTexFlags = 0;
                 
                 if (b.materialId !== -1) {
@@ -1183,24 +1174,38 @@ function loadDinosaurPlanetModel(
                     activeTexFlags |= (ShaderAttrFlags as any).TEX0;
                 }
                 if (b.blendMaterialId !== -1) {
-                    layers.push({ texId: b.blendMaterialId, tevMode: 0, enableScroll: 0 });
+                    // TERRAIN FIX: tevMode 1 restores the GameCube's native smooth terrain fading!
+                    // WATER FIX: tevMode 0 restores the beautiful translucent blue water!
+                    layers.push({ texId: b.blendMaterialId, tevMode: isWaterBlend ? 0 : 1, enableScroll: 0 });
                     activeTexFlags |= (ShaderAttrFlags as any).TEX1; 
                 }
-                
+
                 let isTrueTrans = false;
                 let isCutout = false;
+                let isWater = false;
 
                 if (b.blendMaterialId !== -1) {
-                    isTrueTrans = true; // Dual-texture Water
-                } else if (!b.isOpaque) {
-                    // THE FINAL SPLIT: 
-                    // Format 1 (RGBA16), 7 (CI4), and 8 (CI8) are used for sharp Cutouts (Trees/Fences).
-                    // Format 0 (RGBA32) and everything else are used for smooth Transparency (Waterfalls).
-                    if (b.pixelFormat === 1 || b.pixelFormat === 7 || b.pixelFormat === 8) {
-                        isCutout = true;
+                    if (isWaterBlend) {
+                        isTrueTrans = true; // Dual-texture Water
+                        isWater = true;
                     } else {
-                        isTrueTrans = true;
+                        isTrueTrans = false; // Dual-texture Terrain
+                        isCutout = false; // NO Cutout for terrain, let it fade smoothly!
                     }
+             } else if (!b.isOpaque) {
+                    const isKnownTree = [1122, 1125, 1127, 1050, 1049, 1051, 1066, 1075, 1423].includes(b.materialId);
+
+                    if (isKnownTree) {
+                        isCutout = true; 
+                    } else if (isSoftFormat) {
+                        isTrueTrans = true; 
+                        isWater = true; 
+                    } else {
+                        isCutout = true; 
+                    }
+                } else if (b.drawMode === 0x00 || b.drawMode === 0x05 || b.drawMode === 0x14 || b.drawMode === 0x15 || b.drawMode === 0x18 || b.drawMode === 0x19) {
+                    isTrueTrans = true; 
+                    isWater = true;
                 }
                 
                 let shaderFlags = 0;
@@ -1208,14 +1213,19 @@ function loadDinosaurPlanetModel(
                 
                 if (isTrueTrans) {
                     shaderFlags |= 0x40000000; // Blend ON, Z-Write OFF
-                    targetList = 1; // Draw waterfalls last so they overlap everything
+                    targetList = 1; // Draw after walls
                 } else if (isCutout) {
-                    shaderFlags |= ShaderFlags.AlphaCompare; // Cutout ON, Z-Write ON
-                    targetList = 0; // Draw trees with the solid walls so they sort properly
+                    shaderFlags |= ShaderFlags.AlphaCompare; // Cutout ON, Double-Sided ON
+                    targetList = 0; // CRITICAL: MUST BE 0! List 1 breaks the shader.
                 } else {
-                    shaderFlags |= 0x10; // Solid walls
-                    targetList = 0;
+                    shaderFlags |= 0x10; // Solid Walls & Terrain (Cull Backface ON)
+                    targetList = 0; 
                 }
+
+                if (isWater) {
+                    shaderFlags |= ShaderFlags.Water;
+                }
+                // === STOP REPLACING HERE (Leave const shader: Shader = ... alone) ===
                 // === STOP REPLACING HERE (Leave const shader: Shader = ... alone) ===
                 
                 const shader: Shader = {
@@ -1228,8 +1238,37 @@ function loadDinosaurPlanetModel(
                     normalFlags: 0, lightFlags: 0, texMtxCount: 0,
                 };
                 
-                const material = materialFactory.buildMapMaterial(shader, texFetcher);
+               const material = materialFactory.buildMapMaterial(shader, texFetcher);
                 
+                // --- NEW ISOLATED UV GENERATION ---
+                const tex0AB = new ArrayBuffer(totalVerts * 4);
+                const tex1AB = new ArrayBuffer(totalVerts * 4);
+                const tex0DV = new DataView(tex0AB);
+                const tex1DV = new DataView(tex1AB);
+
+                for (let ti = b.tStart; ti < b.tEnd; ti++) {
+                    let { flip, i0, i1, i2 } = tris[ti];
+                    const a = b.vStart + i0, bb = b.vStart + i1, c = b.vStart + i2;
+                    for (const idx of [a, bb, c]) {
+                        const o = vtxOff + idx * 16;
+                        const rawS = data.getInt16(o + 8, false);
+                        const rawT = data.getInt16(o + 10, false);
+                        
+                        tex0DV.setInt16(idx * 4 + 0, Math.round(rawS * (32.0 / b.texW)), false);
+                        tex0DV.setInt16(idx * 4 + 2, Math.round(rawT * (32.0 / b.texH)), false);
+                        
+                        tex1DV.setInt16(idx * 4 + 0, Math.round(rawS * (32.0 / b.blendTexW)), false);
+                        tex1DV.setInt16(idx * 4 + 2, Math.round(rawT * (32.0 / b.blendTexH)), false);
+                    }
+                }
+
+                const batchVtxArrays: GX_Array[] = [];
+                batchVtxArrays[GX.Attr.POS] = { buffer: ArrayBufferSlice.fromView(new DataView(posAB)), offs: 0, stride: 6 };
+                batchVtxArrays[GX.Attr.CLR0] = { buffer: ArrayBufferSlice.fromView(new DataView(clrAB)), offs: 0, stride: 4 };
+                batchVtxArrays[GX.Attr.TEX0] = { buffer: ArrayBufferSlice.fromView(tex0DV), offs: 0, stride: 4 };
+                batchVtxArrays[GX.Attr.TEX1] = { buffer: ArrayBufferSlice.fromView(tex1DV), offs: 0, stride: 4 };
+                // ----------------------------------
+
                 const triCount = (b.tEnd - b.tStart);
                 const vtxCount = triCount * 3;
                 const out = new Uint8Array(3 + vtxCount * 8);
@@ -1249,9 +1288,10 @@ function loadDinosaurPlanetModel(
                         out[p++] = (idx >>> 8) & 0xFF; out[p++] = idx & 0xFF; // TEX1
                     }
                 }
-                const geom = new ShapeGeometry(vtxArrays, vcd, vat, new DataView(out.buffer), false);
+                const geom = new ShapeGeometry(batchVtxArrays, vcd, vat, new DataView(out.buffer), false);
                 
-shapes.shapes[targetList].push(new Shape(geom, new ShapeMaterial(material), false));            }
+                shapes.shapes[targetList].push(new Shape(geom, new ShapeMaterial(material), false));            
+            }
             return shapes;
         };
         model.sharedModelShapes = model.createModelShapes();

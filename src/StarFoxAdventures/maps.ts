@@ -1,5 +1,8 @@
 import * as Viewer from '../viewer.js';
 import * as UI from '../ui.js';
+import { Sky } from './Sky.js';
+import { ObjectManager } from './objects.js';
+import { GfxrGraphBuilder, GfxrRenderTargetID, GfxrRenderTargetDescription } from '../gfx/render/GfxRenderGraph.js';
 import { getSubdir } from './resource.js';
 import { DataFetcher } from '../DataFetcher.js';
 import { GfxRenderInstManager } from "../gfx/render/GfxRenderInstManager.js";
@@ -8,20 +11,22 @@ import { GfxDevice } from '../gfx/platform/GfxPlatform.js';
 import { SceneContext } from '../SceneBase.js';
 import { mat4, vec3 } from 'gl-matrix';
 import { nArray } from '../util.js';
-import { White } from '../Color.js';
-import { ModelVersion } from "./modelloader.js";
-import { SFARenderer, SceneRenderContext, SFARenderLists } from './render.js';
-import { BlockFetcher, SFABlockFetcher, SwapcircleBlockFetcher, AncientBlockFetcher, EARLYDFPT, EARLYFEAR, EARLYDUPBLOCKFETCHER, EARLY1BLOCKFETCHER, EARLY2BLOCKFETCHER, EARLY3BLOCKFETCHER, EARLY4BLOCKFETCHER,DPBlockFetcher  } from './blocks.js';
-import { SFA_GAME_INFO, SFADEMO_GAME_INFO, DP_GAME_INFO, GameInfo } from './scenes.js';import { MaterialFactory } from './materials.js';
+import { White, colorCopy, colorNewFromRGBA } from '../Color.js';
+import { ModelVersion, loadModel } from "./modelloader.js";import { SFARenderer, SceneRenderContext, SFARenderLists } from './render.js';
+import { BlockFetcher, SFABlockFetcher, SwapcircleBlockFetcher, AncientBlockFetcher, EARLYDFPT, EARLYFEAR, EARLYDUPBLOCKFETCHER, EARLY1BLOCKFETCHER, EARLY2BLOCKFETCHER, EARLY3BLOCKFETCHER, EARLY4BLOCKFETCHER, DPBlockFetcher  } from './blocks.js';
+import { SFA_GAME_INFO, SFADEMO_GAME_INFO, DP_GAME_INFO, GameInfo } from './scenes.js';
+import { MaterialFactory } from './materials.js';
 import { SFAAnimationController } from './animation.js';
 import { SFATextureFetcher, FakeTextureFetcher } from './textures.js';
-import { Model,ModelRenderContext, ModelInstance } from './models.js';
+import { Model, ModelRenderContext, ModelInstance } from './models.js';
 import { World } from './world.js';
+import { EnvfxManager } from './envfx.js';
 
 import { AABB } from '../Geometry.js';
-import { LightType } from './WorldLights.js';
+import { LightType, WorldLights } from './WorldLights.js';
 import { computeViewMatrix } from '../Camera.js';
 import { drawWorldSpacePoint, getDebugOverlayCanvas2D } from '../DebugJunk.js';
+
 // --- Music table ---
 const MAP_MUSIC: Record<string, string> = {
     2: 'dragrock.mp3',
@@ -49,22 +54,21 @@ const MAP_MUSIC: Record<string, string> = {
     51: 'shop.mp3',
     54: 'magcave.mp3',
 
+    'Early_kraz_test': 'oldfear.mp3',
 
-
-'Early_kraz_test': 'oldfear.mp3',
-
-'ancient_5': 'warlock.mp3',
+    'ancient_5': 'warlock.mp3',
     [-997]: 'oldfear.mp3',
     [-998]: 'dfpt.mp3',
     [-999]: 'swapcircle.mp3',
 };
+
 if (!(window as any).musicState) {
     (window as any).musicState = {
         muted: false,
         audio: null as HTMLAudioElement | null
     };
 }
-
+const DP_ENV_DEFAULT = { timeOfDay: 6, envfxIndex: 95 };
 export interface BlockInfo {
     mod: number;
     sub: number;
@@ -117,15 +121,11 @@ function getBlockTable(mapInfo: MapInfo): (BlockInfo | null)[][] {
             row.push(blockInfo);
         }
     }
-
     return blockTable;
 }
 
 type BlockCell = BlockInfo | null;
 
-/** Build a MapSceneInfo that rearranges a map's blocks.
- *  You can either "pick" cells from the original table, or supply your own mod/sub pairs.
- */
 async function buildEarly1WalledCityRemap(
   gameInfo: GameInfo,
   dataFetcher: DataFetcher,
@@ -141,7 +141,7 @@ async function buildEarly1WalledCityRemap(
   const mapsTab = tabBuf.createDataView();
   const mapsBin = binBuf.createDataView();
   const info    = getMapInfo(mapsTab, mapsBin, mapNum);
-  const src     = getBlockTable(info); // original layout
+  const src     = getBlockTable(info); 
 
   const pick = (x: number, y: number): BlockCell => (src[y]?.[x] ?? null);
 
@@ -153,7 +153,7 @@ async function buildEarly1WalledCityRemap(
     getNumCols() { return cols; },
     getNumRows() { return rows; },
     getBlockInfoAt(col: number, row: number) { return layout[row][col]; },
-    getOrigin() { return [0, 0]; }, // tweak if you want to offset
+    getOrigin() { return [0, 0]; }, 
   };
 }
 
@@ -260,10 +260,8 @@ for (let b of this.iterateBlocks()) {
   b.block.addRenderInsts(device, renderInstManager, modelCtx, renderLists, scratchMtx0);
 }
 
-
   modelCtx.cullByAabb = prevCull;
 }
-
 
 
 public async reloadBlocks(dataFetcher: DataFetcher) {
@@ -284,7 +282,6 @@ public async reloadBlocks(dataFetcher: DataFetcher) {
     let total = 0;
     let completed = 0;
 
-    // Count blocks first
     for (let z = 0; z < this.numRows; z++) {
         this.blocks[z] = new Array(this.numCols).fill(null);
         for (let x = 0; x < this.numCols; x++) {
@@ -323,9 +320,6 @@ public async reloadBlocks(dataFetcher: DataFetcher) {
     document.body.removeChild(overlay);
 }
 
-
-
-
     public destroy(device: GfxDevice) {
         for (let row of this.blocks) {
             for (let model of row)
@@ -357,14 +351,12 @@ export async function loadMap(gameInfo: GameInfo, dataFetcher: DataFetcher, mapN
 function resolveMusicKey(mapNum: string | number): string {
     const key = String(mapNum);
 
-    // Early1 + DUP shared combat theme
     if (key.startsWith('early1_') || key.startsWith('dup_')) {
         const num = Number(key.split('_')[1]);
 
         if ([31,32,33,34,39,40].includes(num))
             return 'Early_kraz_test';
 
-        // fallback to retail number automatically
         return String(num);
     }
 
@@ -372,123 +364,203 @@ function resolveMusicKey(mapNum: string | number): string {
 }
 
 class MapSceneRenderer extends SFARenderer {
-public mapNum: string | number = -1;
+    public mapNum: string | number = -1;
+public textureHolder: UI.TextureListHolder = { viewerTextures: [], onnewtextures: null };
+    private blockFetcherFactory?: () => Promise<BlockFetcher>;
+    private map: MapInstance;
+    private dataFetcher!: DataFetcher;
+    // --- needed so slider handlers can rebuild sky immediately ---
+private currentGameInfo!: GameInfo;
+private currentTexFetcher: any;
+private pendingSkyRebuild = false;
+// -----------------------------------------------------------
+private rebuildSky(texFetcher: any, gameInfo: GameInfo): void {
+    if (!this.envfxMan) return;
 
-private playMusic(mapNum: number) {
-    const musicState = (window as any).musicState;
-       if (musicState.audio) {
-        musicState.audio.pause();
-        musicState.audio.currentTime = 0;
-        musicState.audio = null;
+    if (this.sky) {
+        this.sky.destroy(this.context.device);
+        this.sky = null;
     }
-const resolvedKey = resolveMusicKey(mapNum);
-const track = MAP_MUSIC[resolvedKey];
 
-    const FADE_TIME = 1000;
-    const TARGET_VOLUME = 0.2;
+    const fakeWorldForSky = {
+        renderCache: (this.materialFactory as any).cache ?? (this.materialFactory as any).getCache?.(),
+        gameInfo,
+        envfxMan: this.envfxMan,
+        worldLights: this.worldLights,
+        resColl: { texFetcher },
+        objectMan: { createObjectInstance: () => ({ destroy: () => {} }) },
+    } as any;
 
-    function fadeOut(audio: HTMLAudioElement, duration: number) {
-        const step = 50;
-        const delta = audio.volume / (duration / step);
+    this.sky = new Sky(fakeWorldForSky);
+}
+    // --- NEW ENVFX INTEGRATION ---
+    public envfxMan: EnvfxManager | null = null;
+    public worldLights: WorldLights = new WorldLights();
+    private timeSelect?: UI.Slider;
+    private envSelect?: UI.Slider;
+    private sky: Sky | null = null;
+    private playMusic(mapNum: number) {
+        const musicState = (window as any).musicState;
+        if (musicState.audio) {
+            musicState.audio.pause();
+            musicState.audio.currentTime = 0;
+            musicState.audio = null;
+        }
+        const resolvedKey = resolveMusicKey(mapNum);
+        const track = MAP_MUSIC[resolvedKey];
 
-        const interval = setInterval(() => {
-            audio.volume = Math.max(0, audio.volume - delta);
-            if (audio.volume <= 0) {
-                clearInterval(interval);
-                audio.pause();
-                audio.currentTime = 0;
+        const FADE_TIME = 1000;
+        const TARGET_VOLUME = 0.2;
+
+        function fadeOut(audio: HTMLAudioElement, duration: number) {
+            const step = 50;
+            const delta = audio.volume / (duration / step);
+
+            const interval = setInterval(() => {
+                audio.volume = Math.max(0, audio.volume - delta);
+                if (audio.volume <= 0) {
+                    clearInterval(interval);
+                    audio.pause();
+                    audio.currentTime = 0;
+                }
+            }, step);
+        }
+
+        function fadeIn(audio: HTMLAudioElement, targetVolume: number, duration: number) {
+            audio.volume = 0;
+            const step = 50;
+            const delta = targetVolume / (duration / step);
+
+            const interval = setInterval(() => {
+                audio.volume = Math.min(targetVolume, audio.volume + delta);
+                if (audio.volume >= targetVolume)
+                    clearInterval(interval);
+            }, step);
+        }
+
+        if (!track) {
+            if (musicState.audio)
+                fadeOut(musicState.audio, FADE_TIME);
+            return;
+        }
+
+        const newSrc = `data/audio/${track}`;
+
+        if (!musicState.audio || !musicState.audio.src.includes(track)) {
+
+            if (musicState.audio)
+                fadeOut(musicState.audio, FADE_TIME);
+
+            const newAudio = new Audio(newSrc);
+            newAudio.loop = true;
+            musicState.audio = newAudio;
+
+            if (!musicState.muted) {
+                newAudio.play().then(() => {
+                    fadeIn(newAudio, TARGET_VOLUME, FADE_TIME);
+                }).catch(() => {});
             }
-        }, step);
-    }
-
-    function fadeIn(audio: HTMLAudioElement, targetVolume: number, duration: number) {
-        audio.volume = 0;
-        const step = 50;
-        const delta = targetVolume / (duration / step);
-
-        const interval = setInterval(() => {
-            audio.volume = Math.min(targetVolume, audio.volume + delta);
-            if (audio.volume >= targetVolume)
-                clearInterval(interval);
-        }, step);
-    }
-
-    if (!track) {
-        if (musicState.audio)
-            fadeOut(musicState.audio, FADE_TIME);
-        return;
-    }
-
-
-    const newSrc = `data/audio/${track}`;
-
-    if (!musicState.audio || !musicState.audio.src.includes(track)) {
-
-        if (musicState.audio)
-            fadeOut(musicState.audio, FADE_TIME);
-
-        const newAudio = new Audio(newSrc);
-        newAudio.loop = true;
-        musicState.audio = newAudio;
-
-        if (!musicState.muted) {
-            newAudio.play().then(() => {
-                fadeIn(newAudio, TARGET_VOLUME, FADE_TIME);
-            }).catch(() => {});
         }
     }
-}
 
-
-  public textureHolder?: UI.TextureListHolder;
-
-    private blockFetcherFactory?: () => Promise<BlockFetcher>;
     public setBlockFetcherFactory(factory: () => Promise<BlockFetcher>) {
-  this.blockFetcherFactory = factory;
-}
+        this.blockFetcherFactory = factory;
+    }
 
-    private map: MapInstance;
-private dataFetcher!: DataFetcher;
     constructor(public context: SceneContext, animController: SFAAnimationController, materialFactory: MaterialFactory) {
         super(context, animController, materialFactory);
     }
-public async reloadForTextureToggle(): Promise<void> {
-  if (!this.dataFetcher) return;
-  if (this.blockFetcherFactory) {
-    const fresh = await this.blockFetcherFactory();
-    this.map.setBlockFetcher(fresh);
-  }
-  await this.map.reloadBlocks(this.dataFetcher);
+
+    public async reloadForTextureToggle(): Promise<void> {
+        if (!this.dataFetcher) return;
+        if (this.blockFetcherFactory) {
+            const fresh = await this.blockFetcherFactory();
+            this.map.setBlockFetcher(fresh);
+        }
+        await this.map.reloadBlocks(this.dataFetcher);
+    }
+
+public async create(info: MapSceneInfo, gameInfo: GameInfo, dataFetcher: DataFetcher, blockFetcher: BlockFetcher): Promise<Viewer.SceneGfx> {
+    this.dataFetcher = dataFetcher; 
+    this.map = new MapInstance(info, blockFetcher);
+    await this.map.reloadBlocks(dataFetcher);
+
+    const texFetcher = (blockFetcher as any).texFetcher;
+    this.currentGameInfo = gameInfo;
+this.currentTexFetcher = texFetcher;
+    if (texFetcher?.textureHolder)
+        this.textureHolder = texFetcher.textureHolder;
+
+    // --- CREATE SKY (works for DP via envfxMan injection) ---
+    if (this.envfxMan && !this.sky) {
+        const fakeWorldForSky = {
+            renderCache: (this.materialFactory as any).cache ?? (this.materialFactory as any).getCache?.(),
+            gameInfo,
+            envfxMan: this.envfxMan,
+            worldLights: this.worldLights,
+            resColl: { texFetcher },
+            objectMan: { createObjectInstance: () => ({ destroy: () => {} }) },
+        } as any;
+
+        this.sky = new Sky(fakeWorldForSky);
+    }
+if (this.envfxMan) {
+    this.envfxMan.setTimeOfDay(DP_ENV_DEFAULT.timeOfDay);
+
+    // loadEnvfx is async-ish in practice; await if it returns a Promise
+    const r = (this.envfxMan as any).loadEnvfx(DP_ENV_DEFAULT.envfxIndex);
+    if (r && typeof r.then === 'function') await r;
+
+this.rebuildSky(this.currentTexFetcher, this.currentGameInfo);
+}    if ((this as any).mapNum !== undefined)
+        this.playMusic((this as any).mapNum as number);
+
+    return this;
 }
 
 
 
-    public async create(info: MapSceneInfo, gameInfo: GameInfo, dataFetcher: DataFetcher, blockFetcher: BlockFetcher): Promise<Viewer.SceneGfx> {
-        this.dataFetcher = dataFetcher; 
-        this.map = new MapInstance(info, blockFetcher);
-        await this.map.reloadBlocks(dataFetcher);
-
-        const texFetcher = (blockFetcher as any).texFetcher;
-if (texFetcher?.textureHolder)
-    this.textureHolder = texFetcher.textureHolder;
-
-if ((this as any).mapNum !== undefined)
-    this.playMusic((this as any).mapNum);
-
-        return this;
-    }
 public createPanels(): UI.Panel[] {
-    if (!this.textureHolder)
-        return [];
+    const panels: UI.Panel[] = [];
 
-    const texPanel = new UI.Panel();
-    texPanel.setTitle(UI.SEARCH_ICON, 'Textures');
 
-    const viewer = new UI.TextureViewer();
-    viewer.setTextureHolder(this.textureHolder);
 
-    texPanel.contents.appendChild(viewer.elem);
-    return [texPanel];
+    if (this.envfxMan) {
+        const envPanel = new UI.Panel();
+        envPanel.setTitle(UI.TIME_OF_DAY_ICON, 'Environment');
+
+this.timeSelect = new UI.Slider();
+this.timeSelect.setLabel('Time of Day');
+this.timeSelect.setRange(0, 7, 1);
+this.timeSelect.setValue(DP_ENV_DEFAULT.timeOfDay);
+this.timeSelect.onvalue = async (val) => {
+  if (!this.envfxMan) return;
+  this.envfxMan.setTimeOfDay(val);
+  this.rebuildSky(this.currentTexFetcher, this.currentGameInfo);
+};
+envPanel.contents.append(this.timeSelect.elem);
+
+this.envSelect = new UI.Slider();
+this.envSelect.setLabel('EnvFx Index');
+this.envSelect.setRange(0, 100, 1);
+this.envSelect.setValue(DP_ENV_DEFAULT.envfxIndex);
+this.envSelect.onvalue = async (val) => {
+  if (!this.envfxMan) return;
+  try {
+    const r = (this.envfxMan as any).loadEnvfx(val);
+    if (r && typeof r.then === 'function') await r;
+  } catch (e) {
+    console.warn(`EnvFx load failed for index ${val}`, e);
+  }
+  // ALWAYS rebuild sky even if envfx objects fail
+  this.rebuildSky(this.currentTexFetcher, this.currentGameInfo);
+};
+envPanel.contents.append(this.envSelect.elem);
+
+        panels.push(envPanel);
+    }
+
+    return panels;
 }
 
     public setMatrix(matrix: mat4) {
@@ -498,27 +570,74 @@ public createPanels(): UI.Panel[] {
     protected override update(viewerInput: Viewer.ViewerRenderInput) {
         super.update(viewerInput);
         this.materialFactory.update(this.animController);
-    }
 
+        if (this.envfxMan) {
+            this.envfxMan.update(this.context.device, { viewerInput });
+        }
+    }
+protected override addSkyRenderInsts(
+    device: GfxDevice,
+    renderInstManager: GfxRenderInstManager,
+    renderLists: SFARenderLists,
+    sceneCtx: SceneRenderContext
+) {
+    if (this.sky)
+        this.sky.addSkyRenderInsts(device, renderInstManager, renderLists, sceneCtx);
+}
+
+protected override addSkyRenderPasses(
+    device: GfxDevice,
+    builder: GfxrGraphBuilder,
+    renderInstManager: GfxRenderInstManager,
+    renderLists: SFARenderLists,
+    mainColorTargetID: GfxrRenderTargetID,
+    sceneCtx: SceneRenderContext
+) {
+    if (this.sky)
+        this.sky.addSkyRenderPasses(
+            device,
+            this.renderHelper,
+            builder,
+            renderInstManager,
+            renderLists,
+            mainColorTargetID,
+            this.mainDepthDesc,
+            sceneCtx
+        );
+}
     protected override addWorldRenderInsts(device: GfxDevice, renderInstManager: GfxRenderInstManager, renderLists: SFARenderLists, sceneCtx: SceneRenderContext) {
         const template = renderInstManager.pushTemplateRenderInst();
         fillSceneParamsDataOnTemplate(template, sceneCtx.viewerInput);
+
+        const scratchColor0 = colorNewFromRGBA(1, 1, 1, 1);
+        if (this.envfxMan) {
+            this.envfxMan.getAmbientColor(scratchColor0, 0);
+        } else {
+            colorCopy(scratchColor0, White);
+        }
 
         const modelCtx: ModelRenderContext = {
             sceneCtx,
             showDevGeometry: false,
             ambienceIdx: 0,
             showMeshes: true,
-            outdoorAmbientColor: White,
+            outdoorAmbientColor: scratchColor0,
             setupLights: () => {},
-            
         };
 
         this.map.addRenderInsts(device, renderInstManager, renderLists, modelCtx);
 
         renderInstManager.popTemplateRenderInst();
     }
+
+public override destroy(device: GfxDevice) {
+    super.destroy(device);
+    if (this.sky) { this.sky.destroy(device); this.sky = null; }
+    if (this.envfxMan) this.envfxMan.destroy(device);
+    this.map.destroy(device);
 }
+}
+
 function ensureTextureToggleUI(
   onChange: (enabled: boolean) => void | Promise<void>,
   initial?: boolean
@@ -560,14 +679,11 @@ function ensureTextureToggleUI(
     (window as any).__sfaTextureToggle = state;
   }
 
-  // Detach previous handler (from the old scene) if any.
   if (state.handler) state.cb.removeEventListener('change', state.handler);
 
-  // Set initial checkbox state (use provided value or preserve last).
   const desired = (typeof initial === 'boolean') ? initial : (state.last ?? true);
   state.cb.checked = desired;
 
-  // Bind the new scene's handler.
   state.handler = async () => {
     try {
       state!.last = state!.cb.checked;
@@ -605,8 +721,6 @@ if (musicState.audio) {
         const blockFetcher = await SFABlockFetcher.create(this.gameInfo,context.dataFetcher, device, materialFactory, animController, Promise.resolve(texFetcher));
         await mapRenderer.create(mapSceneInfo, this.gameInfo, context.dataFetcher, blockFetcher);
 
-        // Rotate camera 135 degrees to more reliably produce a good view of the map
-        // when it is loaded for the first time.
         const matrix = mat4.create();
         mat4.rotateY(matrix, matrix, Math.PI * 3 / 4);
         mapRenderer.setMatrix(matrix);
@@ -643,7 +757,7 @@ if (musicState.audio) {
     const ROWS = 3;
 
     const allowedSubs = [19, 7, 8, 20, 0, 12, 13, 0, 0, 17, 18, 0];
-   
+    
 
     const mapSceneInfo: MapSceneInfo = {
       getNumCols() { return COLS; },
@@ -652,7 +766,6 @@ getBlockInfoAt(col: number, row: number): BlockInfo | null {
   const idx = (row * COLS + col) % allowedSubs.length;
   const sub = allowedSubs[idx];
 
-  // Treat 0 as “empty cell”
   if (sub === 0)
     return null;
 
@@ -860,14 +973,10 @@ mapRenderer.setBlockFetcherFactory(() => AncientBlockFetcher.create(
 await mapRenderer.create(mapSceneInfo, this.gameInfo, dataFetcher, blockFetcher);
 ensureTextureToggleUI(async (enabled: boolean) => {
   texFetcher.setTexturesEnabled(enabled);
-  materialFactory.texturesEnabled = enabled;
+  (materialFactory as any).texturesEnabled = enabled;
   await mapRenderer.reloadForTextureToggle();
 }, texFetcher.getTexturesEnabled?.() ?? true);
 
-
-        // Rotate camera 135 degrees to more reliably produce a good view of the map
-        // when it is loaded for the first time.
-        // FIXME: The best method is to create default save states for each map.
         const matrix = mat4.create();
         mat4.rotateY(matrix, matrix, Math.PI * 3 / 4);
         mapRenderer.setMatrix(matrix);
@@ -904,8 +1013,6 @@ await texFetcher.loadSubdirs([ 'mmshrine'],  context.dataFetcher);
         const blockFetcher = await EARLYFEAR.create(this.gameInfo,context.dataFetcher, device, materialFactory, animController, Promise.resolve(texFetcher));
         await mapRenderer.create(mapSceneInfo, this.gameInfo, context.dataFetcher, blockFetcher);
 
-        // Rotate camera 135 degrees to more reliably produce a good view of the map
-        // when it is loaded for the first time.
         const matrix = mat4.create();
         mat4.rotateY(matrix, matrix, Math.PI * 3 / 4);
         mapRenderer.setMatrix(matrix);
@@ -913,7 +1020,6 @@ await texFetcher.loadSubdirs([ 'mmshrine'],  context.dataFetcher);
         return mapRenderer;
     }
 }
-
 
 export class EarlyDFPMapSceneDesc implements Viewer.SceneDesc {
     constructor(public mapNum: number, public id: string, public name: string, private gameInfo: GameInfo = SFA_GAME_INFO) {
@@ -991,7 +1097,6 @@ if (musicState.audio) {
   const animController = new SFAAnimationController();
   const materialFactory = new MaterialFactory(device);
 
-  // === Add your custom DUP maps here ===
   const REMAP_FEAR_SHRINE = 32;   
   const REMAP_KNOWLEDGE    = 34; 
   const REMAP_STRENGTH    = 39;   
@@ -1000,7 +1105,6 @@ if (musicState.audio) {
 
   switch (this.mapNum) {
     case REMAP_FEAR_SHRINE: {
-      // Your current 2x4 layout
       mapSceneInfo = {
         getNumCols() { return 2; },
         getNumRows() { return 4; },
@@ -1094,7 +1198,6 @@ if (firstMod !== null) {
     await texFetcher.loadSubdirs(['Copy of swaphol'], context.dataFetcher);
 }
 
-
      await texFetcher.preloadPngOverrides(
       (materialFactory as any).cache ?? (materialFactory as any).getCache?.(),
       context.dataFetcher
@@ -1116,7 +1219,6 @@ if (firstMod !== null) {
     await mapRenderer.reloadForTextureToggle();
   }, texFetcher.getTexturesEnabled?.() ?? true);
 
-  // Default camera turn
   const matrix = mat4.create();
   mat4.rotateY(matrix, matrix, Math.PI * 3 / 4);
   mapRenderer.setMatrix(matrix);
@@ -1191,8 +1293,6 @@ if (musicState.audio) {
       break;
       }
 
-
-
       default: {
         mapSceneInfo = await loadMap(this.gameInfo, context.dataFetcher, this.mapNum);
         break;
@@ -1266,7 +1366,6 @@ const CAPE_CLAW_EARLY1_MAPNUM = 29;
 const LINK_LEVEL_EARLY1_MAPNUM = 64;
 const DRAGON_ROCK_BOTTOM_EARLY1_MAPNUM = 52; 
 
-// Add this block with your other map checks
 if (this.mapNum === DRAGON_ROCK_BOTTOM_EARLY1_MAPNUM) {
     await texFetcher.loadSubdirs(['dragrockbot'], context.dataFetcher);
     texFetcher.preferCopyOfSwapholForModelIDs([DRAGON_ROCK_BOTTOM_EARLY1_MAPNUM]);
@@ -1282,7 +1381,6 @@ if (this.mapNum === SWAPHOLBOT_EARLY1_MAPNUM) {
     texFetcher.preferCopyOfSwapholForModelIDs([SWAPHOLBOT_EARLY1_MAPNUM]);
 }
 
-
 if (this.mapNum === KRAZOA_PALACE_EARLY1_MAPNUM) {
     await texFetcher.loadSubdirs(['warlock'], context.dataFetcher);
     texFetcher.preferCopyOfSwapholForModelIDs([KRAZOA_PALACE_EARLY1_MAPNUM]);
@@ -1293,18 +1391,15 @@ if (this.mapNum === CLOUD_RACE_EARLY1_MAPNUM || this.mapNum === CLOUD_DUNGEON_EA
     texFetcher.preferCopyOfSwapholForModelIDs([this.mapNum as number]);
 }
 
-
 if (this.mapNum === CLOUD_TREASURE_EARLY1_MAPNUM) {
     await texFetcher.loadSubdirs(['cloudtreasure'], context.dataFetcher);
     texFetcher.preferCopyOfSwapholForModelIDs([CLOUD_TREASURE_EARLY1_MAPNUM]);
 }
 
-
 if (this.mapNum === CAPE_CLAW_EARLY1_MAPNUM) {
     await texFetcher.loadSubdirs(['capeclaw'], context.dataFetcher);
     texFetcher.preferCopyOfSwapholForModelIDs([CAPE_CLAW_EARLY1_MAPNUM]);
 }
-
 
 if (this.mapNum === LINK_LEVEL_EARLY1_MAPNUM) {
     await texFetcher.loadSubdirs(['linklevel'], context.dataFetcher);
@@ -1335,10 +1430,9 @@ mapRenderer.setBlockFetcherFactory(() => EARLY1BLOCKFETCHER.create(
 
 ensureTextureToggleUI(async (enabled: boolean) => {
   texFetcher.setTexturesEnabled(enabled);
-  materialFactory.texturesEnabled = enabled; 
+  (materialFactory as any).texturesEnabled = enabled; 
   await mapRenderer.reloadForTextureToggle();
 }, texFetcher.getTexturesEnabled?.() ?? true);
-
 
     const matrix = mat4.create();
     mat4.rotateY(matrix, matrix, Math.PI * 3 / 4);
@@ -1389,7 +1483,6 @@ if (musicState.audio) {
        };
 
     } else {
-
       mapSceneInfo = await loadMap(this.gameInfo, context.dataFetcher, this.mapNum);
     }
         const mapRenderer = new MapSceneRenderer(context, animController, materialFactory);
@@ -1397,7 +1490,6 @@ if (musicState.audio) {
 
         const texFetcher = await SFATextureFetcher.create(this.gameInfo, context.dataFetcher, false);
        texFetcher.setModelVersion(ModelVersion.Early2);
-// Get first real block mod
 let firstMod: number | null = null;
 
 for (let row = 0; row < mapSceneInfo.getNumRows(); row++) {
@@ -1415,7 +1507,6 @@ if (firstMod !== null) {
   const subdir = getSubdir(firstMod, this.gameInfo);
   await texFetcher.loadSubdirs([subdir], context.dataFetcher);
 
-
   if (subdir === 'clouddungeon') {
     await texFetcher.loadSubdirs(['crfort'], context.dataFetcher);
     }
@@ -1427,8 +1518,6 @@ if (firstMod !== null) {
         const blockFetcher = await EARLY2BLOCKFETCHER.create(this.gameInfo,context.dataFetcher, device, materialFactory, animController, Promise.resolve(texFetcher));
         await mapRenderer.create(mapSceneInfo, this.gameInfo, context.dataFetcher, blockFetcher);
 
-        // Rotate camera 135 degrees to more reliably produce a good view of the map
-        // when it is loaded for the first time.
         const matrix = mat4.create();
         mat4.rotateY(matrix, matrix, Math.PI * 3 / 4);
         mapRenderer.setMatrix(matrix);
@@ -1559,7 +1648,6 @@ texFetcher.setCurrentModelID(this.mapNum);
    texFetcher.setPngOverride(3613, 'textures/wcmoon2.png');
     texFetcher.setPngOverride(3614, 'textures/wcmoon3.png');
 
-
      await texFetcher.preloadPngOverrides(
       (materialFactory as any).cache ?? (materialFactory as any).getCache?.(),
       context.dataFetcher
@@ -1585,12 +1673,82 @@ export class DPMapSceneDesc implements Viewer.SceneDesc {
         const animController = new SFAAnimationController();
         const materialFactory = new MaterialFactory(device);
         const mapSceneInfo = await loadMap(gInfo, context.dataFetcher, this.mapNum);
+        
         const mapRenderer = new MapSceneRenderer(context, animController, materialFactory);        
         
         const texFetcher = await SFATextureFetcher.create(gInfo, context.dataFetcher, false);
         texFetcher.setModelVersion(ModelVersion.DinosaurPlanet);
+
+        // === THE PHOTO FRAME INTERCEPTOR ===
+      // === THE PHOTO FRAME INTERCEPTOR & BLUE FRINGE FIX ===
+        if (!texFetcher.textureHolder) {
+            texFetcher.textureHolder = { viewerTextures: [], onnewtextures: null };
+        }
         
-(texFetcher as any).dataFetcherRef = context.dataFetcher;
+        let pointSampler: any = null; // Store our custom N64 Point Filter
+
+        const origGetTexture = (texFetcher as any).getTexture.bind(texFetcher);
+(texFetcher as any).getTexture = function(cache: any, id: number, useTex1: boolean) {
+            const res = origGetTexture(cache, id, useTex1);
+            if (res && res.viewerTexture) {
+                const vt = res.viewerTexture;
+                
+                // 1. Populate the UI Texture Viewer
+                if (!this.textureHolder.viewerTextures.includes(vt)) {
+                    this.textureHolder.viewerTextures.push(vt);
+                    if (this.textureHolder.onnewtextures) {
+                        this.textureHolder.onnewtextures();
+                    }
+                }
+
+                // 2. FIX BLUE FRINGES: Force N64 Point Filtering on cutouts!
+                // Add the Texture IDs for Diamond Bay's foliage here:
+                const cutoutTextures = [
+                    0 // Known SFA trees
+                    // TODO: Add Diamond Bay tree IDs here! (e.g., 2045, 2046)
+                ];
+                
+                if (cutoutTextures.includes(id)) {
+                    if (!pointSampler) {
+                        // Create a Nearest-Neighbor sampler to stop the blurring
+                        pointSampler = cache.device.createSampler({
+                            wrapS: 1, // REPEAT
+                            wrapT: 1, // REPEAT
+                            minFilter: 0, // POINT
+                            magFilter: 0, // POINT
+                            mipFilter: 0, // NO_MIP
+                            minLOD: 0,
+                            maxLOD: 100,
+                        });
+                    }
+                    res.gfxSampler = pointSampler; // Apply the crisp filter!
+                }
+            }
+            return res;
+        };
+        // ===================================
+        // ===================================
+
+        // --- FAKE WORLD INJECTION FOR ENVFX ---
+        const fakeWorld: any = {
+            renderCache: (materialFactory as any).cache ?? (materialFactory as any).getCache?.(),
+            gameInfo: gInfo,
+            worldLights: mapRenderer.worldLights,
+            resColl: { texFetcher: texFetcher },
+            // Added addRenderInsts to the dummy object so the sky doesn't crash!
+            objectMan: { createObjectInstance: () => ({ destroy: () => {}, addRenderInsts: () => {} }) }
+        };
+
+        try {
+            mapRenderer.envfxMan = await EnvfxManager.create(fakeWorld as World, context.dataFetcher);
+            fakeWorld.envfxMan = mapRenderer.envfxMan; // Prevents the getAmbientColor crash!
+            mapRenderer.envfxMan.loadEnvfx(DP_ENV_DEFAULT.envfxIndex); 
+        } catch (e) {
+            console.warn("Failed to load ENVFXACT.bin for DP Map", e);
+        }
+        // --------------------------------------
+        
+        (texFetcher as any).dataFetcherRef = context.dataFetcher;
         const blockFetcher = await DPBlockFetcher.create(
             gInfo, context.dataFetcher, materialFactory, Promise.resolve(texFetcher)
         );
@@ -1599,6 +1757,26 @@ export class DPMapSceneDesc implements Viewer.SceneDesc {
             mapRenderer.textureHolder = texFetcher.textureHolder;
 
         await mapRenderer.create(mapSceneInfo, gInfo, context.dataFetcher, blockFetcher);
+
+        // 🔥 THE AUTOMATED SLIDER DRAG (95 -> 100) 🔥
+        // Waits 1 second for the map and UI to load, then physically fakes the slider drag
+  setTimeout(async () => {
+            const mr = mapRenderer as any;
+            if (mr.envSelect) {
+                // Sweep from 95 to 100 rapidly
+                const sequence = [95, 96, 97, 98, 99, 100];
+                
+                for (const val of sequence) {
+                    mr.envSelect.setValue(val);
+                    if (mr.envSelect.onvalue) {
+                        await mr.envSelect.onvalue(val);
+                    }
+                    // Wait exactly 1 frame (16ms) to let WebGL instantly process the texture
+                    await new Promise(resolve => setTimeout(resolve, 16)); 
+                }
+            }
+        }, 10);
+
         return mapRenderer;
     }
 }
@@ -1630,48 +1808,48 @@ class DPFullWorldRenderer extends SFARenderer {
     private camGX = 0;
     private camGZ = 0;
 
-constructor(
-    private device: GfxDevice,
-    context: SceneContext,
-    animController: SFAAnimationController,
-    materialFactory: MaterialFactory,
-    private gameInfo: GameInfo,
-    private dataFetcher: DataFetcher,
-    private blockFetcher: BlockFetcher,
-    placed: DPPlacedMap[],
-) {
-    super(context, animController, materialFactory);
-  this.placed = placed;
-for (const p of placed) this.placedByKey.set(p.key, p);
+    // --- NEW ENVFX INTEGRATION ---
+    public envfxMan: EnvfxManager | null = null;
+    public worldLights: WorldLights = new WorldLights();
+    // -----------------------------
 
-}
-
-
+    constructor(
+        private device: GfxDevice,
+        context: SceneContext,
+        animController: SFAAnimationController,
+        materialFactory: MaterialFactory,
+        private gameInfo: GameInfo,
+        private dataFetcher: DataFetcher,
+        private blockFetcher: BlockFetcher,
+        placed: DPPlacedMap[],
+    ) {
+        super(context, animController, materialFactory);
+        this.placed = placed;
+        for (const p of placed) this.placedByKey.set(p.key, p);
+    }
 
     private static readonly STEP = 640 ; 
 
-private ensureLoaded(p: DPPlacedMap): Promise<void> {
-    if (this.loaded.has(p.key))
-        return Promise.resolve();
+    private ensureLoaded(p: DPPlacedMap): Promise<void> {
+        if (this.loaded.has(p.key))
+            return Promise.resolve();
 
-    const existing = this.loading.get(p.key);
-    if (existing)
-        return existing;
+        const existing = this.loading.get(p.key);
+        if (existing)
+            return existing;
 
-    const prom = (async () => {
-
+        const prom = (async () => {
             try {
-const info = await loadMap(this.gameInfo, this.dataFetcher, p.mapIndex);
-const inst = new MapInstance(info, this.blockFetcher);
+                const info = await loadMap(this.gameInfo, this.dataFetcher, p.mapIndex);
+                const inst = new MapInstance(info, this.blockFetcher);
 
-const [ox, oz] = info.getOrigin();     
-const anchorX = p.wx - ox * 640;
-const anchorZ = p.wz - oz * 640;
+                const [ox, oz] = info.getOrigin();     
+                const anchorX = p.wx - ox * 640;
+                const anchorZ = p.wz - oz * 640;
 
-const m = mat4.create();
-mat4.fromTranslation(m, [anchorX, 0, anchorZ]);
-inst.setMatrix(m);
-
+                const m = mat4.create();
+                mat4.fromTranslation(m, [anchorX, 0, anchorZ]);
+                inst.setMatrix(m);
 
                 await inst.reloadBlocks(this.dataFetcher);
                 this.loaded.set(p.key, inst);
@@ -1685,45 +1863,49 @@ inst.setMatrix(m);
         this.loading.set(p.key, prom);
         return prom;
     }
-public async loadAllMaps(concurrency: number = 12): Promise<void> {
-    const queue = this.placed.slice();
-    let idx = 0;
 
-    const worker = async () => {
-        while (true) {
-            const i = idx++;
-            if (i >= queue.length) return;
-            await this.ensureLoaded(queue[i]);
-        }
-    };
+    public async loadAllMaps(concurrency: number = 12): Promise<void> {
+        const queue = this.placed.slice();
+        let idx = 0;
 
-    const workers: Promise<void>[] = [];
-    for (let i = 0; i < concurrency; i++)
-        workers.push(worker());
+        const worker = async () => {
+            while (true) {
+                const i = idx++;
+                if (i >= queue.length) return;
+                await this.ensureLoaded(queue[i]);
+            }
+        };
 
-    await Promise.all(workers);
-}
+        const workers: Promise<void>[] = [];
+        for (let i = 0; i < concurrency; i++)
+            workers.push(worker());
+
+        await Promise.all(workers);
+    }
 
     private unload(key: number): void {
         const inst = this.loaded.get(key);
         if (inst) {
-inst.destroy(this.device);
+            inst.destroy(this.device);
             this.loaded.delete(key);
         }
     }
 
-protected override update(viewerInput: Viewer.ViewerRenderInput) {
-    super.update(viewerInput);
+    protected override update(viewerInput: Viewer.ViewerRenderInput) {
+        super.update(viewerInput);
 
-    const camWorld = viewerInput.camera.worldMatrix;
-    const camX = camWorld[12];
-    const camZ = camWorld[14];
+        const camWorld = viewerInput.camera.worldMatrix;
+        const camX = camWorld[12];
+        const camZ = camWorld[14];
 
-    const step = DPFullWorldRenderer.STEP;
-    this.camGX = Math.round(camX / step);
-    this.camGZ = Math.round(camZ / step);
-}
+        const step = DPFullWorldRenderer['STEP'] ?? (640 * 16);
+        this.camGX = Math.round(camX / step);
+        this.camGZ = Math.round(camZ / step);
 
+        if (this.envfxMan) {
+            this.envfxMan.update(this.device, { viewerInput });
+        }
+    }
 
     protected override addWorldRenderInsts(
         device: GfxDevice,
@@ -1734,33 +1916,39 @@ protected override update(viewerInput: Viewer.ViewerRenderInput) {
         const template = renderInstManager.pushTemplateRenderInst();
         fillSceneParamsDataOnTemplate(template, sceneCtx.viewerInput);
 
+        const scratchColor0 = colorNewFromRGBA(1, 1, 1, 1);
+        if (this.envfxMan) {
+            this.envfxMan.getAmbientColor(scratchColor0, 0);
+        } else {
+            colorCopy(scratchColor0, White);
+        }
+
         const modelCtx: ModelRenderContext = {
             sceneCtx,
             showDevGeometry: false,
             ambienceIdx: 0,
             showMeshes: true,
-            outdoorAmbientColor: White,
+            outdoorAmbientColor: scratchColor0,
             setupLights: () => {},
             cullByAabb: false,
         };
 
-for (const [key, inst] of this.loaded) {
-    const p = this.placedByKey.get(key);
-    if (!p) continue;
+        for (const [key, inst] of this.loaded) {
+            const p = this.placedByKey.get(key);
+            if (!p) continue;
 
-    const dx = Math.abs(p.gx - this.camGX);
-    const dz = Math.abs(p.gz - this.camGZ);
-    const d = Math.max(dx, dz);
+            const dx = Math.abs(p.gx - this.camGX);
+            const dz = Math.abs(p.gz - this.camGZ);
+            const d = Math.max(dx, dz);
 
- 
-    const stride =
-        (d <= 2)  ? 1 :   
-        (d <= 8)  ? 1 :  
-        (d <= 20) ? 1 :  
-                  1;    
+            const stride =
+                (d <= 2)  ? 1 :   
+                (d <= 8)  ? 1 :  
+                (d <= 20) ? 1 :  
+                          1;    
 
-    inst.addRenderInsts(device, renderInstManager, renderLists, modelCtx, stride);
-}
+            inst.addRenderInsts(device, renderInstManager, renderLists, modelCtx, stride);
+        }
 
         renderInstManager.popTemplateRenderInst();
     }
@@ -1769,6 +1957,7 @@ for (const [key, inst] of this.loaded) {
         for (const inst of this.loaded.values())
             inst.destroy(device);
         this.loaded.clear();
+        if (this.envfxMan) this.envfxMan.destroy(device);
         super.destroy(device);
     }
 }
@@ -1780,52 +1969,201 @@ export class DPFullWorldSceneDesc implements Viewer.SceneDesc {
         const gInfo = this.gameInfo;
         const dataFetcher = context.dataFetcher;
 
-        // Load globalmap.json
         const buf = await dataFetcher.fetchData(`${gInfo.pathBase}/globalmap.json`);
         const txt = new TextDecoder('utf-8').decode(buf.arrayBuffer as ArrayBuffer);
         const entries: DPGlobalMapEntry[] = JSON.parse(txt);
 
         const step = DPFullWorldRenderer['STEP'] ?? (640 * 16);
 
-const valid = entries.filter((e) => e.MapIndex !== -1);
+        const valid = entries.filter((e) => e.MapIndex !== -1);
 
-let minX = Infinity, minZ = Infinity;
-let maxX = -Infinity, maxZ = -Infinity;
+        let minX = Infinity, minZ = Infinity;
+        let maxX = -Infinity, maxZ = -Infinity;
 
-for (const e of valid) {
-  minX = Math.min(minX, e.CoordX);
-  maxX = Math.max(maxX, e.CoordX);
-  minZ = Math.min(minZ, e.CoordZ);
-  maxZ = Math.max(maxZ, e.CoordZ);
-}
+        for (const e of valid) {
+          minX = Math.min(minX, e.CoordX);
+          maxX = Math.max(maxX, e.CoordX);
+          minZ = Math.min(minZ, e.CoordZ);
+          maxZ = Math.max(maxZ, e.CoordZ);
+        }
 
-console.log('DP globalmap bounds:', { minX, maxX, minZ, maxZ, count: valid.length });
+        console.log('DP globalmap bounds:', { minX, maxX, minZ, maxZ, count: valid.length });
 
-const placed: DPPlacedMap[] = valid.map((e) => {
- 
-  const gx = e.CoordX - minX;
-  const gz = e.CoordZ - minZ;
+        const placed: DPPlacedMap[] = valid.map((e) => {
+          const gx = e.CoordX - minX;
+          const gz = e.CoordZ - minZ;
 
-  return {
-    key: (e.MapIndex << 16) ^ ((gx & 0xff) << 8) ^ (gz & 0xff), 
-    mapIndex: e.MapIndex,
-    gx, gz,
-    wx: gx * step,
-    wz: gz * step,
-  };
-});
-
+          return {
+            key: (e.MapIndex << 16) ^ ((gx & 0xff) << 8) ^ (gz & 0xff), 
+            mapIndex: e.MapIndex,
+            gx, gz,
+            wx: gx * step,
+            wz: gz * step,
+          };
+        });
 
         const animController = new SFAAnimationController();
         const materialFactory = new MaterialFactory(device);
-const texFetcher = new FakeTextureFetcher();
+        const texFetcher = new FakeTextureFetcher();
 
         const blockFetcher = await DPBlockFetcher.create(
             gInfo, dataFetcher, materialFactory, Promise.resolve(texFetcher)
         );
 
-const renderer = new DPFullWorldRenderer(device, context, animController, materialFactory, gInfo, dataFetcher, blockFetcher, placed);
-await renderer.loadAllMaps(8); 
-return renderer;
+        const renderer = new DPFullWorldRenderer(device, context, animController, materialFactory, gInfo, dataFetcher, blockFetcher, placed);
+
+        // --- FAKE WORLD INJECTION FOR ENVFX ---
+        const fakeWorld = {
+            renderCache: (materialFactory as any).cache ?? (materialFactory as any).getCache?.(),
+            gameInfo: gInfo,
+            worldLights: renderer.worldLights,
+            resColl: { texFetcher: texFetcher },
+            objectMan: { createObjectInstance: () => ({ destroy: () => {} }) }
+        } as unknown as World;
+
+        try {
+            renderer.envfxMan = await EnvfxManager.create(fakeWorld, dataFetcher);
+            renderer.envfxMan.loadEnvfx(0); 
+        } catch (e) {
+            console.warn("Failed to load ENVFXACT.bin for DP Full World", e);
+        }
+        // --------------------------------------
+
+        await renderer.loadAllMaps(8); 
+        return renderer;
+    }
+}
+export class CombinedOldIceMtSceneDesc implements Viewer.SceneDesc {
+    constructor(
+        public id: string, 
+        public name: string, 
+        private gameInfo: GameInfo = DP_GAME_INFO
+    ) {}
+
+    public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+        const musicState = (window as any).musicState;
+        if (musicState.audio) {
+            musicState.audio.pause();
+            musicState.audio.currentTime = 0;
+            musicState.audio = null;
+        }
+
+        console.log(`Creating scene for ${this.name} using combined bins with Sky/EnvFx...`);
+
+        const animController = new SFAAnimationController();
+        const materialFactory = new MaterialFactory(device);
+
+        // 1. Get dimensions for all three base maps
+        const map23 = await loadMap(this.gameInfo, context.dataFetcher, 23); 
+        const map24 = await loadMap(this.gameInfo, context.dataFetcher, 24); 
+        const map25 = await loadMap(this.gameInfo, context.dataFetcher, 25); 
+
+        const c1 = map23.getNumCols(), r1 = map23.getNumRows();
+        const c2 = map24.getNumCols(), r2 = map24.getNumRows();
+        const c3 = map25.getNumCols(), r3 = map25.getNumRows();
+
+        const fetchSafe = async (name: string) => {
+            try { 
+                return await context.dataFetcher.fetchData(`${this.gameInfo.pathBase}/${name}`); 
+            } catch { 
+                console.warn(`Could not load ${name}. Rendering blank space.`);
+                return { createDataView: () => new DataView(new ArrayBuffer(0)) }; 
+            }
+        };
+
+        const bin1 = (await fetchSafe('0162 00A2 OldIceMt1 - block_ids.bin')).createDataView();
+        const bin2 = (await fetchSafe('0169 00A9 OldIceMt2 - block_ids.bin')).createDataView();
+        const bin3 = (await fetchSafe('0176 00B0 OldIceMt3 - block_ids.bin')).createDataView();
+
+        const GAP = 2;
+        const start1 = 0;
+        const start2 = c1 + GAP;
+        const start3 = start2 + c2 + GAP;
+        
+        const totalCols = start3 + c3;
+        const totalRows = Math.max(r1, r2, r3); 
+
+        const mapSceneInfo: MapSceneInfo = {
+            getNumCols: () => totalCols,
+            getNumRows: () => totalRows,
+            getBlockInfoAt: (col: number, row: number): BlockInfo | null => {
+                let offset = -1;
+                let view: DataView | null = null;
+
+                if (col >= start1 && col < start1 + c1 && row < r1) {
+                    offset = (row * c1 + (col - start1)) * 4;
+                    view = bin1;
+                } else if (col >= start2 && col < start2 + c2 && row < r2) {
+                    offset = (row * c2 + (col - start2)) * 4;
+                    view = bin2;
+                } else if (col >= start3 && col < start3 + c3 && row < r3) {
+                    offset = (row * c3 + (col - start3)) * 4;
+                    view = bin3;
+                }
+
+                if (!view || offset < 0 || offset >= view.byteLength) return null;
+
+                const blockInfo = view.getUint32(offset);
+                const sub = (blockInfo >>> 17) & 0x3F;
+                const mod = (blockInfo >>> 23);
+
+                if (mod === 0xff) return null;
+                return { mod, sub };
+            },
+            getOrigin: () => [0, 0]
+        };
+
+        const mapRenderer = new MapSceneRenderer(context, animController, materialFactory);
+        mapRenderer.mapNum = 'oldicemt_combined'; 
+
+        const texFetcher = await SFATextureFetcher.create(this.gameInfo, context.dataFetcher, false);
+        texFetcher.setModelVersion(ModelVersion.DinosaurPlanet);
+
+        // --- FAKE WORLD INJECTION FOR ENVFX ---
+        const fakeWorld: any = {
+            renderCache: (materialFactory as any).cache ?? (materialFactory as any).getCache?.(),
+            gameInfo: this.gameInfo,
+            worldLights: mapRenderer.worldLights,
+            resColl: { texFetcher: texFetcher },
+            objectMan: { createObjectInstance: () => ({ destroy: () => {}, addRenderInsts: () => {} }) }
+        };
+
+        try {
+            mapRenderer.envfxMan = await EnvfxManager.create(fakeWorld as World, context.dataFetcher);
+            fakeWorld.envfxMan = mapRenderer.envfxMan; 
+            // 95 is the Dinosaur Planet default index
+            mapRenderer.envfxMan.loadEnvfx(95); 
+        } catch (e) {
+            console.warn("Failed to load ENVFXACT.bin for Combined Map", e);
+        }
+        // --------------------------------------
+
+        const blockFetcher = await DPBlockFetcher.create(
+            this.gameInfo, context.dataFetcher, materialFactory, Promise.resolve(texFetcher)
+        );
+
+        // The mapRenderer creates the Sky inside here now that envfxMan exists
+        await mapRenderer.create(mapSceneInfo, this.gameInfo, context.dataFetcher, blockFetcher);
+
+        // --- THE AUTOMATED SLIDER DRAG TO FORCE SKY LOAD ---
+        setTimeout(async () => {
+            const mr = mapRenderer as any;
+            if (mr.envSelect) {
+                const sequence = [95, 96, 97, 98, 99, 100];
+                for (const val of sequence) {
+                    mr.envSelect.setValue(val);
+                    if (mr.envSelect.onvalue) {
+                        await mr.envSelect.onvalue(val);
+                    }
+                    await new Promise(resolve => setTimeout(resolve, 16)); 
+                }
+            }
+        }, 10);
+
+        const matrix = mat4.create();
+        mat4.rotateY(matrix, matrix, Math.PI * 3 / 4);
+        mapRenderer.setMatrix(matrix);
+
+        return mapRenderer;
     }
 }

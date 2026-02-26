@@ -12,6 +12,14 @@ import { SFAClass } from './SFAClass.js';
 import { SFAMaterialBuilder } from '../MaterialBuilder.js';
 
 export const SFA_CLASSES: {[num: number]: typeof SFAClass} = {
+    [128]:    class extends SFAClass { // CClevcontro
+        constructor(obj: ObjectInstance, data: DataView) {
+            super(obj, data);
+            obj.world.envfxMan.loadEnvfx(0x23f);
+            obj.world.envfxMan.loadEnvfx(0x240);
+            obj.world.envfxMan.loadEnvfx(0x241);
+        }
+    },
     [77]: commonClass(0x3d, 0x3e),
     [198]: commonClass(),
     [201]: commonClass(0x2a),

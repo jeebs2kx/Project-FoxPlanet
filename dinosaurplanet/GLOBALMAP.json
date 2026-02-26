@@ -1,0 +1,386 @@
+[
+    {
+        "CoordX": -9,
+        "CoordZ": 29,
+        "Unk0": 0,
+        "MapIndex": 18,
+        "Unk1": -1,
+        "Unk2": -1
+    },
+    {
+        "CoordX": -18,
+        "CoordZ": 31,
+        "Unk0": 0,
+        "MapIndex": 16,
+        "Unk1": 12,
+        "Unk2": -1
+    },
+    {
+        "CoordX": -5,
+        "CoordZ": 28,
+        "Unk0": 0,
+        "MapIndex": 6,
+        "Unk1": -1,
+        "Unk2": -1
+    },
+    {
+        "CoordX": -3,
+        "CoordZ": 24,
+        "Unk0": 0,
+        "MapIndex": 14,
+        "Unk1": -1,
+        "Unk2": -1
+    },
+    {
+        "CoordX": -6,
+        "CoordZ": 19,
+        "Unk0": 0,
+        "MapIndex": 9,
+        "Unk1": -1,
+        "Unk2": -1
+    },
+    {
+        "CoordX": 19,
+        "CoordZ": -1,
+        "Unk0": 0,
+        "MapIndex": 11,
+        "Unk1": -1,
+        "Unk2": -1
+    },
+    {
+        "CoordX": -23,
+        "CoordZ": -24,
+        "Unk0": 0,
+        "MapIndex": 0,
+        "Unk1": -1,
+        "Unk2": -1
+    },
+    {
+        "CoordX": -12,
+        "CoordZ": 8,
+        "Unk0": 0,
+        "MapIndex": 19,
+        "Unk1": 46,
+        "Unk2": 47
+    },
+    {
+        "CoordX": 21,
+        "CoordZ": -27,
+        "Unk0": 0,
+        "MapIndex": 32,
+        "Unk1": -1,
+        "Unk2": -1
+    },
+    {
+        "CoordX": 21,
+        "CoordZ": -21,
+        "Unk0": 0,
+        "MapIndex": 33,
+        "Unk1": -1,
+        "Unk2": -1
+    },
+    {
+        "CoordX": 24,
+        "CoordZ": -21,
+        "Unk0": 0,
+        "MapIndex": 34,
+        "Unk1": -1,
+        "Unk2": -1
+    },
+    {
+        "CoordX": -6,
+        "CoordZ": -10,
+        "Unk0": 0,
+        "MapIndex": 2,
+        "Unk1": 2,
+        "Unk2": 52
+    },
+    {
+        "CoordX": -25,
+        "CoordZ": -5,
+        "Unk0": 0,
+        "MapIndex": 4,
+        "Unk1": 4,
+        "Unk2": 35
+    },
+    {
+        "CoordX": 0,
+        "CoordZ": 32,
+        "Unk0": 0,
+        "MapIndex": 38,
+        "Unk1": -1,
+        "Unk2": -1
+    },
+    {
+        "CoordX": 2,
+        "CoordZ": 26,
+        "Unk0": 0,
+        "MapIndex": 29,
+        "Unk1": -1,
+        "Unk2": -1
+    },
+    {
+        "CoordX": -12,
+        "CoordZ": -2,
+        "Unk0": 0,
+        "MapIndex": 10,
+        "Unk1": -1,
+        "Unk2": -1
+    },
+    {
+        "CoordX": -15,
+        "CoordZ": -1,
+        "Unk0": 0,
+        "MapIndex": 35,
+        "Unk1": -1,
+        "Unk2": -1
+    },
+    {
+        "CoordX": -14,
+        "CoordZ": -5,
+        "Unk0": 0,
+        "MapIndex": 7,
+        "Unk1": 8,
+        "Unk2": -1
+    },
+    {
+        "CoordX": -15,
+        "CoordZ": 29,
+        "Unk0": 0,
+        "MapIndex": 12,
+        "Unk1": 15,
+        "Unk2": 16
+    },
+    {
+        "CoordX": -20,
+        "CoordZ": 28,
+        "Unk0": -1,
+        "MapIndex": 15,
+        "Unk1": 12,
+        "Unk2": -1
+    },
+    {
+        "CoordX": 24,
+        "CoordZ": -27,
+        "Unk0": 0,
+        "MapIndex": 31,
+        "Unk1": -1,
+        "Unk2": -1
+    },
+    {
+        "CoordX": -11,
+        "CoordZ": 12,
+        "Unk0": -2,
+        "MapIndex": 28,
+        "Unk1": -1,
+        "Unk2": -1
+    },
+    {
+        "CoordX": 18,
+        "CoordZ": -27,
+        "Unk0": 0,
+        "MapIndex": 39,
+        "Unk1": -1,
+        "Unk2": -1
+    },
+    {
+        "CoordX": 18,
+        "CoordZ": -21,
+        "Unk0": 0,
+        "MapIndex": 40,
+        "Unk1": -1,
+        "Unk2": -1
+    },
+    {
+        "CoordX": 15,
+        "CoordZ": -27,
+        "Unk0": 0,
+        "MapIndex": 41,
+        "Unk1": -1,
+        "Unk2": -1
+    },
+    {
+        "CoordX": 15,
+        "CoordZ": -21,
+        "Unk0": 0,
+        "MapIndex": 42,
+        "Unk1": -1,
+        "Unk2": -1
+    },
+    {
+        "CoordX": -12,
+        "CoordZ": 11,
+        "Unk0": -1,
+        "MapIndex": 27,
+        "Unk1": -1,
+        "Unk2": -1
+    },
+    {
+        "CoordX": 2,
+        "CoordZ": -27,
+        "Unk0": 0,
+        "MapIndex": 26,
+        "Unk1": -1,
+        "Unk2": -1
+    },
+    {
+        "CoordX": -13,
+        "CoordZ": -4,
+        "Unk0": -1,
+        "MapIndex": 8,
+        "Unk1": 7,
+        "Unk2": -1
+    },
+    {
+        "CoordX": 17,
+        "CoordZ": -16,
+        "Unk0": 0,
+        "MapIndex": 5,
+        "Unk1": -1,
+        "Unk2": -1
+    },
+    {
+        "CoordX": -11,
+        "CoordZ": 6,
+        "Unk0": -1,
+        "MapIndex": 46,
+        "Unk1": 19,
+        "Unk2": -1
+    },
+    {
+        "CoordX": -10,
+        "CoordZ": 4,
+        "Unk0": -1,
+        "MapIndex": 47,
+        "Unk1": 19,
+        "Unk2": -1
+    },
+    {
+        "CoordX": -7,
+        "CoordZ": -28,
+        "Unk0": 0,
+        "MapIndex": 30,
+        "Unk1": -1,
+        "Unk2": -1
+    },
+    {
+        "CoordX": -20,
+        "CoordZ": 29,
+        "Unk0": -2,
+        "MapIndex": 43,
+        "Unk1": -1,
+        "Unk2": -1
+    },
+    {
+        "CoordX": -22,
+        "CoordZ": -13,
+        "Unk0": 0,
+        "MapIndex": 48,
+        "Unk1": -1,
+        "Unk2": -1
+    },
+    {
+        "CoordX": -8,
+        "CoordZ": -4,
+        "Unk0": 0,
+        "MapIndex": 37,
+        "Unk1": -1,
+        "Unk2": -1
+    },
+    {
+        "CoordX": -14,
+        "CoordZ": -4,
+        "Unk0": 0,
+        "MapIndex": 13,
+        "Unk1": -1,
+        "Unk2": -1
+    },
+    {
+        "CoordX": 10,
+        "CoordZ": 35,
+        "Unk0": 0,
+        "MapIndex": 3,
+        "Unk1": -1,
+        "Unk2": -1
+    },
+    {
+        "CoordX": 1,
+        "CoordZ": 17,
+        "Unk0": 0,
+        "MapIndex": 50,
+        "Unk1": 21,
+        "Unk2": -1
+    },
+    {
+        "CoordX": 1,
+        "CoordZ": 16,
+        "Unk0": -1,
+        "MapIndex": 21,
+        "Unk1": 50,
+        "Unk2": -1
+    },
+    {
+        "CoordX": -1,
+        "CoordZ": -1,
+        "Unk0": 0,
+        "MapIndex": 51,
+        "Unk1": -1,
+        "Unk2": -1
+    },
+    {
+        "CoordX": 2,
+        "CoordZ": -8,
+        "Unk0": -1,
+        "MapIndex": 52,
+        "Unk1": 52,
+        "Unk2": -1
+    },
+    {
+        "CoordX": 7,
+        "CoordZ": 8,
+        "Unk0": 0,
+        "MapIndex": 44,
+        "Unk1": -1,
+        "Unk2": -1
+    },
+    {
+        "CoordX": -3,
+        "CoordZ": -12,
+        "Unk0": 255,
+        "MapIndex": 53,
+        "Unk1": -1,
+        "Unk2": -1
+    },
+    {
+        "CoordX": -2,
+        "CoordZ": 3,
+        "Unk0": 2,
+        "MapIndex": 23,
+        "Unk1": 24,
+        "Unk2": 25
+    },
+    {
+        "CoordX": 2,
+        "CoordZ": 8,
+        "Unk0": 1,
+        "MapIndex": 24,
+        "Unk1": 23,
+        "Unk2": 25
+    },
+    {
+        "CoordX": -4,
+        "CoordZ": 8,
+        "Unk0": 0,
+        "MapIndex": 25,
+        "Unk1": 24,
+        "Unk2": 23
+    },
+    {
+        "CoordX": -3,
+        "CoordZ": -27,
+        "Unk0": 0,
+        "MapIndex": 54,
+        "Unk1": -1,
+        "Unk2": -1
+    }
+]

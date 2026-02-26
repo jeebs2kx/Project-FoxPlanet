@@ -211,20 +211,21 @@ export class SFATexture {
 
     constructor(public gfxTexture: GfxTexture, public gfxSampler: GfxSampler, public width: number, public height: number) {}
     
-    public static create(cache: GfxRenderCache, width: number, height: number, cms: number = 0, cmt: number = 0) {
-        const device = cache.device;
-        const gfxTexture = device.createTexture(makeTextureDescriptor2D(GfxFormat.U8_RGBA_NORM, width, height, 1));
-        
-        const wrapS = (cms & 2) ? GfxWrapMode.Clamp : GfxWrapMode.Repeat;
-        const wrapT = (cmt & 2) ? GfxWrapMode.Clamp : GfxWrapMode.Repeat;
+   public static create(cache: GfxRenderCache, width: number, height: number) {
+    const device = cache.device;
+    const gfxTexture = device.createTexture(makeTextureDescriptor2D(GfxFormat.U8_RGBA_NORM, width, height, 1));
+    const gfxSampler = cache.createSampler({
+        wrapS: GfxWrapMode.Clamp, 
+        wrapT: GfxWrapMode.Clamp, 
+        minFilter: GfxTexFilterMode.Bilinear,
+        magFilter: GfxTexFilterMode.Bilinear,
+        mipFilter: GfxMipFilterMode.Nearest,
+        minLOD: 0,
+        maxLOD: 100,
+    });
 
-        const gfxSampler = cache.createSampler({
-            wrapS, wrapT,
-            minFilter: GfxTexFilterMode.Bilinear, magFilter: GfxTexFilterMode.Bilinear,
-            mipFilter: GfxMipFilterMode.Nearest, minLOD: 0, maxLOD: 100,
-        });
-        return new SFATexture(gfxTexture, gfxSampler, width, height);
-    }
+    return new SFATexture(gfxTexture, gfxSampler, width, height);
+}
     
     public destroy(device: GfxDevice) { device.destroyTexture(this.gfxTexture); }
     
@@ -344,6 +345,7 @@ function makeFakeTexture(cache: GfxRenderCache, num: number): SFATextureArray {
 
 class TextureFile {
     private textures: (SFATextureArray | null)[] = [];
+    
     public listAllValidIds(): number[] {
         const ids: number[] = [];
         const count = (this.tab.byteLength / 4) | 0;
@@ -498,6 +500,17 @@ export class SFATextureFetcher extends TextureFetcher {
             const decoded = decodeRareN64Texture(buf.createDataView());
             if (decoded) {
                 const device = cache.device;
+                for (let i = 0; i < decoded.pixels.length; i += 4) {
+                    const r = decoded.pixels[i];
+                    const g = decoded.pixels[i+1];
+                    const b = decoded.pixels[i+2];
+                    const a = decoded.pixels[i+3];
+                    if (b > 180 && r < 60 && g < 60) {
+                        decoded.pixels[i + 3] = 0; 
+                    } else if (a > 0 && a < 255) {
+                        decoded.pixels[i + 3] = Math.min(255, Math.pow(a / 255.0, 0.6) * 255.0);
+                    }
+                }
                 const gfxTexture = device.createTexture(makeTextureDescriptor2D(GfxFormat.U8_RGBA_NORM, decoded.width, decoded.height, 1));
                 device.uploadTextureData(gfxTexture, 0, [decoded.pixels]);
                 
@@ -505,7 +518,7 @@ export class SFATextureFetcher extends TextureFetcher {
                 const wrapT = (decoded.cmt & 2) ? GfxWrapMode.Clamp : GfxWrapMode.Repeat;
                 
                 const gfxSampler = cache.createSampler({
-                    wrapS, wrapT,
+                    wrapS,wrapT,
                     minFilter: GfxTexFilterMode.Bilinear, magFilter: GfxTexFilterMode.Bilinear,
                     mipFilter: GfxMipFilterMode.Nearest, minLOD: 0, maxLOD: 100,
                 });
@@ -651,6 +664,27 @@ export class SFATextureFetcher extends TextureFetcher {
             const tex = await createSFATextureFromPNG(cache, buf.createTypedArray(Uint8Array), o);
             this.preloadedPngTextures.set(id, new SFATextureArray([tex]));
         }
+    }
+    public loadAllFromTables(cache: GfxRenderCache, useTex1: boolean): { attempted: number, shown: number } {
+        let attempted = 0;
+        let shown = 0;
+
+        // Iterate through all subdirs we have loaded
+        for (const subdir in this.subdirTextureFiles) {
+            const file = useTex1 ? this.subdirTextureFiles[subdir].tex1 : this.subdirTextureFiles[subdir].tex0;
+            if (!file) continue;
+
+            const ids = file.listAllValidIds();
+            for (const id of ids) {
+                attempted++;
+                // This triggers the decoder and pushes it to this.textureHolder
+                const texArray = file.getTextureArray(cache, id);
+                if (texArray) {
+                    shown++;
+                }
+            }
+        }
+        return { attempted, shown };
     }
     public destroy(device: GfxDevice) {
         this.texpre?.destroy(device);

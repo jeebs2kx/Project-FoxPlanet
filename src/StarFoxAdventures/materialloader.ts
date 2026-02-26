@@ -2,9 +2,9 @@ import { colorFromRGBA, colorNewCopy, White } from '../Color.js';
 import { Shader, ShaderLayer, ShaderFlags, ShaderAttrFlags } from './materials.js';
 import { dataSubarray } from './util.js';
 
-const ATTR_CLR  = (ShaderAttrFlags as any).CLR  ?? 0x01;
-const ATTR_TEX0 = (ShaderAttrFlags as any).TEX0 ?? 0x04;
-const ATTR_TEX1 = (ShaderAttrFlags as any).TEX1 ?? 0x08;
+const ATTR_CLR  = (ShaderAttrFlags as any)?.CLR  ?? 0x01;
+const ATTR_TEX0 = (ShaderAttrFlags as any)?.TEX0 ?? 0x04;
+const ATTR_TEX1 = (ShaderAttrFlags as any)?.TEX1 ?? 0x08;
 
 interface ShaderFields {
     isAncient?: boolean;
@@ -37,7 +37,7 @@ export const KNOWN_ANCIENT_WATER_TEXIDS = new Set<number>([
 ]);
 
 export const KNOWN_CUTOUT_TEXIDS_BETA = new Set<number>([
-3254, 3272, 3270, 3246, 3252, 202,189, 3248, 3273
+3254, 3272, 3270, 3246, 3252, 202,189, 3248, 3273, 919
 ]);
 
 export const KNOWN_CUTOUT_TEXIDS_ANCIENT = new Set<number>([
