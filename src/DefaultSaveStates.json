@@ -143,6 +143,10 @@
      "SaveState_sfa/demo56/1": "ShareData=AYEgX8:kR|UGsP&9tbU4+]mMIQNYVNUh={zT^0brVr/-^UkP]YTql$(8?XlR+^",
      "SaveState_sfa/demo68/1": "ShareData=AIpL]Ub$[78qHuwUT7P;VtDwiQ4tK=UeQm1T?Ua1=T;zs9IU,D9CvhEUuiy++d",
      "SaveState_sfa/demo69/1": "ShareData=AI|hU9VtjJT4u(:96a4/=M$H85)0WRUjIWUT4Qh:=GLm1Um{&3Tl_qc9Q]K7+^",
+     "SaveState_sfa/betamodelexhibit/1": "ShareData=AMl8696k{gS]Ly(8?KUEU(v$r48OnqUoZ?DT@!ngVCBsuT6NuCT&b!p9sBS[+d",
+     "SaveState_sfa/demomodelexhibit/1": "ShareData=AIAYf9q~ix6|I4~S|p&=VNH9y5oFzCUksgwTB$H$U)uxc8LoP2S^&Vr9wIVn+d",
+     "SaveState_sfa/modelexhibit/1": "ShareData=AMM_i95xCATJ;3o8=n|JU4*yaQ58oFUk&aKT1pWEVRFXGTz^=AT;IH!9kk42+d",
+
      "SaveState_dp/dp02_dragrock_top/1": "ShareData=AL=6a8]PUoUAIy~9owX7V(4NB57E/{Ul@yMUPBsI=BC*BUgY3=Tj2JC8*[W/WP",
      "SaveState_dp/dp03_krazoa_palace/1": "ShareData=ASb2g9Ic7uUHkAO934~9WKP/eQ)4+xUknLkUJ1pGV!:/{Uss]^T[N[a9ZWI,WP",
      "SaveState_dp/dp04_volcano_fp/1": "ShareData=AJ2d]8{h_*T(jcOUV(!BWiss;Q{~VbUmX+B9AzMm=W*1p96ZAd8XRUQ8?4^1V[",
@@ -161,6 +165,7 @@
     "SaveState_dp/dp11_cr_traprooms/1":"ShareData=AS$pPUWjroT)R5g91e):VYBin6gWpyUl4w4T|oN:VzTMzUYCAL9KvP^Ub;yHV[",
     "SaveState_dp/dp12_mmpass/1":"ShareData=AVzx)9Y@1XT76FkUk6lmWab)L6TdZMUl4zX8-WK$WK~pH9hVPf84tzX9IiiiWP",
     "SaveState_dp/dp13_dim1/1":"ShareData=AE){(9yH0)Tpp7Y8|kFKWX6dw6GLxcUZpVUUIy~]+^&hvT,rHDUKr1492~(bV[",
+    "SaveState_dp/dp14_krazoa_shrine_tpl/1":"ShareData=AO,*?Ujt6k8a{p3T&urBV7DYlQr)wZUoHP&T3&/;Vd[wW9CDAB8]oExUpVRAWP",
     "SaveState_dp/dp15_dfp_bottom/1":"ShareData=ADTZTUoBxc9b?m0T|(OIWAQqY5MpsZUfiF_Uepyx=O0Rx9U7!t9GK)SUVRy:V[",
     "SaveState_dp/dp16_krazchamber/1":"ShareData=AS^JkUkb+XS7~n:801],V0}(F5:P@mUah)tT!uwYVbgDCTwAzl8!@PfUvv}SWP",
     "SaveState_dp/dp17_newicemount1/1":"ShareData=ALKuK9SsDG9g?jkUiq{{WChH?RDYQ=UZY-jUND$OWZbGS90Fr&UIbrn9bv4cV[",
@@ -176,7 +181,28 @@
     "SaveState_dp/dp21_ecshrine/1":"ShareData=ATG0(UuDOZ8NvDuT8(CxV+8yf5yQh;UrZU?UTu^=Ve@NV8~4$N9WjbvUuk|hWP",
     "SaveState_dp/dp22_gpshrine/1":"ShareData=AFWO]UjETkT]rn[9gx5=V3O@v5wF)~UhtVnT|Q7-V~l1)UKV&t9XNqeUkAZgV[",
     "SaveState_dp/dp23_diamond_bay/1":"ShareData=AAQ8D94I)|TktT78^bK~WO=@;6e9tGUlg])UGCdm=Lvj8T9ca?UJ-wT90giEV[",
-    "SaveState_dp/dp_old_icemt_combo/1":"ShareData=AH&Q[Ub6UeT~q?-9ymJS+)7+yQ3CqfUuX^!T!-!UWm5!1Uk8kM8$b)hUj/{H+^"
+    "SaveState_dp/dp25_willow_grove/1":"ShareData=AJa70TxQ?~9DW7N9tD8nV$,p(6gn^xUe:/l8|[3B=GbfUUX5BwTXMpxTzVR:V[",
+    "SaveState_dp/dp26_blackwater_canyon/1":"ShareData=AX@o;97b$U9B6qcUWOa*Wajf~Q]2?_Ucn^4T4m*|VMEB495v,RT[Pq99k[_)V[",
+    "SaveState_dp/dp27_dbshrine/1":"ShareData=AMWx4UgW8:8aE=}TbP-zV5WmFP*iHnUjt{gUF^|LVqTzh8xcGy9Nz7|UYoAnWP",
+    "SaveState_dp/dp28_nwshrine/1":"ShareData=ALS}AUls5=UFw*I9NC,=V;zYE5,awyUcGc*UPW*4V-~7RT{[}_9V2yeUikPOV[",
+    "SaveState_dp/dp29_ccshrine/1":"ShareData=ADg0^UpR$58=L{ZT$!?iV=ll=5|HgNUYtntUDg8=VadJ68?~f}9XhvPUdMUfWP",
+    "SaveState_dp/dp2a_wgshrine/1":"ShareData=AZq[YUYI@c7/?3QTDyR7V;=!zRCGE3Ur=BwUBwlNVeLGC8Kof+9d*UCUo@FcWP",
+    "SaveState_dp/dp2b_cr_race/1":"ShareData=AL*w~8[lwx81tC:Uho=WWVA&b6ExOiUvv;hTs6*)V[@Iw92~OLS-RCP8~Ox!WP",
+    "SaveState_dp/dp2d_wminsert/1":"ShareData=ABSdu9T0pb8$mAfUma|3V^&w05-XCNUWuLET75uR+oGJ0920_TTw;^j9ITUTVt",
+    "SaveState_dp/dp2e_dim_caves/1":"ShareData=AYCRwUnkz*8yB&VT;9mFVw?q@RQa[6Ue5XaULl3q=X|NB8;=:}9Ok9UUk[@!V[",
+    "SaveState_dp/dp2f_dim_lava/1":"ShareData=AO!_=9ts:k9Ptz6T4(=4WEsD[Q_~[qUU!oeUm$Xk+[hAu9KEViUn(NM9VH,kVt",
+    "SaveState_dp/dp30_boss_trex/1":"ShareData=AMK^~94]=mSgvps8)ETpWKNYh5DVT|Uh65!TUrV|VVG(gT0/pITWzXA96SZbVt",
+    "SaveState_dp/dp31_mikeslava/1":"ShareData=AJ|cZ91|]o97@ldUEL&YV$$)w5,ssJT)8phUcIP/++V3A9q@r)UvRB49ZvztVS",
+    "SaveState_dp/dp32_dfp_top/1":"ShareData=AC?;,UhLZB7(75:T;(|,WOxRR5)TmaUo$TtTwu_t+2RyV8~(r,8uNl=Ubvf&V[",
+    "SaveState_dp/dp33_swap_store/1":"ShareData=AX$9HUe}Bh7&tGJTrW;AWElA25oG&nUhu5bT:/?QVa}:I8uFZr8*,:CUXmtDV[",
+    "SaveState_dp/dp34_dragrock_bottom/1":"ShareData=AC&$2Up[kUT7mcd9I|TKV]:AKQ_L4qUa{yaUOI^!=X(rrUPP6]9Y_:?Ud$7IWP",
+    "SaveState_dp/dp35_boss_kamerian/1":"ShareData=AV|W~UjYbLShIFRTip)lWAhF~5^4??Ulny18zBa!=K-rp8+DGITdVIuUenfCV[",
+    "SaveState_dp/dp36_magic_cave_small/1":"ShareData=AS+@eUo[P$9eb$JUm+{zV,=:;Q*zSEUg_xxUKfVZV?D:W9iy6K9PdN(UY]Q*Vt",
+    "SaveState_dp/dp24_earthwalker_temple/1":"ShareData=AVW=zUjYVKS|DmA9WHAIWdj@[59QeXUo1O0Tyj8N=T)?,ULP2z85AV7Um7t3V[",
+
+    "SaveState_dp/dp_old_icemt_combo/1":"ShareData=AH&Q[Ub6UeT~q?-9ymJS+)7+yQ3CqfUuX^!T!-!UWm5!1Uk8kM8$b)hUj/{H+^",
+    "SaveState_dp/dp_yeti_mt_multi/1":"ShareData=AWagl9c,O*UU;Ip94k_l=PfvR6l*J=UmzBoT)FfrWkl4DUg8)+UC5]69U!9j=a",
+    "SaveState_dp/dp_models/1":"ShareData=AS4fS97v-eS6rG785q6VVi_pX5&~3tUWfecT6R/}WBtvtTgB=;T$F+&96$;y+^"
 
 
 

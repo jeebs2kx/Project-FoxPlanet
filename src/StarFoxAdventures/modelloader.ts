@@ -1,4 +1,4 @@
-import { vec3 } from 'gl-matrix';
+import { vec3,mat4 } from 'gl-matrix';
 import ArrayBufferSlice from '../ArrayBufferSlice.js';
 import { AABB } from '../Geometry.js';
 import { GX_Array, GX_VtxAttrFmt, GX_VtxDesc } from '../gx/gx_displaylist.js';
@@ -698,47 +698,21 @@ type DPBatch = {
 
 type DPTri = { flip: boolean; i0: number; i1: number; i2: number };
 
-function buildGXTrianglesDL(batch: DPBatch, tris: DPTri[]) {
-  const triCount = (batch.tEnd - batch.tStart);
-  const vtxCount = triCount * 3;
 
-  // Modified: 6 bytes per vertex (POS + CLR + TEX)
-  const out = new Uint8Array(3 + vtxCount * 6);
-  let p = 0;
-  out[p++] = 0x90;
-  out[p++] = (vtxCount >>> 8) & 0xFF;
-  out[p++] = (vtxCount >>> 0) & 0xFF;
-
-  for (let ti = batch.tStart; ti < batch.tEnd; ti++) {
-    let { flip, i0, i1, i2 } = tris[ti];
-    if (flip) { const tmp = i1; i1 = i2; i2 = tmp; }
-
-    const a = batch.vStart + i0;
-    const b = batch.vStart + i1;
-    const c = batch.vStart + i2;
-
-    for (const idx of [a, b, c]) {
-      out[p++] = (idx >>> 8) & 0xFF; out[p++] = idx & 0xFF; // POS
-      out[p++] = (idx >>> 8) & 0xFF; out[p++] = idx & 0xFF; // CLR0
-      out[p++] = (idx >>> 8) & 0xFF; out[p++] = idx & 0xFF; // TEX0
-    }
-  }
-  return out;
-}
 
 function loadDinosaurPlanetModel(
-  data: DataView,
-  texFetcher: TextureFetcher,
-  materialFactory: MaterialFactory,
+    data: DataView,
+    texFetcher: TextureFetcher,
+    materialFactory: MaterialFactory,
 ): Model {
-  const model = new Model(ModelVersion.DinosaurPlanet);
+    const model = new Model(ModelVersion.DinosaurPlanet);
 
-  const ptr00 = data.getUint32(0x00);
-  const ptr0C = data.getUint32(0x0C);
+    const ptr00 = data.getUint32(0x00);
+    const ptr0C = data.getUint32(0x0C);
 
-  const isCharacter = ptr0C > ptr00;
+    const isCharacter = ptr0C > ptr00;
 
-  if (isCharacter) {
+    if (isCharacter) {
         // ==========================================
         // DINOSAUR PLANET CHARACTER PARSER
         // ==========================================
@@ -750,26 +724,53 @@ function loadDinosaurPlanetModel(
         const dlOff = data.getUint32(0x0C); 
         const jointOff = data.getUint32(0x20);
 
-        const faceCount = Math.min(data.getUint16(0x64), 2000); 
+        const dlLength = data.getUint16(0x6C); 
         const jointCount = Math.min(data.getUint8(0x6F), 200); 
+        const textureCount = data.getUint8(0x73); 
 
+        const faceBatchCount = Math.floor((matOff - faceOff) / 16);
+//console.warn(
+ // `[DPHDR] len=0x${data.byteLength.toString(16)} matOff=0x${matOff.toString(16)} vtxOff=0x${vtxOff.toString(16)} ` +
+//  `faceOff=0x${faceOff.toString(16)} dlOff=0x${dlOff.toString(16)} jointOff=0x${jointOff.toString(16)} ` +
+ // `dlLength=${dlLength} jointCount=${jointCount} texCount=${textureCount} faceBatchCount=${faceBatchCount}`
+//);
+        // --- 1. SKELETON (Absolute World Matrices) ---
         model.joints = [];
         model.skeleton = new Skeleton();
         model.invBindTranslations = nArray(jointCount, () => vec3.create());
 
-        const globalJoints: vec3[] = [];
-        for (let i = 0; i < jointCount; i++) {
-            const o = jointOff + i * 16;
-            if (o + 16 > data.byteLength) { globalJoints.push(vec3.create()); continue; }
-            
-            const p = data.getInt8(o + 0); 
-            const lx = data.getFloat32(o + 4, false);
-            const ly = data.getFloat32(o + 8, false);
-            const lz = data.getFloat32(o + 12, false);
-            
-            const gPos = vec3.fromValues(lx, ly, lz);
-            if (p !== -1 && p < i && p < globalJoints.length) vec3.add(gPos, gPos, globalJoints[p]);
-            globalJoints.push(gPos);
+        const jointMats: mat4[] = [];
+for (let i = 0; i < jointCount; i++) {
+    const jo = jointOff + i * 16;
+    if (jo + 16 > data.byteLength) { jointMats.push(mat4.create()); continue; }
+
+    const p = data.getInt8(jo + 0);
+
+    const beX = data.getFloat32(jo + 4, false);
+    const beY = data.getFloat32(jo + 8, false);
+    const beZ = data.getFloat32(jo + 12, false);
+
+    const leX = data.getFloat32(jo + 4, true);
+    const leY = data.getFloat32(jo + 8, true);
+    const leZ = data.getFloat32(jo + 12, true);
+
+    // Pick the one that looks sane (translations shouldn’t be enormous/NaN)
+    const useLE = !Number.isFinite(beX) || Math.abs(beX) > 100000;
+    const lx = useLE ? leX : beX;
+    const ly = useLE ? leY : beY;
+    const lz = useLE ? leZ : beZ;
+
+    if (i < 8) {
+        //console.log(`[DPJNT] i=${i} parent=${p} useLE=${useLE} BE=(${beX},${beY},${beZ}) LE=(${leX},${leY},${leZ})`);
+    }
+            const m = mat4.create();
+            if (p !== -1 && p < i && p < jointMats.length) {
+                // Apply this bone's local translation to its parent's absolute matrix
+                mat4.translate(m, jointMats[p], [lx, ly, lz]);
+            } else {
+                mat4.fromTranslation(m, [lx, ly, lz]);
+            }
+            jointMats.push(m);
 
             model.joints.push({
                 parent: p !== -1 ? p : 0xff,
@@ -780,155 +781,208 @@ function loadDinosaurPlanetModel(
             model.skeleton.addJoint(p !== -1 ? p : undefined, vec3.fromValues(lx, ly, lz));
         }
 
+        // --- 2. FACEBATCHES ---
         interface Facebatch { 
             materialID: number; 
-            jointA: number; jointB: number; jointC: number;
-            jointB_start: number; jointC_start: number;
-            baseVertexID: number;
-            tagC: number;
             dlStartCmd: number; 
+            renderFlags: number;
+            tris: { i0: number, i1: number, i2: number }[];
         }
         
         const facebatches: Facebatch[] = [];
-        for (let i = 0; i < faceCount; i++) {
+        for (let i = 0; i < faceBatchCount; i++) {
             const o = faceOff + i * 16; 
             if (o + 16 > data.byteLength) break;
             
             const matIdx = data.getUint8(o + 0);
-            const jointA = data.getInt8(o + 1);
-            const jointB = data.getInt8(o + 2);
-            const jointC = data.getInt8(o + 3);
-            const jointB_start = data.getUint8(o + 4);
-            const jointC_start = data.getUint8(o + 5);
-            const baseVertexID = data.getInt16(o + 6, false);
             const dlStartCmd = data.getInt16(o + 8, false);
-            const tagC = data.getInt32(o + 0x0C, false);
+            const renderFlags = data.getUint8(o + 0x0C); 
 
-            const matStructOff = matOff + (matIdx * 8); 
             let globalTexId = 0;
-            if (matStructOff + 4 <= vtxOff) {
-                globalTexId = data.getUint32(matStructOff, false) & 0xFFFF; 
+            if (matIdx < textureCount) {
+                const matStructOff = matOff + (matIdx * 8); 
+                if (matStructOff + 4 <= data.byteLength) {
+                    let rawTex = data.getInt32(matStructOff, false);
+                    if (rawTex < 0) rawTex = -rawTex; 
+                    // Strip the 0x8000 flag so the fetcher actually finds the texture
+                    globalTexId = rawTex & 0x7FFF; 
+                }
             }
 
-            facebatches.push({ 
-                materialID: globalTexId, 
-                jointA, jointB, jointC, 
-                jointB_start, jointC_start, 
-                baseVertexID, tagC, dlStartCmd 
-            });
+            facebatches.push({ materialID: globalTexId, dlStartCmd, renderFlags, tris: [] });
         }
         facebatches.sort((a, b) => a.dlStartCmd - b.dlStartCmd);
-        
+
+        // --- 3. PURE F3DEX2 EMULATION ---
         const outPos: number[] = [];
         const outClr: number[] = [];
         const outTex: number[] = [];
-        const outTris: DPTri[] = [];
-        const batches: DPBatch[] = [];
 
+        // True N64 vertex cache. Maps Cache Slot (0-63) -> Index in outPos
         const vtxCache = new Int32Array(64).fill(0); 
-        let fbIndex = 0;
+        const vboMap = new Map<string, number>();
+
+        let fbIndex = -1;
         let currentFb: Facebatch | null = null;
-        let currentMaterial = -1;
-        let batchStartTri = 0;
-
-        let minX = Infinity, minY = Infinity, minZ = Infinity;
-        let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-
-        let cmdOffset = dlOff;
         let cmdIdx = 0;
-        
-        while (cmdOffset + 8 <= data.byteLength) {
-            while (fbIndex < facebatches.length && cmdIdx >= facebatches[fbIndex].dlStartCmd) {
-                currentFb = facebatches[fbIndex];
-                if (currentFb.materialID !== currentMaterial) {
-                    if (outTris.length > batchStartTri) {
-                        batches.push({ flags: currentFb.tagC, materialId: currentMaterial, vStart: 0, vEnd: 0, tStart: batchStartTri, tEnd: outTris.length });
-                    }
-                    currentMaterial = currentFb.materialID;
-                    batchStartTri = outTris.length;
-                }
+        let currentMtxIdx = 0; // Tracks the currently active bone matrix
+// --- DP: N64 segment base table (character DLs) ---
+const segmentBases = new Uint32Array(16);
+
+// In your files, G_VTX is coming in as seg=0x05 (see your logs).
+// Treat 0x05 as the vertex segment base.
+segmentBases[0x05] = vtxOff;
+
+// (Optional) some files might use 0x04 instead.
+segmentBases[0x04] = vtxOff;
+        while (cmdIdx < dlLength) {
+            const cmdOffset = dlOff + cmdIdx * 8;
+            if (cmdOffset + 8 > data.byteLength) break;
+
+            while (fbIndex + 1 < facebatches.length && cmdIdx >= facebatches[fbIndex + 1].dlStartCmd) {
                 fbIndex++;
+                currentFb = facebatches[fbIndex];
             }
 
             const w0 = data.getUint32(cmdOffset);
             const w1 = data.getUint32(cmdOffset + 4);
             const opcode = w0 >>> 24;
 
-            if (opcode === 0xDF) break; // G_ENDDL
-
-            if (opcode === 0x01) { // G_VTX
-                const num = (w0 >>> 12) & 0xFF;
-                const v0_encoded = (w0 >>> 1) & 0x7F; 
-                const v0 = v0_encoded - num;
-
-                const fileOffset = w1 & 0x00FFFFFF;
-                let baseVtxIndex = Math.floor(fileOffset / 16);
-                if (fileOffset >= vtxOff) {
-                    baseVtxIndex = Math.floor((fileOffset - vtxOff) / 16);
+            if (opcode === 0xDA) { // G_MTX
+                const seg = w1 >>> 24;
+                if (seg === 0x03) { // Segment 3 = Bone Matrices
+                    // Each matrix is 64 bytes long
+                    currentMtxIdx = Math.floor((w1 & 0x00FFFFFF) / 64);
                 }
-                
+            }
+            else if (opcode === 0x01 && currentFb) { // G_VTX
+const num = (w0 >>> 12) & 0xFF;
+
+// DP/F3DEX-style: v0 is stored as (slot*2) in the high byte.
+// This keeps v0 aligned and prevents weird v0=31 cases.
+// DP/F3DEX2-style: v0 is encoded as (v0 + num) in bits 1..7 of w0.
+const v0_encoded = (w0 >>> 1) & 0x7F;
+const v0 = (v0_encoded - num) & 0x3F; // keep in 0..63
+if (cmdIdx < 120) {
+ // console.log(`[G_VTX2] cmd=${cmdIdx} num=${num} v0=${v0} (rawV0=${(w0>>>16)&0xFF})`);
+}
+if (cmdIdx < 80) {
+ // console.log(`[G_VTX2] cmd=${cmdIdx} num=${num} v0=${v0}`);
+}
+                // YOUR EXACT, CORRECT OFFSET MATH
+// DP segment -> file base mapping
+const seg = (w1 >>> 24) & 0xFF;
+const off24 = (w1 & 0x00FFFFFF) >>> 0;
+
+let segBase = segmentBases[seg] >>> 0;
+
+// If unknown segment, try a safe fallback: interpret it as vtx segment
+// (this keeps you moving instead of exploding indices).
+if (segBase === 0 && seg !== 0x00) {
+  segBase = vtxOff >>> 0;
+  segmentBases[seg] = segBase;
+ // console.warn(`[DPSEG] unknown seg=0x${seg.toString(16)} -> assuming base=vtxOff (0x${segBase.toString(16)})`);
+}
+
+const fileByteOff = (segBase + off24) >>> 0;
+const baseVtxIndex = Math.floor((fileByteOff - vtxOff) / 16);
+
+if (cmdIdx < 60) {
+  //console.log(
+ //   `[G_VTX] cmd=${cmdIdx} seg=0x${seg.toString(16)} base=0x${segBase.toString(16)} ` +
+  //  `off24=0x${off24.toString(16)} fileByteOff=0x${fileByteOff.toString(16)} baseVtxIndex=${baseVtxIndex}`
+ // );
+}
                 for (let v = 0; v < num; v++) {
                     const romIdx = baseVtxIndex + v;
-                    const cacheIdx = v0 + v; 
-                    const o = vtxOff + romIdx * 16;
-                    if (o + 16 > data.byteLength) continue;
+const cacheIdx = (v0 + v) & 0x3F;
+                    
+                    // Key by both ROM Index AND Matrix Index to prevent seams!
+                    const key = `${romIdx}_${currentMtxIdx}`;
+                    let newIdx = vboMap.get(key);
 
-                    let activeJoint = currentFb ? currentFb.jointA : 0;
-                    if (currentFb) {
-                        const relIdx = romIdx - currentFb.baseVertexID;
-                        if (currentFb.jointC_start > 0 && relIdx >= currentFb.jointC_start) {
-                            activeJoint = currentFb.jointC;
-                        } else if (currentFb.jointB_start > 0 && relIdx >= currentFb.jointB_start) {
-                            activeJoint = currentFb.jointB;
+                    if (newIdx === undefined) {
+                        const o = vtxOff + romIdx * 16;
+                        if (o + 16 <= data.byteLength) {
+                            let vx = data.getInt16(o + 0, false);
+                            let vy = data.getInt16(o + 2, false);
+                            let vz = data.getInt16(o + 4, false);
+
+                            // CPU BAKING: Transform vertex by the currently loaded bone matrix
+                            if (currentMtxIdx >= 0 && currentMtxIdx < jointMats.length) {
+                                const vPos = vec3.fromValues(vx, vy, vz);
+                                vec3.transformMat4(vPos, vPos, jointMats[currentMtxIdx]);
+                                vx = vPos[0]; vy = vPos[1]; vz = vPos[2];
+                            }
+
+                            newIdx = outPos.length / 3;
+                            outPos.push(vx, vy, vz);
+                            outTex.push(data.getInt16(o + 8, false), data.getInt16(o + 10, false));
+                            outClr.push(data.getUint8(o + 12), data.getUint8(o + 13), data.getUint8(o + 14), data.getUint8(o + 15));
+                            vboMap.set(key, newIdx);
+                        } else {
+                            newIdx = 0; // Fallback
                         }
                     }
-
-                    let vx = data.getInt16(o + 0, false);
-                    let vy = data.getInt16(o + 2, false);
-                    let vz = data.getInt16(o + 4, false);
-
-                    if (activeJoint >= 0 && activeJoint < globalJoints.length) {
-                        vx += globalJoints[activeJoint][0];
-                        vy += globalJoints[activeJoint][1];
-                        vz += globalJoints[activeJoint][2];
-                    }
-
-                    minX = Math.min(minX, vx); minY = Math.min(minY, vy); minZ = Math.min(minZ, vz);
-                    maxX = Math.max(maxX, vx); maxY = Math.max(maxY, vy); maxZ = Math.max(maxZ, vz);
-
-                    const newIdx = outPos.length / 3;
-                    outPos.push(vx, vy, vz);
-                    outTex.push(data.getInt16(o + 8, false), data.getInt16(o + 10, false));
-                    outClr.push(255, 255, 255, 255);
-
-                    if (cacheIdx < 64) vtxCache[cacheIdx] = newIdx;
-                }
+                    
+                    // Push into N64 cache
+vtxCache[cacheIdx] = newIdx;                }
             }
-            else if (opcode === 0x05) { // G_TRI1
-                const i0 = ((w0 >>> 16) & 0xFF) / 2; 
-                const i1 = ((w0 >>> 8) & 0xFF) / 2;
-                const i2 = ((w0 >>> 0) & 0xFF) / 2;
-                outTris.push({ flip: false, i0: vtxCache[i0], i1: vtxCache[i1], i2: vtxCache[i2] });
-            }
-            else if (opcode === 0x06) { // G_TRI2
-                const i0 = ((w0 >>> 16) & 0xFF) / 2;
-                const i1 = ((w0 >>> 8) & 0xFF) / 2;
-                const i2 = ((w0 >>> 0) & 0xFF) / 2;
-                outTris.push({ flip: false, i0: vtxCache[i0], i1: vtxCache[i1], i2: vtxCache[i2] });
+else if (opcode === 0x05 && currentFb) { // G_TRI1 (DP/F3DEX variants)
+  // Many DP lists store TRI1 indices in w0 low24 and leave w1 as 0.
+  const src = ((w1 & 0x00FFFFFF) !== 0) ? w1 : w0;
 
-                const i3 = ((w1 >>> 16) & 0xFF) / 2;
-                const i4 = ((w1 >>> 8) & 0xFF) / 2;
-                const i5 = ((w1 >>> 0) & 0xFF) / 2;
-                outTris.push({ flip: false, i0: vtxCache[i3], i1: vtxCache[i4], i2: vtxCache[i5] });
+  const a = (src >>> 16) & 0xFF;
+  const b = (src >>>  8) & 0xFF;
+  const c = (src >>>  0) & 0xFF;
+
+  const i0 = vtxCache[(a >>> 1) & 0x3F];
+  const i1 = vtxCache[(b >>> 1) & 0x3F];
+  const i2 = vtxCache[(c >>> 1) & 0x3F];
+
+  if (cmdIdx < 160) {
+//    console.log(
+ //     `[G_TRI1] cmd=${cmdIdx} src=${src===w1?'w1':'w0'} raw=${a},${b},${c} ` +
+ //     `slots=${a>>>1},${b>>>1},${c>>>1} -> idx=${i0},${i1},${i2}`
+ //   );
+  }
+
+  currentFb.tris.push({ i0, i1, i2 });
+} if (opcode === 0x06 && currentFb) { // G_TRI2 (F3DEX2)
+  // tri A in w0 (low 24 bits)
+  const a0 = (w0 >>> 16) & 0xFF;
+  const a1 = (w0 >>>  8) & 0xFF;
+  const a2 = (w0 >>>  0) & 0xFF;
+
+  // tri B in w1 (low 24 bits)
+  const b0 = (w1 >>> 16) & 0xFF;
+  const b1 = (w1 >>>  8) & 0xFF;
+  const b2 = (w1 >>>  0) & 0xFF;
+
+  currentFb.tris.push({
+    i0: vtxCache[(a0 >>> 1) & 0x3F],
+    i1: vtxCache[(a1 >>> 1) & 0x3F],
+    i2: vtxCache[(a2 >>> 1) & 0x3F],
+  });
+
+  currentFb.tris.push({
+    i0: vtxCache[(b0 >>> 1) & 0x3F],
+    i1: vtxCache[(b1 >>> 1) & 0x3F],
+    i2: vtxCache[(b2 >>> 1) & 0x3F],
+  });
+
+  if (cmdIdx < 120) {
+ //   console.log(
+ //     `[G_TRI2] cmd=${cmdIdx} Araw=${a0},${a1},${a2} slots=${a0>>>1},${a1>>>1},${a2>>>1} ` +
+  //    `Braw=${b0},${b1},${b2} slots=${b0>>>1},${b1>>>1},${b2>>>1}`
+  //  );
+  }
+
             }
-            cmdOffset += 8;
             cmdIdx++;
         }
-        
-        if (outTris.length > batchStartTri) {
-            batches.push({ flags: currentFb ? currentFb.tagC : 0, materialId: currentMaterial === -1 ? 0 : currentMaterial, vStart: 0, vEnd: 0, tStart: batchStartTri, tEnd: outTris.length });
-        }
 
+        // --- 4. SHAPE GENERATION ---
         const finalVerts = outPos.length / 3;
         const posAB = new ArrayBuffer(finalVerts * 6);
         const clrAB = new ArrayBuffer(finalVerts * 4);
@@ -937,10 +991,17 @@ function loadDinosaurPlanetModel(
         const clrDV = new DataView(clrAB);
         const texDV = new DataView(texAB);
 
-        for(let j=0; j < finalVerts; j++) {
-            posDV.setInt16(j*6 + 0, outPos[j*3+0], false);
-            posDV.setInt16(j*6 + 2, outPos[j*3+1], false);
-            posDV.setInt16(j*6 + 4, outPos[j*3+2], false);
+        let minX = Infinity, minY = Infinity, minZ = Infinity;
+        let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+
+        for(let j = 0; j < finalVerts; j++) {
+            const px = outPos[j*3+0]; const py = outPos[j*3+1]; const pz = outPos[j*3+2];
+            minX = Math.min(minX, px); minY = Math.min(minY, py); minZ = Math.min(minZ, pz);
+            maxX = Math.max(maxX, px); maxY = Math.max(maxY, py); maxZ = Math.max(maxZ, pz);
+
+            posDV.setInt16(j*6 + 0, px, false);
+            posDV.setInt16(j*6 + 2, py, false);
+            posDV.setInt16(j*6 + 4, pz, false);
             texDV.setInt16(j*4 + 0, outTex[j*2+0], false);
             texDV.setInt16(j*4 + 2, outTex[j*2+1], false);
             clrDV.setUint8(j*4 + 0, outClr[j*4+0]);
@@ -948,7 +1009,6 @@ function loadDinosaurPlanetModel(
             clrDV.setUint8(j*4 + 2, outClr[j*4+2]);
             clrDV.setUint8(j*4 + 3, outClr[j*4+3]);
         }
-
         (model as any).bbox = new AABB(minX, minY, minZ, maxX, maxY, maxZ);
 
         const vcd: GX_VtxDesc[] = nArray(GX.Attr.MAX + 1, () => ({ type: GX.AttrType.NONE }));
@@ -959,66 +1019,75 @@ function loadDinosaurPlanetModel(
         const vat: GX_VtxAttrFmt[][] = nArray(8, () => nArray(GX.Attr.MAX + 1, () => ({ compType: GX.CompType.U8, compShift: 0, compCnt: 0 } as GX_VtxAttrFmt)));
         vat[0][GX.Attr.POS] = { compType: GX.CompType.S16, compShift: 0, compCnt: GX.CompCnt.POS_XYZ };
         vat[0][GX.Attr.CLR0] = { compType: GX.CompType.RGBA8, compShift: 0, compCnt: GX.CompCnt.CLR_RGBA };
-        vat[0][GX.Attr.TEX0] = { compType: GX.CompType.S16, compShift: 10, compCnt: GX.CompCnt.TEX_ST };
+        vat[0][GX.Attr.TEX0] = { compType: GX.CompType.S16, compShift: 11, compCnt: GX.CompCnt.TEX_ST };
 
         const vtxArrays: GX_Array[] = [];
-        vtxArrays[GX.Attr.POS] = { buffer: ArrayBufferSlice.fromView(new DataView(posAB)), offs: 0, stride: 6 };
-        vtxArrays[GX.Attr.CLR0] = { buffer: ArrayBufferSlice.fromView(new DataView(clrAB)), offs: 0, stride: 4 };
-        vtxArrays[GX.Attr.TEX0] = { buffer: ArrayBufferSlice.fromView(new DataView(texAB)), offs: 0, stride: 4 };
+        vtxArrays[GX.Attr.POS] = { buffer: ArrayBufferSlice.fromView(posDV), offs: 0, stride: 6 };
+        vtxArrays[GX.Attr.CLR0] = { buffer: ArrayBufferSlice.fromView(clrDV), offs: 0, stride: 4 };
+        vtxArrays[GX.Attr.TEX0] = { buffer: ArrayBufferSlice.fromView(texDV), offs: 0, stride: 4 };
 
         model.createModelShapes = () => {
-            const shapes = new ModelShapes(model, new DataView(posAB), undefined);
+            const shapes = new ModelShapes(model, posDV, undefined);
             shapes.shapes[0] = []; shapes.shapes[1] = []; shapes.shapes[2] = [];
 
-            for (const b of batches) {
-                const finalTexId = b.materialId & 0xFFFF;
-                const isDoubleSided = (b.flags & 0x80) !== 0; 
+            for (const fb of facebatches) {
+                if (fb.tris.length === 0) continue;
                 
+                // FIXED FOR SEE-THROUGH / MISSING LIMBS:
+                // 1. Force AlphaCompare (Allows hair/eye transparency)
+                // 2. Disable CullBackface (Restores mirrored arms and legs)
+                // 3. Force targetList 0 (Writes to Z-Buffer to fix x-ray overlaps)
+                let shaderFlags = ShaderFlags.AlphaCompare; 
+                let targetList = 0;
+
                 const shader: Shader = {
-                    layers: [{ texId: finalTexId, tevMode: 0, enableScroll: 0 }],
-                    flags: !isDoubleSided ? ShaderFlags.CullBackface : 0x10, 
+                    layers: [{ texId: fb.materialID, tevMode: 0, enableScroll: 0 }],
+                    flags: shaderFlags,
                     attrFlags: ShaderAttrFlags.CLR | (ShaderAttrFlags as any).TEX0, 
                     hasHemisphericProbe: false, hasReflectiveProbe: false, reflectiveProbeMaskTexId: null,
                     reflectiveProbeIdx: 0, reflectiveAmbFactor: 0.0, hasNBTTexture: false, nbtTexId: null,
                     nbtParams: 0, furRegionsTexId: null, color: { r: 1, g: 1, b: 1, a: 1 },
                     normalFlags: 0, lightFlags: 0, texMtxCount: 0,
                 };
-                const material = materialFactory.buildMapMaterial(shader, texFetcher);
-
-                const triCount = (b.tEnd - b.tStart);
-                const vtxCountOut = triCount * 3;
                 
+                // NO HARDWARE SKINNING
+                const material = materialFactory.buildObjectMaterial(shader, texFetcher, false);
+
+                const vtxCountOut = fb.tris.length * 3;
                 const out = new Uint8Array(3 + vtxCountOut * 6); 
                 let p = 0;
-                out[p++] = 0x90;
+                out[p++] = 0x90; 
                 out[p++] = (vtxCountOut >>> 8) & 0xFF;
                 out[p++] = (vtxCountOut >>> 0) & 0xFF;
 
-                for (let ti = b.tStart; ti < b.tEnd; ti++) {
-                    let { flip, i0, i1, i2 } = outTris[ti];
-                    if (flip) { const tmp = i1; i1 = i2; i2 = tmp; }
-                    for (const idx of [i0, i1, i2]) {
-                        const safeIdx = Math.min(Math.max(0, idx), finalVerts - 1);
-                        out[p++] = (safeIdx >>> 8) & 0xFF; out[p++] = safeIdx & 0xFF; 
-                        out[p++] = (safeIdx >>> 8) & 0xFF; out[p++] = safeIdx & 0xFF; 
-                        out[p++] = (safeIdx >>> 8) & 0xFF; out[p++] = safeIdx & 0xFF; 
-                    }
+                for (const tri of fb.tris) {
+                    out[p++] = (tri.i0 >>> 8) & 0xFF; out[p++] = tri.i0 & 0xFF; // POS
+                    out[p++] = (tri.i0 >>> 8) & 0xFF; out[p++] = tri.i0 & 0xFF; // CLR
+                    out[p++] = (tri.i0 >>> 8) & 0xFF; out[p++] = tri.i0 & 0xFF; // TEX0
+                    
+                    out[p++] = (tri.i1 >>> 8) & 0xFF; out[p++] = tri.i1 & 0xFF; // POS
+                    out[p++] = (tri.i1 >>> 8) & 0xFF; out[p++] = tri.i1 & 0xFF; // CLR
+                    out[p++] = (tri.i1 >>> 8) & 0xFF; out[p++] = tri.i1 & 0xFF; // TEX0
+                    
+                    out[p++] = (tri.i2 >>> 8) & 0xFF; out[p++] = tri.i2 & 0xFF; // POS
+                    out[p++] = (tri.i2 >>> 8) & 0xFF; out[p++] = tri.i2 & 0xFF; // CLR
+                    out[p++] = (tri.i2 >>> 8) & 0xFF; out[p++] = tri.i2 & 0xFF; // TEX0
                 }
+
                 const geom = new ShapeGeometry(vtxArrays, vcd, vat, new DataView(out.buffer), false);
                 
                 const pnMatrixMap = nArray(10, () => 0);
                 geom.setPnMatrixMap(pnMatrixMap, false, false);
 
-                shapes.shapes[0].push(new Shape(geom, new ShapeMaterial(material), false));
+                shapes.shapes[targetList].push(new Shape(geom, new ShapeMaterial(material), false));
             }
             return shapes;
         };
+        
         model.sharedModelShapes = model.createModelShapes();
         return model;
 
-
-
-  } else {
+    } else {
         // ==========================================
         // DINOSAUR PLANET MAP BLOCK PARSER
         // ==========================================
@@ -1036,7 +1105,7 @@ function loadDinosaurPlanetModel(
         const totalVerts = ((triOff - vtxOff) / 16) | 0;
         const totalTris  = ((batOff - triOff) / 8)  | 0;
 
- const posAB = new ArrayBuffer(totalVerts * 6);
+        const posAB = new ArrayBuffer(totalVerts * 6);
         const posDV = new DataView(posAB);
         const clrAB = new ArrayBuffer(totalVerts * 4);
         const clrDV = new DataView(clrAB);
@@ -1049,15 +1118,12 @@ function loadDinosaurPlanetModel(
             blendMaterialId: number;
             vStart: number; vEnd: number; 
             tStart: number; tEnd: number;
-            texW: number; texH: number;           // NEW
-            blendTexW: number; blendTexH: number; // NEW
+            texW: number; texH: number; 
+            blendTexW: number; blendTexH: number;
         };
 
         const batches: DPMapBatch[] = [];
         const requestedTextures = new Set<number>();
-        
-        const vertScaleS = new Float32Array(totalVerts).fill(1.0);
-        const vertScaleT = new Float32Array(totalVerts).fill(1.0);
 
         for (let i = 0; i < batchCount; i++) {
             const o = batOff + i * 0x18;
@@ -1073,12 +1139,12 @@ function loadDinosaurPlanetModel(
             const matIdx = data.getUint8(o + 0x12);
             const blendMatIdx = data.getUint8(o + 0x15); 
 
-           let globalTexId = -1;
+            let globalTexId = -1;
             let blendGlobalTexId = -1;
             let isOpaque = true;
             let pixelFormat = 0;
             let texW = 32, texH = 32;
-            let blendTexW = 32, blendTexH = 32; // NEW
+            let blendTexW = 32, blendTexH = 32;
 
             if (matIdx < materialCount) {
                 const matStructOff = matOff + (matIdx * 0x0C);
@@ -1102,8 +1168,8 @@ function loadDinosaurPlanetModel(
             if (blendMatIdx !== 0x00 && blendMatIdx !== 0xFF && blendMatIdx < materialCount) {
                 const blendMatStructOff = matOff + (blendMatIdx * 0x0C);
                 blendGlobalTexId = data.getUint32(blendMatStructOff + 0x00, false) & 0xFFFF;
-                blendTexW = data.getUint8(blendMatStructOff + 0x08); // NEW
-                blendTexH = data.getUint8(blendMatStructOff + 0x09); // NEW
+                blendTexW = data.getUint8(blendMatStructOff + 0x08); 
+                blendTexH = data.getUint8(blendMatStructOff + 0x09); 
                 if (blendGlobalTexId >= 0 && blendGlobalTexId < 10000) {
                     requestedTextures.add(blendGlobalTexId);
                 } else {
@@ -1119,12 +1185,23 @@ function loadDinosaurPlanetModel(
             if (vEnd > vStart && tEnd > tStart) {
                 batches.push({ isOpaque, pixelFormat, drawMode, materialId: globalTexId, blendMaterialId: blendGlobalTexId, vStart, vEnd, tStart, tEnd, texW, texH, blendTexW, blendTexH });
             }
- }
-for (let i = 0; i < totalVerts; i++) {
+        }
+
+        let minX = Infinity, minY = Infinity, minZ = Infinity;
+        let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+
+        for (let i = 0; i < totalVerts; i++) {
             const o = vtxOff + i * 16;
-            posDV.setInt16(i * 6 + 0, data.getInt16(o + 0, false), false);
-            posDV.setInt16(i * 6 + 2, data.getInt16(o + 2, false), false);
-            posDV.setInt16(i * 6 + 4, data.getInt16(o + 4, false), false);
+            const px = data.getInt16(o + 0, false);
+            const py = data.getInt16(o + 2, false);
+            const pz = data.getInt16(o + 4, false);
+
+            minX = Math.min(minX, px); minY = Math.min(minY, py); minZ = Math.min(minZ, pz);
+            maxX = Math.max(maxX, px); maxY = Math.max(maxY, py); maxZ = Math.max(maxZ, pz);
+
+            posDV.setInt16(i * 6 + 0, px, false);
+            posDV.setInt16(i * 6 + 2, py, false);
+            posDV.setInt16(i * 6 + 4, pz, false);
             
             clrDV.setUint8(i * 4 + 0, data.getUint8(o + 0x0C));
             clrDV.setUint8(i * 4 + 1, data.getUint8(o + 0x0D));
@@ -1132,6 +1209,9 @@ for (let i = 0; i < totalVerts; i++) {
             clrDV.setUint8(i * 4 + 3, data.getUint8(o + 0x0F));
         }
 
+        (model as any).bbox = new AABB(minX, minY, minZ, maxX, maxY, maxZ);
+
+        type DPTri = { flip: boolean; i0: number; i1: number; i2: number };
         const tris: DPTri[] = [];
         for (let i = 0; i < totalTris; i++) {
             const o = triOff + i * 8;
@@ -1156,15 +1236,14 @@ for (let i = 0; i < totalVerts; i++) {
         vat[0][GX.Attr.TEX0] = { compType: GX.CompType.S16, compShift: 10, compCnt: GX.CompCnt.TEX_ST };
         vat[0][GX.Attr.TEX1] = { compType: GX.CompType.S16, compShift: 10, compCnt: GX.CompCnt.TEX_ST }; 
 
-
         model.createModelShapes = () => {
             const shapes = new ModelShapes(model, new DataView(posAB), undefined);
             shapes.shapes[0] = []; shapes.shapes[1] = []; shapes.shapes[2] = [];
 
             for (const b of batches) {
-                
-           const isSoftFormat = (b.pixelFormat !== 1 && b.pixelFormat !== 7 && b.pixelFormat !== 8);
+                const isSoftFormat = (b.pixelFormat !== 1 && b.pixelFormat !== 7 && b.pixelFormat !== 8);
                 const isWaterBlend = (b.blendMaterialId !== -1 && isSoftFormat);
+                const isTerrainBlend = (b.blendMaterialId !== -1 && !isWaterBlend);
 
                 const layers: any[] = [];
                 let activeTexFlags = 0;
@@ -1174,28 +1253,29 @@ for (let i = 0; i < totalVerts; i++) {
                     activeTexFlags |= (ShaderAttrFlags as any).TEX0;
                 }
                 if (b.blendMaterialId !== -1) {
-                    // TERRAIN FIX: tevMode 1 restores the GameCube's native smooth terrain fading!
-                    // WATER FIX: tevMode 0 restores the beautiful translucent blue water!
-                    layers.push({ texId: b.blendMaterialId, tevMode: isWaterBlend ? 0 : 1, enableScroll: 0 });
-                    activeTexFlags |= (ShaderAttrFlags as any).TEX1; 
+layers.push({ texId: b.blendMaterialId, tevMode: isWaterBlend ? 0 : 9, enableScroll: 0 });                    activeTexFlags |= (ShaderAttrFlags as any).TEX1; 
                 }
 
                 let isTrueTrans = false;
                 let isCutout = false;
                 let isWater = false;
 
+                const hasTexBlend = (b.drawMode & 0x40) !== 0;
+                const hasSemiTrans = (b.drawMode & 0x04) !== 0;
+
                 if (b.blendMaterialId !== -1) {
                     if (isWaterBlend) {
-                        isTrueTrans = true; // Dual-texture Water
+                        isTrueTrans = true; 
                         isWater = true;
-                    } else {
-                        isTrueTrans = false; // Dual-texture Terrain
-                        isCutout = false; // NO Cutout for terrain, let it fade smoothly!
-                    }
-             } else if (!b.isOpaque) {
-                    const isKnownTree = [1122, 1125, 1127, 1050, 1049, 1051, 1066, 1075, 1423].includes(b.materialId);
+} else {
+    // Terrain blend: not framebuffer transparency, it's a 2-layer TEV blend.
+    isTrueTrans = false;
+    isCutout = false;
+}
+                } else if (!b.isOpaque) {
+                    const isKnownTree = [2087,1122, 1125, 1127, 1050, 1049, 1051, 1066, 1075, 1423].includes(b.materialId);
 
-                    if (isKnownTree) {
+                    if (isKnownTree || (b.drawMode & 0x80) !== 0) {
                         isCutout = true; 
                     } else if (isSoftFormat) {
                         isTrueTrans = true; 
@@ -1206,27 +1286,29 @@ for (let i = 0; i < totalVerts; i++) {
                 } else if (b.drawMode === 0x00 || b.drawMode === 0x05 || b.drawMode === 0x14 || b.drawMode === 0x15 || b.drawMode === 0x18 || b.drawMode === 0x19) {
                     isTrueTrans = true; 
                     isWater = true;
+                } else if (hasTexBlend || hasSemiTrans) {
+                    isTrueTrans = true;
                 }
                 
                 let shaderFlags = 0;
                 let targetList = 0;
                 
                 if (isTrueTrans) {
-                    shaderFlags |= 0x40000000; // Blend ON, Z-Write OFF
-                    targetList = 1; // Draw after walls
+                    shaderFlags |= 0x40000000; 
+                    targetList = 1; 
                 } else if (isCutout) {
-                    shaderFlags |= ShaderFlags.AlphaCompare; // Cutout ON, Double-Sided ON
-                    targetList = 0; // CRITICAL: MUST BE 0! List 1 breaks the shader.
+                    shaderFlags |= ShaderFlags.AlphaCompare; 
+                    targetList = 0; 
                 } else {
-                    shaderFlags |= 0x10; // Solid Walls & Terrain (Cull Backface ON)
+                    shaderFlags |= 0x10; 
                     targetList = 0; 
                 }
 
                 if (isWater) {
                     shaderFlags |= ShaderFlags.Water;
                 }
-                // === STOP REPLACING HERE (Leave const shader: Shader = ... alone) ===
-                // === STOP REPLACING HERE (Leave const shader: Shader = ... alone) ===
+
+
                 
                 const shader: Shader = {
                     layers: layers,
@@ -1238,9 +1320,8 @@ for (let i = 0; i < totalVerts; i++) {
                     normalFlags: 0, lightFlags: 0, texMtxCount: 0,
                 };
                 
-               const material = materialFactory.buildMapMaterial(shader, texFetcher);
+                const material = materialFactory.buildMapMaterial(shader, texFetcher);
                 
-                // --- NEW ISOLATED UV GENERATION ---
                 const tex0AB = new ArrayBuffer(totalVerts * 4);
                 const tex1AB = new ArrayBuffer(totalVerts * 4);
                 const tex0DV = new DataView(tex0AB);
@@ -1267,7 +1348,6 @@ for (let i = 0; i < totalVerts; i++) {
                 batchVtxArrays[GX.Attr.CLR0] = { buffer: ArrayBufferSlice.fromView(new DataView(clrAB)), offs: 0, stride: 4 };
                 batchVtxArrays[GX.Attr.TEX0] = { buffer: ArrayBufferSlice.fromView(tex0DV), offs: 0, stride: 4 };
                 batchVtxArrays[GX.Attr.TEX1] = { buffer: ArrayBufferSlice.fromView(tex1DV), offs: 0, stride: 4 };
-                // ----------------------------------
 
                 const triCount = (b.tEnd - b.tStart);
                 const vtxCount = triCount * 3;
@@ -1290,6 +1370,9 @@ for (let i = 0; i < totalVerts; i++) {
                 }
                 const geom = new ShapeGeometry(batchVtxArrays, vcd, vat, new DataView(out.buffer), false);
                 
+                const pnMatrixMap = nArray(10, () => 0);
+                geom.setPnMatrixMap(pnMatrixMap, false, false);
+
                 shapes.shapes[targetList].push(new Shape(geom, new ShapeMaterial(material), false));            
             }
             return shapes;

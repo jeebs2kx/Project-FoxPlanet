@@ -88,15 +88,80 @@ function decodeRareN64Texture(data: DataView): { width: number, height: number, 
             rgba8[i * 4 + 3] = deinterleaved[src + 3];
         }
     }
-    else if (pixelFormat === 1) { // RGBA16
-        for (let i = 0; i < pixelCount; i++) {
-            const p = dv.getUint16(i * 2, false);
-            rgba8[i * 4 + 0] = ((p >> 11) & 0x1F) * (255 / 31);
-            rgba8[i * 4 + 1] = ((p >> 6) & 0x1F) * (255 / 31);
-            rgba8[i * 4 + 2] = ((p >> 1) & 0x1F) * (255 / 31);
-            rgba8[i * 4 + 3] = (p & 1) ? 255 : 0; 
+else if (pixelFormat === 1) { // RGBA16 (RGBA5551) - DP bins may be byte-swapped
+    // Heuristic: choose endianness that produces more opaque pixels (alpha bit = LSB).
+    let aBE = 0, aLE = 0;
+    const sampleCount = Math.min(pixelCount, 256);
+const fracBE = aBE / sampleCount;
+const fracLE = aLE / sampleCount;
+
+// Swapped garbage tends to look ~50% alpha=1. Real textures tend to be far from 0.5.
+const distBE = Math.abs(fracBE - 0.5);
+const distLE = Math.abs(fracLE - 0.5);
+
+const useLE = distLE > distBE;
+    // --- ADD THIS PART: choose RGB vs BGR ---
+    function scoreSwapRB(swapRB: boolean): number {
+        const sx = Math.max(1, (width / 16) | 0);
+        const sy = Math.max(1, (height / 16) | 0);
+        let score = 0;
+
+        function getP(i: number): number {
+            const p0 = dv.getUint16(i * 2, false);
+            return useLE ? (((p0 & 0xFF) << 8) | (p0 >>> 8)) : p0;
         }
-    } 
+
+        function unpack(p: number): [number, number, number] {
+            const r5 = (p >>> 11) & 0x1F;
+            const g5 = (p >>> 6) & 0x1F;
+            const b5 = (p >>> 1) & 0x1F;
+            return swapRB ? [b5, g5, r5] : [r5, g5, b5];
+        }
+
+        for (let y = 0; y < height; y += sy) {
+            for (let x = 0; x < width; x += sx) {
+                const i = y * width + x;
+                const [r, g, b] = unpack(getP(i));
+
+                if (x + sx < width) {
+                    const j = y * width + (x + sx);
+                    const [r2, g2, b2] = unpack(getP(j));
+                    score += Math.abs(r - r2) + Math.abs(g - g2) + Math.abs(b - b2);
+                }
+                if (y + sy < height) {
+                    const j = (y + sy) * width + x;
+                    const [r2, g2, b2] = unpack(getP(j));
+                    score += Math.abs(r - r2) + Math.abs(g - g2) + Math.abs(b - b2);
+                }
+            }
+        }
+        return score;
+    }
+
+    const scoreRGB = scoreSwapRB(false);
+    const scoreBGR = scoreSwapRB(true);
+    const swapRB = scoreBGR < scoreRGB;
+
+   // console.log(`[DP RGBA16] choose ${useLE ? "LE(swapped16)" : "BE"} + ${swapRB ? "BGR" : "RGB"} (scoreRGB=${scoreRGB} scoreBGR=${scoreBGR})`);
+
+    // --- decode pixels ---
+    for (let i = 0; i < pixelCount; i++) {
+        const p0 = dv.getUint16(i * 2, false);
+        const p = useLE ? (((p0 & 0xFF) << 8) | (p0 >>> 8)) : p0;
+
+        let r = ((p >>> 11) & 0x1F) * (255 / 31);
+        let g = ((p >>> 6) & 0x1F) * (255 / 31);
+        let b = ((p >>> 1) & 0x1F) * (255 / 31);
+        const a = (p & 1) ? 255 : 0;
+
+        if (swapRB) { const t = r; r = b; b = t; }
+
+        rgba8[i * 4 + 0] = r;
+        rgba8[i * 4 + 1] = g;
+        rgba8[i * 4 + 2] = b;
+        rgba8[i * 4 + 3] = a;
+    }
+}
     else if (pixelFormat === 2) { // I8
         for (let i = 0; i < pixelCount; i++) {
             const intensity = deinterleaved[i];
@@ -498,41 +563,118 @@ export class SFATextureFetcher extends TextureFetcher {
             if (!buf) return;
 
             const decoded = decodeRareN64Texture(buf.createDataView());
-            if (decoded) {
+if (decoded) {
                 const device = cache.device;
-                for (let i = 0; i < decoded.pixels.length; i += 4) {
-                    const r = decoded.pixels[i];
-                    const g = decoded.pixels[i+1];
-                    const b = decoded.pixels[i+2];
-                    const a = decoded.pixels[i+3];
-                    if (b > 180 && r < 60 && g < 60) {
-                        decoded.pixels[i + 3] = 0; 
-                    } else if (a > 0 && a < 255) {
-                        decoded.pixels[i + 3] = Math.min(255, Math.pow(a / 255.0, 0.6) * 255.0);
+ if (texId === 16 || texId === 17) {
+                    for (let i = 0; i < decoded.pixels.length; i += 4) {
+                        decoded.pixels[i + 3] = 0; // Set Alpha to 0 (Invisible)
+                    }
+                }               
+                let solidLeft = 0;
+                let solidRight = 0;
+                let solidTop = 0;
+                let solidBottom = 0;
+                let invisibleCount = 0; // Tracks ONLY purely invisible space
+
+                for (let y = 0; y < decoded.height; y++) {
+                    for (let x = 0; x < decoded.width; x++) {
+                        const i = (y * decoded.width + x) * 4;
+                        let r = decoded.pixels[i];
+                        let g = decoded.pixels[i+1];
+                        let b = decoded.pixels[i+2];
+                        let a = decoded.pixels[i+3];
+
+                        // 1. Strict N64 "Blue Screen" Chroma-Key
+                        if (b > 200 && r < 40 && g < 40) {
+                            a = 0;
+                        }
+
+                        // 2. The Defringe Fix (Fixes blue halos on fences)
+                        if (a === 0) {
+                            decoded.pixels[i] = 0;
+                            decoded.pixels[i+1] = 0;
+                            decoded.pixels[i+2] = 0;
+                            decoded.pixels[i+3] = 0;
+                            invisibleCount++;
+                            continue; 
+                        }
+
+                        // 3. Gentle Alpha Boost
+                        // Leaves faint pixels (<= 20) alone so light beams fade smoothly
+                        if (a > 20 && a < 255) {
+                            a = Math.min(255, Math.floor(a * 1.2));
+                            decoded.pixels[i+3] = a;
+                        }
+
+                        // 4. Record Solid Edge Connections
+                        if (a > 50) {
+                            if (x === 0) solidLeft++;
+                            if (x === decoded.width - 1) solidRight++;
+                            if (y === 0) solidTop++;
+                            if (y === decoded.height - 1) solidBottom++;
+                        }
                     }
                 }
+
                 const gfxTexture = device.createTexture(makeTextureDescriptor2D(GfxFormat.U8_RGBA_NORM, decoded.width, decoded.height, 1));
                 device.uploadTextureData(gfxTexture, 0, [decoded.pixels]);
                 
-                const wrapS = (decoded.cms & 2) ? GfxWrapMode.Clamp : GfxWrapMode.Repeat;
-                const wrapT = (decoded.cmt & 2) ? GfxWrapMode.Clamp : GfxWrapMode.Repeat;
+                // 5. 🔥 YOUR ORIGINAL SKY CODE 🔥
+                // We default to the exact flags provided by the binary file!
+                let wrapS = (decoded.cms & 2) ? GfxWrapMode.Clamp : GfxWrapMode.Repeat;
+                let wrapT = (decoded.cmt & 2) ? GfxWrapMode.Clamp : GfxWrapMode.Repeat;
+                
+                // 6. 🔥 THE EDGE MATCH HEURISTIC (CUTOUTS ONLY) 🔥
+                // If the texture has actual empty space (like vines, light beams, or horizons), 
+                // we override the broken N64 flags with the heuristic that fixed them.
+                // Because Skyboxes are solid (0 invisible pixels), they safely bypass this!
+                const totalPixels = decoded.width * decoded.height;
+                if (invisibleCount > (totalPixels * 0.02)) {
+                    wrapS = (solidLeft > 0 && solidRight > 0) ? GfxWrapMode.Repeat : GfxWrapMode.Clamp;
+                const wrapT = (solidTop > 0 && solidBottom > 0) ? GfxWrapMode.Repeat : GfxWrapMode.Clamp;
+                }
                 
                 const gfxSampler = cache.createSampler({
-                    wrapS,wrapT,
-                    minFilter: GfxTexFilterMode.Bilinear, magFilter: GfxTexFilterMode.Bilinear,
-                    mipFilter: GfxMipFilterMode.Nearest, minLOD: 0, maxLOD: 100,
+                    wrapS, wrapT,
+                    minFilter: GfxTexFilterMode.Bilinear, 
+                    magFilter: GfxTexFilterMode.Bilinear,
+                    mipFilter: GfxMipFilterMode.Linear, 
+                    minLOD: 0, 
+                    maxLOD: 100,
                 });
                 
                 const cachedArray = this.dpBinCache.get(texId);
-                if (cachedArray && cachedArray.textures[0]) {
+               if (cachedArray && cachedArray.textures[0]) {
                     const fakeTex = cachedArray.textures[0];
                     fakeTex.updateTextureAndNotify(gfxTexture, decoded.width, decoded.height, gfxSampler);
                     
+                    // 1. Create the canvas for the UI
+                    const canvas = document.createElement('canvas');
+                    canvas.width = decoded.width;
+                    canvas.height = decoded.height;
+                    const ctx = canvas.getContext('2d')!;
+
+                    // 2. THE FIX: Satisfy ImageData constructor by creating a fresh Clamped array
+                    const clampedData = new Uint8ClampedArray(decoded.pixels);
+                    const imgData = new ImageData(clampedData, decoded.width, decoded.height);
+                    ctx.putImageData(imgData, 0, 0);
+
+                    // 3. Register with the UI and attach the surface
                     if (!fakeTex.viewerTexture) {
-                        fakeTex.viewerTexture = { name: `DP Texture #${texId}`, surfaces: [] } as any;
-                        this.textureHolder.viewerTextures.push(fakeTex.viewerTexture!); 
+                        fakeTex.viewerTexture = { 
+                            name: `DP Texture #${texId}`, 
+                            surfaces: [canvas] 
+                        } as any;
+                        
+                        if (this.textureHolder.viewerTextures.indexOf(fakeTex.viewerTexture!) === -1) {
+                            this.textureHolder.viewerTextures.push(fakeTex.viewerTexture!); 
+                        }
+                    } else {
+                        fakeTex.viewerTexture.surfaces = [canvas];
                     }
+
                     if (this.textureHolder.onnewtextures) this.textureHolder.onnewtextures();
+                
                 }
             }
         } catch (e) { }

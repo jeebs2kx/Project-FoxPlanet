@@ -315,7 +315,7 @@ export class FPSCameraController implements CameraController {
     private keyMovement = vec3.create();
     private mouseMovement = vec3.create();
 
-    private keyMoveSpeed = 60;
+    private keyMoveSpeed = 30;
     private keyMoveShiftMult = 5;
     private keyMoveSlashMult = 0.1;
     private keyMoveVelocityMult = 1/5;

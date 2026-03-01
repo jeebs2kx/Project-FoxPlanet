@@ -60,6 +60,52 @@ const MAP_MUSIC: Record<string, string> = {
     [-997]: 'oldfear.mp3',
     [-998]: 'dfpt.mp3',
     [-999]: 'swapcircle.mp3',
+
+    // --- Dinosaur Planet Specific Tracks ---
+    'dp_2':  'dp_dragrock.mp3',     
+    'dp_3':  'dp_Krazoapalace.mp3',
+    'dp_4':  'dp_vfp.mp3',
+    'dp_5': 'dp_rolling.mp3',
+    'dp_6': 'dp_discovery.mp3',
+    'dp_7': 'dp_swaphollow.mp3',
+    'dp_8': 'dp_swaphollow.mp3',
+    'dp_9': 'dp_gplains.mp3',
+    'dp_10': 'dp_snowhorn.mp3',
+    'dp_11': 'dp_warlock.mp3',
+    'dp_12': 'dp_crfort.mp3',
+    'dp_13': 'dp_walled.mp3',
+    'dp_14': 'dp_swaphollow.mp3', 
+    'dp_15': 'dp_crfort2.mp3', 
+    'dp_16': 'dp_crfdungeon.mp3',
+    'dp_18': 'dp_mmpass.mp3',
+    'dp_19': 'dp_wastes.mp3',
+    'dp_20': 'oldfear.mp3',
+    'dp_21': 'dp_dfpt.mp3',
+    'dp_22': 'oldfear.mp3',
+    'dp_23': 'dp_snowhorn.mp3',
+    'dp_24': 'dp_icemt.mp3',
+    'dp_25': 'dp_icemt.mp3',
+    'dp_27': 'dp_dim2.mp3',
+    'dp_28': 'dp_dim3.mp3',
+    'dp_29': 'dp_cclaw.mp3',
+    'dp_30': 'dp_crfort2.mp3',
+    'dp_31': 'oldfear.mp3',
+    'dp_32': 'oldfear.mp3',
+    'dp_33': 'oldfear.mp3',
+    'dp_34': 'oldfear.mp3',
+    'dp_35': 'dp_dbay.mp3',
+    'dp_36': 'dp_walled.mp3',
+    'dp_39': 'oldfear.mp3',
+    'dp_40': 'oldfear.mp3',
+    'dp_41': 'oldfear.mp3',
+    'dp_42': 'oldfear.mp3',
+    'dp_43': 'dp_crfrace.mp3',
+    'dp_48': 'dp_rex.mp3',
+    'dp_50': 'dp_dfpt.mp3',
+    'dp_51': 'dp_shop.mp3',
+    'dp_52': 'dp_dragrock.mp3',
+
+
 };
 
 if (!(window as any).musicState) {
@@ -350,10 +396,8 @@ export async function loadMap(gameInfo: GameInfo, dataFetcher: DataFetcher, mapN
 }
 function resolveMusicKey(mapNum: string | number): string {
     const key = String(mapNum);
-
-    if (key.startsWith('early1_') || key.startsWith('dup_')) {
+if (key.startsWith('early1_') || key.startsWith('dup_')) {
         const num = Number(key.split('_')[1]);
-
         if ([31,32,33,34,39,40].includes(num))
             return 'Early_kraz_test';
 
@@ -716,6 +760,7 @@ if (musicState.audio) {
         const mapSceneInfo = await loadMap(this.gameInfo, context.dataFetcher, this.mapNum);
 
         const mapRenderer = new MapSceneRenderer(context, animController, materialFactory);
+        mapRenderer.mapNum = this.mapNum;
         const texFetcher = await SFATextureFetcher.create(this.gameInfo, context.dataFetcher, false);
         
         const blockFetcher = await SFABlockFetcher.create(this.gameInfo,context.dataFetcher, device, materialFactory, animController, Promise.resolve(texFetcher));
@@ -1163,6 +1208,7 @@ if (musicState.audio) {
   }
 
     const mapRenderer = new MapSceneRenderer(context, animController, materialFactory);
+    
 mapRenderer.mapNum = `dup_${this.mapNum}`;
 
     const texFetcher  = await SFATextureFetcher.create(this.gameInfo, context.dataFetcher, false);
@@ -1674,26 +1720,23 @@ export class DPMapSceneDesc implements Viewer.SceneDesc {
         const materialFactory = new MaterialFactory(device);
         const mapSceneInfo = await loadMap(gInfo, context.dataFetcher, this.mapNum);
         
-        const mapRenderer = new MapSceneRenderer(context, animController, materialFactory);        
-        
+        const mapRenderer = new MapSceneRenderer(context, animController, materialFactory);  
+        (mapRenderer as any).mapNum = `dp_${this.mapNum}`;      
         const texFetcher = await SFATextureFetcher.create(gInfo, context.dataFetcher, false);
         texFetcher.setModelVersion(ModelVersion.DinosaurPlanet);
 
-        // === THE PHOTO FRAME INTERCEPTOR ===
-      // === THE PHOTO FRAME INTERCEPTOR & BLUE FRINGE FIX ===
+        // === THE PHOTO FRAME INTERCEPTOR & BLUE FRINGE FIX ===
         if (!texFetcher.textureHolder) {
             texFetcher.textureHolder = { viewerTextures: [], onnewtextures: null };
         }
         
-        let pointSampler: any = null; // Store our custom N64 Point Filter
+        let pointSampler: any = null; 
 
         const origGetTexture = (texFetcher as any).getTexture.bind(texFetcher);
-(texFetcher as any).getTexture = function(cache: any, id: number, useTex1: boolean) {
+        (texFetcher as any).getTexture = function(cache: any, id: number, useTex1: boolean) {
             const res = origGetTexture(cache, id, useTex1);
             if (res && res.viewerTexture) {
                 const vt = res.viewerTexture;
-                
-                // 1. Populate the UI Texture Viewer
                 if (!this.textureHolder.viewerTextures.includes(vt)) {
                     this.textureHolder.viewerTextures.push(vt);
                     if (this.textureHolder.onnewtextures) {
@@ -1701,52 +1744,40 @@ export class DPMapSceneDesc implements Viewer.SceneDesc {
                     }
                 }
 
-                // 2. FIX BLUE FRINGES: Force N64 Point Filtering on cutouts!
-                // Add the Texture IDs for Diamond Bay's foliage here:
-                const cutoutTextures = [
-                    0 // Known SFA trees
-                    // TODO: Add Diamond Bay tree IDs here! (e.g., 2045, 2046)
-                ];
-                
+                const cutoutTextures = [ 0 ];
                 if (cutoutTextures.includes(id)) {
                     if (!pointSampler) {
-                        // Create a Nearest-Neighbor sampler to stop the blurring
                         pointSampler = cache.device.createSampler({
-                            wrapS: 1, // REPEAT
-                            wrapT: 1, // REPEAT
-                            minFilter: 0, // POINT
-                            magFilter: 0, // POINT
-                            mipFilter: 0, // NO_MIP
-                            minLOD: 0,
-                            maxLOD: 100,
+                            wrapS: 1, wrapT: 1,
+                            minFilter: 0, magFilter: 0, mipFilter: 0,
+                            minLOD: 0, maxLOD: 100,
                         });
                     }
-                    res.gfxSampler = pointSampler; // Apply the crisp filter!
+                    res.gfxSampler = pointSampler; 
                 }
             }
             return res;
         };
-        // ===================================
-        // ===================================
 
-        // --- FAKE WORLD INJECTION FOR ENVFX ---
+        const ZERO_ENVFX_MAPS = [2, 3, 11, 15, 16,21,27,28,30,31,32,33,34,39,40,41,42,48,50,51,52,53,54];
+        const isZeroEnvMap = ZERO_ENVFX_MAPS.includes(this.mapNum as number);
+        const startingEnvFx = isZeroEnvMap ? 0 : DP_ENV_DEFAULT.envfxIndex;
+
         const fakeWorld: any = {
             renderCache: (materialFactory as any).cache ?? (materialFactory as any).getCache?.(),
             gameInfo: gInfo,
             worldLights: mapRenderer.worldLights,
             resColl: { texFetcher: texFetcher },
-            // Added addRenderInsts to the dummy object so the sky doesn't crash!
             objectMan: { createObjectInstance: () => ({ destroy: () => {}, addRenderInsts: () => {} }) }
         };
 
         try {
             mapRenderer.envfxMan = await EnvfxManager.create(fakeWorld as World, context.dataFetcher);
-            fakeWorld.envfxMan = mapRenderer.envfxMan; // Prevents the getAmbientColor crash!
-            mapRenderer.envfxMan.loadEnvfx(DP_ENV_DEFAULT.envfxIndex); 
+            fakeWorld.envfxMan = mapRenderer.envfxMan; 
+            mapRenderer.envfxMan.loadEnvfx(startingEnvFx); 
         } catch (e) {
             console.warn("Failed to load ENVFXACT.bin for DP Map", e);
         }
-        // --------------------------------------
         
         (texFetcher as any).dataFetcherRef = context.dataFetcher;
         const blockFetcher = await DPBlockFetcher.create(
@@ -1756,22 +1787,24 @@ export class DPMapSceneDesc implements Viewer.SceneDesc {
         if (texFetcher.textureHolder)
             mapRenderer.textureHolder = texFetcher.textureHolder;
 
-        await mapRenderer.create(mapSceneInfo, gInfo, context.dataFetcher, blockFetcher);
+        // --- NEW: Texture Toggle UI Integration ---
+        ensureTextureToggleUI(async (enabled: boolean) => {
+            texFetcher.setTexturesEnabled(enabled);
+            (materialFactory as any).texturesEnabled = enabled;
+            await mapRenderer.reloadForTextureToggle();
+        }, texFetcher.getTexturesEnabled?.() ?? true);
 
-        // 🔥 THE AUTOMATED SLIDER DRAG (95 -> 100) 🔥
-        // Waits 1 second for the map and UI to load, then physically fakes the slider drag
-  setTimeout(async () => {
+        await mapRenderer.create(mapSceneInfo, gInfo, context.dataFetcher, blockFetcher);
+        
+        setTimeout(async () => {
             const mr = mapRenderer as any;
             if (mr.envSelect) {
-                // Sweep from 95 to 100 rapidly
-                const sequence = [95, 96, 97, 98, 99, 100];
-                
+                const sequence = isZeroEnvMap ? [0] : [95, 96, 97, 98, 99, 100];
                 for (const val of sequence) {
                     mr.envSelect.setValue(val);
                     if (mr.envSelect.onvalue) {
                         await mr.envSelect.onvalue(val);
                     }
-                    // Wait exactly 1 frame (16ms) to let WebGL instantly process the texture
                     await new Promise(resolve => setTimeout(resolve, 16)); 
                 }
             }
@@ -2004,7 +2037,8 @@ export class DPFullWorldSceneDesc implements Viewer.SceneDesc {
 
         const animController = new SFAAnimationController();
         const materialFactory = new MaterialFactory(device);
-        const texFetcher = new FakeTextureFetcher();
+const texFetcher = await SFATextureFetcher.create(gInfo, dataFetcher, false);
+texFetcher.setModelVersion(ModelVersion.DinosaurPlanet);
 
         const blockFetcher = await DPBlockFetcher.create(
             gInfo, dataFetcher, materialFactory, Promise.resolve(texFetcher)
@@ -2012,7 +2046,6 @@ export class DPFullWorldSceneDesc implements Viewer.SceneDesc {
 
         const renderer = new DPFullWorldRenderer(device, context, animController, materialFactory, gInfo, dataFetcher, blockFetcher, placed);
 
-        // --- FAKE WORLD INJECTION FOR ENVFX ---
         const fakeWorld = {
             renderCache: (materialFactory as any).cache ?? (materialFactory as any).getCache?.(),
             gameInfo: gInfo,
@@ -2027,7 +2060,6 @@ export class DPFullWorldSceneDesc implements Viewer.SceneDesc {
         } catch (e) {
             console.warn("Failed to load ENVFXACT.bin for DP Full World", e);
         }
-        // --------------------------------------
 
         await renderer.loadAllMaps(8); 
         return renderer;
@@ -2053,7 +2085,6 @@ export class CombinedOldIceMtSceneDesc implements Viewer.SceneDesc {
         const animController = new SFAAnimationController();
         const materialFactory = new MaterialFactory(device);
 
-        // 1. Get dimensions for all three base maps
         const map23 = await loadMap(this.gameInfo, context.dataFetcher, 23); 
         const map24 = await loadMap(this.gameInfo, context.dataFetcher, 24); 
         const map25 = await loadMap(this.gameInfo, context.dataFetcher, 25); 
@@ -2142,10 +2173,8 @@ export class CombinedOldIceMtSceneDesc implements Viewer.SceneDesc {
             this.gameInfo, context.dataFetcher, materialFactory, Promise.resolve(texFetcher)
         );
 
-        // The mapRenderer creates the Sky inside here now that envfxMan exists
         await mapRenderer.create(mapSceneInfo, this.gameInfo, context.dataFetcher, blockFetcher);
 
-        // --- THE AUTOMATED SLIDER DRAG TO FORCE SKY LOAD ---
         setTimeout(async () => {
             const mr = mapRenderer as any;
             if (mr.envSelect) {
@@ -2155,6 +2184,99 @@ export class CombinedOldIceMtSceneDesc implements Viewer.SceneDesc {
                     if (mr.envSelect.onvalue) {
                         await mr.envSelect.onvalue(val);
                     }
+                    await new Promise(resolve => setTimeout(resolve, 16)); 
+                }
+            }
+        }, 10);
+
+        const matrix = mat4.create();
+        mat4.rotateY(matrix, matrix, Math.PI * 3 / 4);
+        mapRenderer.setMatrix(matrix);
+
+        return mapRenderer;
+    }
+}
+
+export class YetiSceneDesc implements Viewer.SceneDesc {
+    constructor(
+        public id: string, 
+        public name: string, 
+        private gameInfo: GameInfo = DP_GAME_INFO
+    ) {}
+
+    public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+        const musicState = (window as any).musicState;
+        if (musicState.audio) { musicState.audio.pause(); musicState.audio.currentTime = 0; musicState.audio = null; }
+
+        console.log(`Creating manual grid scene for ${this.name}...`);
+
+        const animController = new SFAAnimationController();
+        const materialFactory = new MaterialFactory(device);
+
+        const B = (absoluteId: number): BlockInfo => {
+            return {
+                mod: Math.floor(absoluteId / 64), 
+                sub: absoluteId % 64              
+            };
+        };
+
+        const LAYOUT: (BlockInfo | null)[][] = [
+     [B(0x01e2),B(0x01e3),null,null,null,null,null,null,null,null,],        
+    [null,B(0x01e4),null,null,null,null,null,null,null,null,],         
+   [null,B(0x01e5),B(0x01e6), B(0x01e7),B(0x01e8),null,null,null,null,null,],          
+  [null,null,B(0x01e9), B(0x01ea),B(0x01eb),null,null,null,null,null,],           
+ [null,null,null, null,B(0x01ec),B(0x01ed),B(0x01ee),null,B(0x01Ef),null,],
+ [ null,null,null, null,null,null,B(0x01F0),B(0x01F1), B(0x01F2),null,],
+ [ null,null,null, null,B(0x01F3),B(0x01F4),B(0x01F5),B(0x01F6), B(0x01F7),null,],
+ [null,null,null, null,B(0x01F9),B(0x01Fa), B(0x01Fb), B(0x01Fc), ], 
+ [null,null,null, null,null,B(0x01Fd), B(0x01Fe),],
+        ];
+        // ==========================================
+
+        const numRows = LAYOUT.length;
+        const numCols = LAYOUT[0].length;
+
+        const mapSceneInfo: MapSceneInfo = {
+            getNumCols: () => numCols,
+            getNumRows: () => numRows,
+            getBlockInfoAt: (col: number, row: number): BlockInfo | null => {
+                if (row >= numRows || col >= numCols) return null;
+                return LAYOUT[row][col] || null;
+            },
+            getOrigin: () => [0, 0]
+        };
+
+        const mapRenderer = new MapSceneRenderer(context, animController, materialFactory);
+        mapRenderer.mapNum = this.id; 
+
+        const texFetcher = await SFATextureFetcher.create(this.gameInfo, context.dataFetcher, false);
+        texFetcher.setModelVersion(ModelVersion.DinosaurPlanet);
+
+
+        const fakeWorld: any = {
+            renderCache: (materialFactory as any).cache ?? (materialFactory as any).getCache?.(),
+            gameInfo: this.gameInfo,
+            worldLights: mapRenderer.worldLights,
+            resColl: { texFetcher: texFetcher },
+            objectMan: { createObjectInstance: () => ({ destroy: () => {}, addRenderInsts: () => {} }) }
+        };
+
+        try {
+            mapRenderer.envfxMan = await EnvfxManager.create(fakeWorld as World, context.dataFetcher);
+            fakeWorld.envfxMan = mapRenderer.envfxMan; 
+            mapRenderer.envfxMan.loadEnvfx(95); 
+        } catch (e) { console.warn("Failed to load ENVFXACT.bin", e); }
+        // --------------------------------------
+
+        const blockFetcher = await DPBlockFetcher.create(this.gameInfo, context.dataFetcher, materialFactory, Promise.resolve(texFetcher));
+        await mapRenderer.create(mapSceneInfo, this.gameInfo, context.dataFetcher, blockFetcher);
+
+        setTimeout(async () => {
+            const mr = mapRenderer as any;
+            if (mr.envSelect) {
+                for (const val of [95, 96, 97, 98, 99, 100]) {
+                    mr.envSelect.setValue(val);
+                    if (mr.envSelect.onvalue) await mr.envSelect.onvalue(val);
                     await new Promise(resolve => setTimeout(resolve, 16)); 
                 }
             }
