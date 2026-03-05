@@ -637,10 +637,13 @@ protected override addWorldRenderInsts(device: GfxDevice, renderInstManager: Gfx
                 this.modanim = this.modanimColl.getModanim(this.modelNum);
                 this.amap = this.amapColl.getAmap(this.modelNum);
 
-                this.modelInst = resolvedInst;
-                (this.modelInst as any).modanim = this.modanim;
-                (this.modelInst as any).amap = this.amap;
-
+      this.modelInst = resolvedInst;
+                if (this.modelInst) {
+                    // modanim is read directly by ModelExhibitRenderer, so we attach it here
+                    (this.modelInst as any).modanim = this.modanim; 
+                    // AMAP must be passed to the model instance properly!
+                    if (this.amap) this.modelInst.setAmap(this.amap);
+                }
                 if (this.modelSelect?.elem instanceof HTMLInputElement)
                     this.modelSelect.elem.value = this.modelNum.toString();
 
@@ -705,10 +708,13 @@ protected override addWorldRenderInsts(device: GfxDevice, renderInstManager: Gfx
                 this.modanim = this.modanimColl.getModanim(this.modelNum);
                 this.amap = this.amapColl.getAmap(this.modelNum);
 
-                this.modelInst = resolvedInst;
-                (this.modelInst as any).modanim = this.modanim;
-                (this.modelInst as any).amap = this.amap;
-
+this.modelInst = resolvedInst;
+                if (this.modelInst) {
+                    // modanim is read directly by ModelExhibitRenderer, so we attach it here
+                    (this.modelInst as any).modanim = this.modanim; 
+                    // AMAP must be passed to the model instance properly!
+                    if (this.amap) this.modelInst.setAmap(this.amap);
+                }
                 if (this.modelSelect?.elem instanceof HTMLInputElement)
                     this.modelSelect.elem.value = this.modelNum.toString();
 
@@ -990,10 +996,10 @@ export class DPModelExhibitSceneDesc implements Viewer.SceneDesc {
 
         const animController = new SFAAnimationController();
         
-        // DUMMY ANIMATION COLLECTIONS
-        const dummyModanimColl = { getModanim: () => null } as any;
-        const dummyAmapColl = { getAmap: () => null } as any;
-        const dummyAnimColl = { getAnim: () => null } as any;
+        // THE FIX: Load the REAL Dinosaur Planet animation collections!
+        const modanimColl = await ModanimCollection.create(this.gameInfo, context.dataFetcher);
+        const amapColl = await AmapCollection.create(this.gameInfo, context.dataFetcher);
+        const animColl = await AnimCollection.create(this.gameInfo, context.dataFetcher, ['']);
 
         const texFetcher = await SFATextureFetcher.create(this.gameInfo, context.dataFetcher, true);
         await texFetcher.loadSubdirs([''], context.dataFetcher);
@@ -1007,9 +1013,9 @@ export class DPModelExhibitSceneDesc implements Viewer.SceneDesc {
             materialFactory, 
             texFetcher, 
             modelFetcher as any, 
-            dummyAnimColl,    
-            dummyAmapColl,    
-            dummyModanimColl, 
+            animColl,       // Pass real Anim collection
+            amapColl,       // Pass real Amap collection
+            modanimColl,    // Pass real Modanim collection
             this.gameInfo, 
             ModelVersion.DinosaurPlanet
         );

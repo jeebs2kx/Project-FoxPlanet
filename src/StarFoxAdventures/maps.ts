@@ -1,8 +1,7 @@
 import * as Viewer from '../viewer.js';
 import * as UI from '../ui.js';
 import { Sky } from './Sky.js';
-import { ObjectManager } from './objects.js';
-import { GfxrGraphBuilder, GfxrRenderTargetID, GfxrRenderTargetDescription } from '../gfx/render/GfxRenderGraph.js';
+import { ObjectManager, ObjectInstance } from './objects.js';import { GfxrGraphBuilder, GfxrRenderTargetID, GfxrRenderTargetDescription } from '../gfx/render/GfxRenderGraph.js';
 import { getSubdir } from './resource.js';
 import { DataFetcher } from '../DataFetcher.js';
 import { GfxRenderInstManager } from "../gfx/render/GfxRenderInstManager.js";
@@ -11,15 +10,12 @@ import { GfxDevice } from '../gfx/platform/GfxPlatform.js';
 import { SceneContext } from '../SceneBase.js';
 import { mat4, vec3 } from 'gl-matrix';
 import { nArray } from '../util.js';
-import { White, colorCopy, colorNewFromRGBA } from '../Color.js';
+import { dataSubarray } from './util.js';import { White, colorCopy, colorNewFromRGBA } from '../Color.js';
 import { ModelVersion, loadModel } from "./modelloader.js";import { SFARenderer, SceneRenderContext, SFARenderLists } from './render.js';
 import { BlockFetcher, SFABlockFetcher, SwapcircleBlockFetcher, AncientBlockFetcher, EARLYDFPT, EARLYFEAR, EARLYDUPBLOCKFETCHER, EARLY1BLOCKFETCHER, EARLY2BLOCKFETCHER, EARLY3BLOCKFETCHER, EARLY4BLOCKFETCHER, DPBlockFetcher  } from './blocks.js';
 import { SFA_GAME_INFO, SFADEMO_GAME_INFO, DP_GAME_INFO, GameInfo } from './scenes.js';
 import { MaterialFactory } from './materials.js';
-import { SFAAnimationController } from './animation.js';
-import { SFATextureFetcher, FakeTextureFetcher } from './textures.js';
-import { Model, ModelRenderContext, ModelInstance } from './models.js';
-import { World } from './world.js';
+import { SFAAnimationController, ModanimCollection, AmapCollection, AnimCollection } from './animation.js';import { SFATextureFetcher, FakeTextureFetcher, TextureFetcher } from './textures.js';import { Model, ModelRenderContext, ModelInstance, ModelFetcher, ModelShapes } from './models.js';import { World } from './world.js';
 import { EnvfxManager } from './envfx.js';
 
 import { AABB } from '../Geometry.js';
@@ -114,12 +110,63 @@ if (!(window as any).musicState) {
         audio: null as HTMLAudioElement | null
     };
 }
+const DP_DEV_TYPE_NUMS = new Set<number>([
+  // Add DP object type numbers here once you identify them
+  // Example:
+  // 0x1234,
+]);
+
+const DP_DEV_NAME_KEYWORDS = [
+  'dummy', 'arrow', 'grnd', 'ground', 'anim',
+  'trigger', 'checkpoint', 'curve', 'spline',
+  'path', 'waypoint', 'marker',
+
+  // DP huge helpers
+  'background', 'backgroun',
+];
+
 const DP_ENV_DEFAULT = { timeOfDay: 6, envfxIndex: 95 };
 export interface BlockInfo {
     mod: number;
     sub: number;
 }
+// ===================== DP SCALE OVERRIDES (DP ONLY) =====================
+// Multiply the OBJECTS.bin scale by these factors for specific objects.
+// Prefer MODEL-based overrides when the “wrong huge” case is actually a wrong model.
+const DP_SCALE_MULT_BY_TYPE: Record<number, number> = {
+    // typeNum (as read from MAPS object record)
+    // Example:
+     0x03FA: 0.15, 0x0071: 0.05, 0x036A: 0.15, 0x008A: 0.10, 0x03A4: 0.50,
+     0x0178: 0.10, 0x0524: 0.30, 0x0523: 0.30, 0x020D: 0.30, 0x0076: 0.10,
+     0x0358: 0.30, 0x0488: 10,
+};
 
+const DP_SCALE_MULT_BY_MODEL: Record<number, number> = {
+    // modelId (first model in objType.modelNums)
+    // WallTorch model from your hex dump looks like 0x0195:
+    0x0195: 0.25, // <-- tweak this (0.1, 0.2, 0.5 etc.)
+};
+
+function dpClampScale(s: number): number {
+    if (!Number.isFinite(s)) return 1.0;
+    if (s < 0.0001) return 0.0001;
+    if (s > 50.0) return 50.0;
+    return s;
+}
+
+function dpGetScaleMultiplier(typeNum: number, ot: any): number {
+    // 1) per-type override (strongest, easiest)
+    const byType = DP_SCALE_MULT_BY_TYPE[typeNum & 0xFFFF];
+    if (byType !== undefined) return byType;
+
+    // 2) per-model override (good when “huge” is really “wrong model”)
+    const m0 = (ot?.modelNums?.[0] ?? -1) | 0;
+    const byModel = DP_SCALE_MULT_BY_MODEL[m0];
+    if (byModel !== undefined) return byModel;
+
+    return 1.0;
+}
+// =================== end DP SCALE OVERRIDES (DP ONLY) ===================
 export interface MapInfo {
     mapsBin: DataView;
     locationNum: number;
@@ -129,6 +176,8 @@ export interface MapInfo {
     blockRows: number;
     originX: number;
     originZ: number;
+    objectsOffset?: number;
+    objectsSize?: number;
 }
 
 export function getBlockInfo(mapsBin: DataView, mapInfo: MapInfo, x: number, y: number): BlockInfo | null {
@@ -146,6 +195,14 @@ function getMapInfo(mapsTab: DataView, mapsBin: DataView, locationNum: number): 
     const infoOffset = mapsTab.getUint32(offs + 0x0);
     const blockTableOffset = mapsTab.getUint32(offs + 0x4);
 
+    // Dinosaur Planet objects are located at offset 0x10 in the MAPS.tab entry
+    let objectsOffset = 0;
+    let objectsSize = 0;
+    if (offs + 0x14 <= mapsTab.byteLength) {
+        objectsOffset = mapsTab.getUint32(offs + 0x10);
+        objectsSize = mapsTab.getUint32(offs + 0x14) - objectsOffset;
+    }
+
     const blockCols = mapsBin.getUint16(infoOffset + 0x0);
     const blockRows = mapsBin.getUint16(infoOffset + 0x2);
 
@@ -153,6 +210,8 @@ function getMapInfo(mapsTab: DataView, mapsBin: DataView, locationNum: number): 
         mapsBin, locationNum, infoOffset, blockTableOffset, blockCols, blockRows,
         originX: mapsBin.getInt16(infoOffset + 0x4),
         originZ: mapsBin.getInt16(infoOffset + 0x6),
+        objectsOffset,
+        objectsSize,
     };
 }
 
@@ -211,8 +270,450 @@ interface MapSceneInfo {
     getNumRows(): number;
     getBlockInfoAt(col: number, row: number): BlockInfo | null;
     getOrigin(): number[];
+    getObjectsData?(): DataView | null;
+}
+interface MapInstanceOptions {
+    objectManager?: ObjectManager;
+    worldOffsetX?: number;
+    worldOffsetZ?: number;
+    apply135Rotation?: boolean;
+
+    // used by DP object placement only
+    globalOffsetX?: number;
+    globalOffsetZ?: number;
+    dpMapScene?: boolean; // true only from DPMapSceneDesc
+}
+function translateModelId(modelInd: DataView, rawId: number): number {
+    let index = rawId | 0; if (index < 0) index = -index;
+    if (modelInd && index * 2 + 2 <= modelInd.byteLength) {
+        const realId = modelInd.getUint16(index * 2);
+        return realId !== 0xFFFF ? realId : index;
+    }
+    return index;
+}
+function dpFindVariantIndex(objParams: DataView, models: number[]): number | null {
+    const n = models.length;
+    if (n <= 1) return null;
+
+
+
+    // B) Direct embedded model ID (MOST reliable) -- IGNORE < 0x0100 to avoid Krystal/flags/etc
+    for (let o = 0; o + 2 <= objParams.byteLength; o += 2) {
+        const v = objParams.getUint16(o);
+        if (v >= 0x0100) {
+            const idx = models.indexOf(v);
+            if (idx >= 0) return idx;
+        }
+    }
+    for (let o = 0; o + 4 <= objParams.byteLength; o += 4) {
+        const v = objParams.getUint32(o);
+        if (v >= 0x0100) {
+            const idx = models.indexOf(v);
+            if (idx >= 0) return idx;
+        }
+    }
+
+    // C) 0x7F00/0x7F01/... => low byte is variant index
+    for (let o = 0; o + 2 <= objParams.byteLength; o += 2) {
+        const v = objParams.getUint16(o);
+        if ((v & 0xFF00) === 0x7F00) {
+            const idx = (v & 0x00FF);
+            if (idx >= 0 && idx < n) return idx;
+        }
+    }
+
+    // D) 0x0100 / 0x0200 ... => high byte is variant index
+    for (let o = 0; o + 2 <= objParams.byteLength; o += 2) {
+        const v = objParams.getUint16(o);
+        if ((v & 0x00FF) === 0x0000) {
+            const idx = (v >>> 8);
+            if (idx > 0 && idx < n) return idx;
+        }
+    }
+
+    return null;
+}
+function buildRomToScnMap(objIdx: DataView): Map<number, number[]> {
+    const romToScn = new Map<number, number[]>();
+
+    const count = (objIdx.byteLength / 2) | 0;
+    for (let scn = 0; scn < count; scn++) {
+        const rom = objIdx.getUint16(scn * 2);
+        if (rom === 0xFFFF) continue;
+        let arr = romToScn.get(rom);
+        if (!arr) romToScn.set(rom, arr = []);
+        arr.push(scn);
+    }
+
+    for (const arr of romToScn.values())
+        arr.sort((a, b) => a - b);
+
+    return romToScn;
 }
 
+function dpExtractModelNums(objBin: DataView, startOffs: number, defSize: number): number[] {
+    const defData = new Uint8Array(objBin.buffer, objBin.byteOffset + startOffs, defSize);
+
+    // find first run of >=4 0xFF bytes
+    let ffEnd = -1;
+    let run = 0;
+    for (let i = 0; i < defSize; i++) {
+        if (defData[i] === 0xFF) {
+            run++;
+        } else {
+            if (run >= 4) { ffEnd = i; break; }
+            run = 0;
+        }
+    }
+    if (ffEnd < 0) return [];
+
+    const out: number[] = [];
+
+    // read u32 values after the FF run (these are usually model IDs, but sometimes include tiny junk like 0x0002)
+    for (let o = ffEnd; o + 4 <= defSize; o += 4) {
+        const v = objBin.getUint32(startOffs + o);
+
+        if (v === 0 || v === 0xFFFFFFFF) break;
+        if (v >= 0x4000) break; // stop before pointers/garbage
+
+        out.push(v | 0);
+        if (out.length >= 16) break;
+    }
+
+ // de-dupe, preserving order
+const uniq: number[] = [];
+for (const v of out) if (!uniq.includes(v)) uniq.push(v);
+
+return uniq;
+
+}
+function dpExtractModelNumsByPtrCount(objBin: DataView, startOffs: number, defSize: number): number[] {
+    // DP format:
+    //  - model list pointer at +0x08 (u32)
+    //  - model count at +0x54 (u8)  <-- NOT 0x55 like SFA
+    if (defSize < 0x58) return [];
+
+    const count = objBin.getUint8(startOffs + 0x54);
+    if (count === 0 || count > 32) return [];
+
+    const listOffs = objBin.getUint32(startOffs + 0x08);
+    if (listOffs === 0xFFFFFFFF || listOffs >= defSize) return [];
+
+    const out: number[] = [];
+    const base = startOffs + listOffs;
+
+    for (let i = 0; i < count; i++) {
+        const o = base + i * 4;
+        if (o + 4 > startOffs + defSize) break;
+
+        const v = objBin.getUint32(o);
+        if (v === 0 || v === 0xFFFFFFFF) break;
+
+        // DP model IDs are small ints (typically < 0x4000)
+        if (v < 0x4000) out.push(v | 0);
+    }
+
+    // de-dupe, preserving order
+    const uniq: number[] = [];
+    for (const v of out) if (!uniq.includes(v)) uniq.push(v);
+    return uniq;
+}
+function applyDPObjectManagerPatch(objectManager: ObjectManager, objTab: DataView, objBin: DataView, objIdx: DataView, modelInd: DataView | null) {
+    const origGetObjectType = objectManager.getObjectType.bind(objectManager);
+      const romToScn = buildRomToScnMap(objIdx);
+      // DP: OBJECTS.tab is an offset table terminated by 0xFFFFFFFF (then MIPS code).
+const dpMaxRomType = (() => {
+    const count = (objTab.byteLength / 4) | 0;
+    for (let i = 0; i < count; i++) {
+        if (objTab.getUint32(i * 4) === 0xFFFFFFFF)
+            return i - 1;
+    }
+    return count - 1;
+})();
+    (objectManager as any)._dpRomToScn = romToScn;
+    objectManager.getObjectType = function (typeNum: number, skipObjindex: boolean = false) {
+        
+        // 1. USE OBJINDEX: Translates Map Placements correctly
+// 1) DP: Translate SCN -> ROM via OBJINDEX, but NEVER allow walking past the OBJECTS.tab offset table.
+// 1) DP: Translate SCN -> ROM via OBJINDEX, but NEVER allow walking past the OBJECTS.tab offset table.
+let realType = typeNum;
+
+if (!skipObjindex) {
+    if (typeNum * 2 + 2 <= objIdx.byteLength) {
+        const translated = objIdx.getUint16(typeNum * 2);
+
+        // Only accept translated IDs that land inside the real ROM-type range.
+        if (translated !== 0xFFFF && translated <= dpMaxRomType) {
+            realType = translated;
+        } else {
+            // If we can't translate and the id is out of range, force a harmless fallback.
+            if (typeNum > dpMaxRomType)
+                realType = 0;
+        }
+    } else {
+        // Out of OBJINDEX range entirely
+        if (typeNum > dpMaxRomType)
+            realType = 0;
+    }
+}
+
+        const objType = origGetObjectType(realType, true);
+                (objType as any)._dpRomId = realType;
+        // --- DP DEV OBJECT TAGGING ---
+// Tag by raw map type (typeNum), translated type (realType), and/or model id(s).
+const DEV_TYPE_IDS = new Set<number>([
+    0x004C, 0x00EC, 0x024F, 0x0157, 0x00D4, 0x01CA, 0x0006, 0x0008, 0x000D, 0x000E,0x000F,
+    0x0014, 0x0015, 0x001E, 0x0026, 0x002C,0x0037, 0x003E, 0x003F, 0x0046,
+     0x0053, 0x0058, 0x0060, 0x0066, 0x0070, 0x0075, 0x007B, 0x00A0,0x00A7, 0x00DD,
+     0x0130, 0x0133, 0x0160, 0x019B, 0x01A0, 0x01B3, 0x01F1, 0x0222, 0x022C, 0x024F,
+     0x0263, 0x0265, 0x027E, 0x02C3, 0x02E3, 0x02F0, 0x032F, 0x0331, 0x0349, 0x0354, 0x035E,
+     0x0377, 0x0384, 0x0386, 0x039E, 0x03B6, 0x03F0, 0x0432, 0x0437, 0x047A, 0x04A8,
+     0x04BD, 0x04C0, 0x04C6, 0x04E7, 0x054F, 0x0572,  0x058D, 0x059A, 0x054E, 0x55D,
+]);
+
+const DEV_MODEL_IDS = new Set<number>([
+     // from your log (cube/arrow/etc)
+    // add more here...
+]);
+
+const scnId = typeNum & 0xFFFF;
+
+// SCN IDs only (pre-OBJINDEX), avoids collisions like 0x004C
+if (DEV_TYPE_IDS.has(scnId))
+    (objType as any).isDevObject = true;
+
+                // Tag dev by model IDs (ONLY AFTER modelNums is populated)
+                for (const m of objType.modelNums) {
+                    if (DEV_MODEL_IDS.has(m | 0)) {
+                        (objType as any).isDevObject = true;
+                        break;
+                    }
+                }
+        if (!(objType as any)._dpTranslated) {
+            if (realType * 4 + 8 <= objTab.byteLength) {
+const startOffs = objTab.getUint32(realType * 4);
+
+// nextOffs can hit 0xFFFFFFFF (DP table terminator) or garbage
+let nextOffs = 0xFFFFFFFF;
+if ((realType + 1) * 4 + 4 <= objTab.byteLength)
+    nextOffs = objTab.getUint32((realType + 1) * 4);
+
+// HOIST so later code (dpExtractModelNums) can see it
+let defSize = 0;
+
+// Validate start offset before any reads/slices
+if (startOffs === 0xFFFFFFFF || startOffs >= objBin.byteLength) {
+    objType.scale = 1.0;
+    objType.modelNums = [];
+    // DP: Object name strings live at +0x60 (NOT +0x91 like SFA).
+if (!(objType as any)._dpNameFixed) {
+    let nm = '';
+    const base = startOffs + 0x60;
+    if (base < objBin.byteLength) {
+        for (let o = base; o < objBin.byteLength; o++) {
+            const c = objBin.getUint8(o);
+            if (c === 0) break;
+            if (c >= 0x20 && c <= 0x7E)
+                nm += String.fromCharCode(c);
+        }
+    }
+
+    if (nm.length) {
+        objType.name = nm;
+
+        // Auto-tag huge background helpers as dev objects so they don’t show unless toggled.
+        const lo = nm.toLowerCase();
+        if (lo.includes('background') || lo.includes('backgroun'))
+            (objType as any).isDevObject = true;
+    }
+
+    (objType as any)._dpNameFixed = true;
+}
+    nextOffs = startOffs; // keep footer logic harmless
+} else {
+    // Clamp nextOffs if it's terminator/garbage/backwards
+    if (nextOffs === 0xFFFFFFFF || nextOffs > objBin.byteLength || nextOffs < startOffs)
+        nextOffs = objBin.byteLength;
+
+    defSize = nextOffs - startOffs;
+
+    // DP scale at +0x04, clamp to stop “blown up huge” objects
+    const rawScale = objBin.getFloat32(startOffs + 0x04);
+    objType.scale = (Number.isFinite(rawScale) && rawScale > 0.0 && rawScale <= 10.0) ? rawScale : 1.0;
+
+    objType.modelNums = [];
+}
+                
+                // 2. SILENCE SETUP ERRORS: Force class to 0 (Generic Scenery)
+                let dll_id = objBin.getUint16(startOffs + 0x58), objClass = dll_id;
+                if (dll_id >= 0x8000) objClass = (dll_id - 0x8000) + 209;
+                else if (dll_id >= 0x2000) objClass = (dll_id - 0x2000) + 186;
+                else if (dll_id >= 0x1000) objClass = (dll_id - 0x1000) + 104;
+                objType.objClass = objClass;
+
+                // 3. Extract ALL model IDs (supports duplicate/variant objects)
+// 3. Extract model IDs (DP: use ptr+count first; fallback to heuristic)
+objType.modelNums = [];
+
+let models = dpExtractModelNumsByPtrCount(objBin, startOffs, defSize);
+if (models.length === 0)
+    models = dpExtractModelNums(objBin, startOffs, defSize);
+
+for (const m of models)
+    objType.modelNums.push(m);
+
+                // Fallback: if extraction fails, do the old footer poke
+                if (objType.modelNums.length === 0) {
+                    for (let i = 2; i <= 12; i += 2) {
+                        const val = objBin.getUint16(nextOffs - i);
+                        if (val >= 3 && val < 0x4000 && val !== 0xFFFF) {
+                            objType.modelNums.push(val);
+                            break;
+                        }
+                    }
+                }
+            }
+            (objType as any)._dpTranslated = true;
+        }
+        return objType;
+    };
+
+// ---- DP variant model picker (SCN_ID / param selects correct model variant) ----
+// ---- DP variant model picker (instance params 0x64xx + SCN_ID mapping) ----
+const origCreate = (objectManager as any).createObjectInstance?.bind(objectManager);
+if (origCreate) {
+    (objectManager as any).createObjectInstance = function(typeNum: number, objParams: DataView, pos: any, mountNow: boolean) {
+        const ot = (this as any).getObjectType(typeNum, false);
+        const models: number[] = (ot as any).modelNums ?? [];
+
+        // Nothing to pick from.
+        if (models.length <= 1)
+            return origCreate(typeNum, objParams, pos, mountNow);
+
+const pick = dpFindVariantIndex(objParams, models);
+if (pick !== null && pick > 0 && pick < models.length) {
+    const tmp = models[0];
+    models[0] = models[pick];
+    models[pick] = tmp;
+    try {
+        return origCreate(typeNum, objParams, pos, mountNow);
+    } finally {
+        models[pick] = models[0];
+        models[0] = tmp;
+    }
+}
+
+        // 2) Fallback: SCN_ID position among duplicates for same ROM_ID (sun/moon pads etc).
+        const romId: number | undefined = (ot as any)._dpRomId;
+        const romToScn: Map<number, number[]> | undefined = (this as any)._dpRomToScn;
+        if (romId !== undefined && romToScn) {
+            const scnList = romToScn.get(romId);
+            if (scnList) {
+                const idx = scnList.indexOf(typeNum);
+                if (idx >= 0 && idx < models.length && idx !== 0) {
+                    const tmp = models[0];
+                    models[0] = models[idx];
+                    models[idx] = tmp;
+                    try {
+                        return origCreate(typeNum, objParams, pos, mountNow);
+                    } finally {
+                        models[idx] = models[0];
+                        models[0] = tmp;
+                    }
+                }
+            }
+        }
+
+try {
+    return origCreate(typeNum, objParams, pos, mountNow);
+} catch (e) {
+    const msg = String((e as any)?.message ?? e);
+    if (e instanceof RangeError || msg.includes('outside the bounds')) {
+        console.warn(`[DP obj] create failed type=0x${typeNum.toString(16)} size=0x${objParams.byteLength.toString(16)} -> stub`, e);
+
+        const mf = (this as any).world?.resColl?.modelFetcher;
+        const modelId = (models[0] ?? 0) | 0;
+        const modelInst = mf?.createModelInstance ? mf.createModelInstance(modelId) : undefined;
+
+        return {
+            objType: ot,
+            modelInst,
+            position: vec3.create(),
+            yaw: 0,
+            mount() {},
+            destroy() {},
+        } as any;
+    }
+    throw e;
+}    };
+}
+
+}
+export class PreloadingDPModelFetcher {
+    private cache = new Map<number, Model>();
+    private modelInd: DataView | null = null;
+    private dummyModelInst: ModelInstance;
+
+public constructor(private gameInfo: GameInfo, private dataFetcher: DataFetcher, private texFetcher: TextureFetcher, private materialFactory: MaterialFactory) {
+        const dummyModel = new Model(ModelVersion.DinosaurPlanet);
+        dummyModel.hasFineSkinning = false;
+        // FIX: Provide a blank Shapes object to prevent the 'getAmap' crash
+        dummyModel.sharedModelShapes = new ModelShapes(dummyModel, new DataView(new ArrayBuffer(0)));
+        this.dummyModelInst = new ModelInstance(dummyModel);
+        
+        // FIX: Add these dummy functions so the engine doesn't crash on missing data
+        (this.dummyModelInst as any).setAmap = () => { };
+        (this.dummyModelInst as any).getAmap = () => null;
+    }
+
+    public async init() {
+        try {
+            const buffer = await this.dataFetcher.fetchData(`${this.gameInfo.pathBase}/MODELIND.bin`, { allow404: true });
+            this.modelInd = buffer.createDataView();
+        } catch (e) { }
+    }
+
+private getRealModelId(rawIndex: number): number {
+        let index = rawIndex | 0; if (index < 0) index = -index;
+        return index; // DO NOT USE MODELIND
+    
+     
+    }
+
+    public async preloadModels(modelIndices: number[]) {
+        const promises = modelIndices.map(async rawIndex => {
+            if (rawIndex === undefined || rawIndex === 0 || rawIndex === 0xFFFF || rawIndex === -1) return;
+            const realId = this.getRealModelId(rawIndex);
+            if (this.cache.has(realId)) return;
+            try {
+                const buffer = await this.dataFetcher.fetchData(`${this.gameInfo.pathBase}/uncompressed_models/${realId}.bin`, { allow404: true });
+                if (buffer.byteLength > 0) {
+                    this.cache.set(realId, loadModel(buffer.createDataView(), this.texFetcher, this.materialFactory, ModelVersion.DinosaurPlanet));
+                }
+            } catch (e) { }
+        });
+        await Promise.all(promises);
+    }
+
+public createModelInstance(rawIndex: number): ModelInstance {
+        const realId = this.getRealModelId(rawIndex);
+        const model = this.cache.get(realId);
+        
+        // FIX: If model is missing (index 0), use the dummy model so 'inst' is NEVER undefined
+        const inst = model ? new ModelInstance(model) : new ModelInstance(this.dummyModelInst.model);
+        
+        // FIX: Force a blank amap onto the instance to stop the skeletal system from crashing
+        if (!(inst as any).amap) {
+            (inst as any).amap = new DataView(new ArrayBuffer(0));
+        }
+        
+        // Attach blank functions just in case the engine version tries to call them directly
+        if (typeof (inst as any).setAmap !== 'function') (inst as any).setAmap = () => { };
+        if (typeof (inst as any).getAmap !== 'function') (inst as any).getAmap = () => new DataView(new ArrayBuffer(64));
+        
+        return inst;
+    }
+}
 interface BlockIter {
     x: number;
     z: number;
@@ -220,28 +721,101 @@ interface BlockIter {
 }
 
 const scratchMtx0 = mat4.create();
-
+const scratchObjMtx0 = mat4.create();
 export class MapInstance {
     public setBlockFetcher(blockFetcher: BlockFetcher) {
-  this.blockFetcher = blockFetcher;
-}
+        this.blockFetcher = blockFetcher;
+    }
     private matrix: mat4 = mat4.create(); // map-to-world
     private invMatrix: mat4 = mat4.create(); // world-to-map
     private numRows: number;
     private numCols: number;
     private blockInfoTable: (BlockInfo | null)[][] = []; // Addressed by blockInfoTable[z][x]
     private blocks: (ModelInstance | null)[][] = []; // Addressed by blocks[z][x]
+    public objects: ObjectInstance[] = []; // NEW: Array to store character and prop models
 
-    constructor(public info: MapSceneInfo, private blockFetcher: BlockFetcher, public world?: World) {
+    constructor(public info: MapSceneInfo, private blockFetcher: BlockFetcher, public mapOpts?: MapInstanceOptions, public world?: World) {
         this.numRows = info.getNumRows();
         this.numCols = info.getNumCols();
 
         for (let y = 0; y < this.numRows; y++) {
             const row: (BlockInfo | null)[] = [];
-            this.blockInfoTable.push(row);
             for (let x = 0; x < this.numCols; x++) {
-                const blockInfo = info.getBlockInfoAt(x, y);
-                row.push(blockInfo);
+                row.push(info.getBlockInfoAt(x, y));
+            }
+            this.blockInfoTable.push(row);
+        }
+
+// --- Dinosaur Planet Object Spawner ---
+// --- Dinosaur Planet Object Spawner ---
+        if (this.mapOpts?.objectManager && this.info.getObjectsData) {
+            const objData = this.info.getObjectsData();
+            if (objData) {
+                // 1. Get the Grid Offset we passed from DPMapSceneDesc
+                const globalOffsetX = (this.mapOpts as any).globalOffsetX || 0;
+                const globalOffsetZ = (this.mapOpts as any).globalOffsetZ || 0;
+
+                // 2. Get the Map's internal Origin (the 'ox/oz' from the header)
+                const [ox, oz] = this.info.getOrigin();
+
+                let offset = 0;
+                while (offset < objData.byteLength) {
+                    const size = objData.getUint8(offset + 2) * 4;
+                    if (size === 0) break;
+
+                    const objParams = dataSubarray(objData, offset, size);
+                    try {
+                        const objInst = this.mapOpts.objectManager.createObjectInstance(objParams.getUint16(0), objParams, [0, 0, 0], false);
+                        
+const typeNum = objParams.getUint16(0);
+(objInst as any)._dpTypeNum = typeNum;
+const trueX = objParams.getFloat32(0x08);
+const trueY = objParams.getFloat32(0x0C);
+const trueZ = objParams.getFloat32(0x10);
+
+// position (keep your working origin fix)
+objInst.position[0] = trueX + (ox * 640) - globalOffsetX;
+objInst.position[1] = trueY;
+objInst.position[2] = trueZ + (oz * 640) - globalOffsetZ;
+
+// --- DP ROTATION FIX ---
+// Most objects use +0x06, but “tube-style” 36-byte records store yaw at +0x18 (your CD01 / A300 / 4202 case).
+let yawU = objParams.getUint16(0x06);
+
+if (objParams.byteLength >= 0x1A) {
+    const flags = objParams.getUint16(0x04);
+    const altYaw = objParams.getUint16(0x18);
+
+    // hard-fix DR_tube + a safe heuristic for other “extended” records
+    if (typeNum === 0x0450 || (((flags & 0x1000) !== 0) && altYaw !== 0 && altYaw !== 0xFFFF && yawU < 0x1000)) {
+        yawU = altYaw;
+    }
+}
+
+objInst.yaw = (yawU === 0xFFFF) ? 0 : (yawU / 0x10000) * (Math.PI * 2);
+
+// --- DP SCALE FIX ---
+// Pull the scale from OBJECTS.bin-derived object type and store it on the instance for rendering.
+const ot = this.mapOpts.objectManager.getObjectType(typeNum, false);
+
+// base scale from OBJECTS.bin + optional per-object multiplier
+const baseS = (ot as any).scale ?? 1.0;
+const mult  = dpGetScaleMultiplier(typeNum, ot);
+const s     = dpClampScale(baseS * mult);
+
+(objInst as any)._dpScale = s;
+
+// Optional: log when an override actually triggers (helps you find the right factor)
+// if (mult !== 1.0) {
+//     console.log(`[DP scale override] type=0x${typeNum.toString(16)} name="${String((ot as any).name ?? '')}" model0=0x${(((ot as any).modelNums?.[0] ?? 0) | 0).toString(16)} base=${baseS} mult=${mult} => ${s}`);
+// }
+
+objInst.mount();
+this.objects.push(objInst);
+                        
+                    } catch (e) { }
+                    offset += size;
+                }
             }
         }
     }
@@ -274,102 +848,100 @@ export class MapInstance {
         const bx = Math.floor(x / 640);
         const bz = Math.floor(z / 640);
         const block = this.blocks[bz][bx];
-        if (block === undefined) {
-            return null;
-        }
-        return block;
+        return block === undefined ? null : block;
     }
 
 public addRenderInsts(
-  device: GfxDevice,
-  renderInstManager: GfxRenderInstManager,
-  renderLists: SFARenderLists,
-  modelCtx: ModelRenderContext,
-  lodStride: number = 1,
+        device: GfxDevice,
+        renderInstManager: GfxRenderInstManager,
+        renderLists: SFARenderLists,
+        modelCtx: ModelRenderContext,
+        lodStride: number = 1,
+    ) {
+        const prevCull = modelCtx.cullByAabb;
+        if (prevCull === undefined)
+            modelCtx.cullByAabb = false;
 
-) {
-  const prevCull = modelCtx.cullByAabb;
+        for (let b of this.iterateBlocks()) {
+            if (lodStride > 1 && ((b.x % lodStride) !== 0 || (b.z % lodStride) !== 0))
+                continue;
 
-  // Only force-disable if the caller hasn't decided.
-  if (prevCull === undefined)
-    modelCtx.cullByAabb = false;
-
-for (let b of this.iterateBlocks()) {
-  // Cheap LOD: far maps render every Nth block.
-  if (lodStride > 1) {
-    if ((b.x % lodStride) !== 0 || (b.z % lodStride) !== 0)
-      continue;
-  }
-
-  mat4.fromTranslation(scratchMtx0, [640 * b.x, 0, 640 * b.z]);
-  mat4.mul(scratchMtx0, this.matrix, scratchMtx0);
-  b.block.addRenderInsts(device, renderInstManager, modelCtx, renderLists, scratchMtx0);
-}
-
-  modelCtx.cullByAabb = prevCull;
-}
-
-
-public async reloadBlocks(dataFetcher: DataFetcher) {
-    this.clearBlocks();
-
-    const overlay = document.createElement('div');
-    overlay.style.cssText = `
-        position: fixed; bottom: 20px; right: 20px; 
-        padding: 15px 25px; background: rgba(0, 40, 80, 0.9); 
-        color: #00d0ff; font-family: 'Segoe UI', Tahoma, sans-serif; 
-        border: 2px solid #00d0ff; border-radius: 5px; 
-        z-index: 10000; box-shadow: 0 0 15px rgba(0, 200, 255, 0.5);
-        font-weight: bold; text-transform: uppercase; letter-spacing: 1px;
-    `;
-    overlay.innerText = 'Initializing...';
-    document.body.appendChild(overlay);
-
-    let total = 0;
-    let completed = 0;
-
-    for (let z = 0; z < this.numRows; z++) {
-        this.blocks[z] = new Array(this.numCols).fill(null);
-        for (let x = 0; x < this.numCols; x++) {
-            if (this.blockInfoTable[z][x])
-                total++;
+            mat4.fromTranslation(scratchMtx0, [640 * b.x, 0, 640 * b.z]);
+            mat4.mul(scratchMtx0, this.matrix, scratchMtx0);
+            b.block.addRenderInsts(device, renderInstManager, modelCtx, renderLists, scratchMtx0);
         }
+
+for (let obj of this.objects) {
+    const ot = (obj as any).objType;
+    const typeNum = (obj as any)._dpTypeNum as number | undefined;
+
+    const n = String(ot?.name ?? ot?.objName ?? '').toLowerCase();
+
+    const isDev =
+        !!ot?.isDevObject ||
+        (typeNum !== undefined && DP_DEV_TYPE_NUMS.has(typeNum)) ||
+        DP_DEV_NAME_KEYWORDS.some((k) => n.includes(k));
+
+    if (isDev && !(modelCtx as any).showDevObjects)
+        continue;
+
+    const mi = (obj as any).modelInst as ModelInstance | undefined;
+    if (!mi) {
+        obj.addRenderInsts(device, renderInstManager, renderLists, modelCtx as any);
+        continue;
     }
 
-    const tasks: Promise<void>[] = [];
+    const s = (obj as any)._dpScale ?? 1.0;
 
-    for (let z = 0; z < this.numRows; z++) {
-        for (let x = 0; x < this.numCols; x++) {
-            const blockInfo = this.blockInfoTable[z][x];
-            if (!blockInfo) continue;
+    mat4.fromTranslation(scratchObjMtx0, obj.position);
+    mat4.rotateY(scratchObjMtx0, scratchObjMtx0, obj.yaw);
+    if (s !== 1.0) mat4.scale(scratchObjMtx0, scratchObjMtx0, [s, s, s]);
 
-            const task = this.blockFetcher.fetchBlock(blockInfo.mod, blockInfo.sub, dataFetcher)
-.then(model => {
-    this.blocks[z][x] = model ? new ModelInstance(model) : null;
-    completed++;
-    overlay.innerText =
-        `Synchronizing Map Data: ${Math.round((completed / total) * 100)}%`;
-})
-.catch(() => {
-    this.blocks[z][x] = null;
-    completed++;
-    overlay.innerText =
-        `Synchronizing Map Data: ${Math.round((completed / total) * 100)}%`;
-});
+    // apply map->world (important if you ever translate DP maps later)
+    mat4.mul(scratchObjMtx0, this.matrix, scratchObjMtx0);
 
-            tasks.push(task);
-        }
+    mi.addRenderInsts(device, renderInstManager, modelCtx as any, renderLists, scratchObjMtx0);
+}
+
+        modelCtx.cullByAabb = prevCull;
     }
 
-    await Promise.all(tasks);
+public update(viewerInput: Viewer.ViewerRenderInput) {
+        // Removed the object update loop to disable animations
+    }
 
-    document.body.removeChild(overlay);
-}
+    public async reloadBlocks(dataFetcher: DataFetcher) {
+        this.clearBlocks();
+        for (let z = 0; z < this.numRows; z++) {
+            this.blocks[z] = new Array(this.numCols).fill(null);
+        }
+
+        const tasks: Promise<void>[] = [];
+        for (let z = 0; z < this.numRows; z++) {
+            for (let x = 0; x < this.numCols; x++) {
+                const blockInfo = this.blockInfoTable[z][x];
+                if (!blockInfo) continue;
+
+                tasks.push(this.blockFetcher.fetchBlock(blockInfo.mod, blockInfo.sub, dataFetcher)
+                    .then(model => {
+                        this.blocks[z][x] = model ? new ModelInstance(model) : null;
+                    })
+                    .catch(() => {
+                        this.blocks[z][x] = null;
+                    }));
+            }
+        }
+        await Promise.all(tasks);
+    }
 
     public destroy(device: GfxDevice) {
         for (let row of this.blocks) {
             for (let model of row)
                 model?.destroy(device);
+        }
+        // NEW: Cleanup objects when map is destroyed
+        for (let obj of this.objects) {
+            obj.destroy(device);
         }
     }
 }
@@ -383,7 +955,7 @@ export async function loadMap(gameInfo: GameInfo, dataFetcher: DataFetcher, mapN
 
     const mapInfo = getMapInfo(mapsTab.createDataView(), mapsBin.createDataView(), mapNum);
     const blockTable = getBlockTable(mapInfo);
-    return {
+return {
         getNumCols() { return mapInfo.blockCols; },
         getNumRows() { return mapInfo.blockRows; },
         getBlockInfoAt(col: number, row: number): BlockInfo | null {
@@ -391,6 +963,13 @@ export async function loadMap(gameInfo: GameInfo, dataFetcher: DataFetcher, mapN
         },
         getOrigin(): number[] {
             return [mapInfo.originX, mapInfo.originZ];
+        },
+        // ADD THIS BLOCK
+        getObjectsData(): DataView | null {
+            if (mapInfo.objectsOffset !== undefined && mapInfo.objectsSize !== undefined && mapInfo.objectsSize > 0) {
+                return dataSubarray(mapInfo.mapsBin, mapInfo.objectsOffset, mapInfo.objectsSize);
+            }
+            return null;
         }
     };
 }
@@ -408,23 +987,21 @@ if (key.startsWith('early1_') || key.startsWith('dup_')) {
 }
 
 class MapSceneRenderer extends SFARenderer {
+    public showDevObjects = false;
     public mapNum: string | number = -1;
 public textureHolder: UI.TextureListHolder = { viewerTextures: [], onnewtextures: null };
     private blockFetcherFactory?: () => Promise<BlockFetcher>;
     private map: MapInstance;
     private dataFetcher!: DataFetcher;
-    // --- needed so slider handlers can rebuild sky immediately ---
 private currentGameInfo!: GameInfo;
 private currentTexFetcher: any;
 private pendingSkyRebuild = false;
-// -----------------------------------------------------------
 private rebuildSky(texFetcher: any, gameInfo: GameInfo): void {
     if (!this.envfxMan) return;
 
     if (this.sky) {
         this.sky.destroy(this.context.device);
-        this.sky = null;
-    }
+(this as any).sky = null;    }
 
     const fakeWorldForSky = {
         renderCache: (this.materialFactory as any).cache ?? (this.materialFactory as any).getCache?.(),
@@ -437,7 +1014,6 @@ private rebuildSky(texFetcher: any, gameInfo: GameInfo): void {
 
     this.sky = new Sky(fakeWorldForSky);
 }
-    // --- NEW ENVFX INTEGRATION ---
     public envfxMan: EnvfxManager | null = null;
     public worldLights: WorldLights = new WorldLights();
     private timeSelect?: UI.Slider;
@@ -524,43 +1100,40 @@ private rebuildSky(texFetcher: any, gameInfo: GameInfo): void {
         await this.map.reloadBlocks(this.dataFetcher);
     }
 
-public async create(info: MapSceneInfo, gameInfo: GameInfo, dataFetcher: DataFetcher, blockFetcher: BlockFetcher): Promise<Viewer.SceneGfx> {
-    this.dataFetcher = dataFetcher; 
-    this.map = new MapInstance(info, blockFetcher);
-    await this.map.reloadBlocks(dataFetcher);
+public async create(info: MapSceneInfo, gameInfo: GameInfo, dataFetcher: DataFetcher, blockFetcher: BlockFetcher, mapOpts?: MapInstanceOptions): Promise<Viewer.SceneGfx> {        this.dataFetcher = dataFetcher; 
+        // FIX: Pass mapOpts here so the loop in MapInstance actually spawns objects
+        this.map = new MapInstance(info, blockFetcher, mapOpts);
+        await this.map.reloadBlocks(dataFetcher);
 
-    const texFetcher = (blockFetcher as any).texFetcher;
-    this.currentGameInfo = gameInfo;
-this.currentTexFetcher = texFetcher;
-    if (texFetcher?.textureHolder)
-        this.textureHolder = texFetcher.textureHolder;
+        const texFetcher = (blockFetcher as any).texFetcher;
+        this.currentGameInfo = gameInfo;
+        this.currentTexFetcher = texFetcher;
+        if (texFetcher?.textureHolder)
+            this.textureHolder = texFetcher.textureHolder;
 
-    // --- CREATE SKY (works for DP via envfxMan injection) ---
-    if (this.envfxMan && !this.sky) {
-        const fakeWorldForSky = {
-            renderCache: (this.materialFactory as any).cache ?? (this.materialFactory as any).getCache?.(),
-            gameInfo,
-            envfxMan: this.envfxMan,
-            worldLights: this.worldLights,
-            resColl: { texFetcher },
-            objectMan: { createObjectInstance: () => ({ destroy: () => {} }) },
-        } as any;
+        if (this.envfxMan && !this.sky) {
+            const fakeWorldForSky = {
+                renderCache: (this.materialFactory as any).cache ?? (this.materialFactory as any).getCache?.(),
+                gameInfo,
+                envfxMan: this.envfxMan,
+                worldLights: this.worldLights,
+                resColl: { texFetcher },
+                objectMan: { createObjectInstance: () => ({ destroy: () => {} }) },
+            } as any;
 
-        this.sky = new Sky(fakeWorldForSky);
+            this.sky = new Sky(fakeWorldForSky);
+        }
+        if (this.envfxMan) {
+            this.envfxMan.setTimeOfDay(DP_ENV_DEFAULT.timeOfDay);
+            const r = (this.envfxMan as any).loadEnvfx(DP_ENV_DEFAULT.envfxIndex);
+            if (r && typeof r.then === 'function') await r;
+            this.rebuildSky(this.currentTexFetcher, this.currentGameInfo);
+        }
+        if ((this as any).mapNum !== undefined)
+            this.playMusic((this as any).mapNum as number);
+
+        return this;
     }
-if (this.envfxMan) {
-    this.envfxMan.setTimeOfDay(DP_ENV_DEFAULT.timeOfDay);
-
-    // loadEnvfx is async-ish in practice; await if it returns a Promise
-    const r = (this.envfxMan as any).loadEnvfx(DP_ENV_DEFAULT.envfxIndex);
-    if (r && typeof r.then === 'function') await r;
-
-this.rebuildSky(this.currentTexFetcher, this.currentGameInfo);
-}    if ((this as any).mapNum !== undefined)
-        this.playMusic((this as any).mapNum as number);
-
-    return this;
-}
 
 
 
@@ -594,7 +1167,7 @@ this.envSelect.onvalue = async (val) => {
     const r = (this.envfxMan as any).loadEnvfx(val);
     if (r && typeof r.then === 'function') await r;
   } catch (e) {
-    console.warn(`EnvFx load failed for index ${val}`, e);
+   // console.warn(`EnvFx load failed for index ${val}`, e);
   }
   // ALWAYS rebuild sky even if envfx objects fail
   this.rebuildSky(this.currentTexFetcher, this.currentGameInfo);
@@ -660,17 +1233,20 @@ protected override addSkyRenderPasses(
             colorCopy(scratchColor0, White);
         }
 
-        const modelCtx: ModelRenderContext = {
+const modelCtx = {
             sceneCtx,
             showDevGeometry: false,
             ambienceIdx: 0,
             showMeshes: true,
             outdoorAmbientColor: scratchColor0,
             setupLights: () => {},
+            animController: this.animController, 
+            showDevObjects: this.showDevObjects,
         };
 
-        this.map.addRenderInsts(device, renderInstManager, renderLists, modelCtx);
-
+        // Pass it as 'any' to stop the compiler from complaining
+        // Pass it as 'any' to stop the compiler from complaining
+        this.map.addRenderInsts(device, renderInstManager, renderLists, modelCtx as any);
         renderInstManager.popTemplateRenderInst();
     }
 
@@ -681,7 +1257,59 @@ public override destroy(device: GfxDevice) {
     this.map.destroy(device);
 }
 }
+function ensureDPDevObjectsUI(
+  onChange: (enabled: boolean) => void | Promise<void>,
+  initial?: boolean
+): void {
+  type ToggleState = {
+    wrap: HTMLDivElement;
+    cb: HTMLInputElement;
+    handler: ((e: Event) => void) | null;
+    last?: boolean;
+  };
 
+  let state = (window as any).__dpDevObjectsToggle as ToggleState | undefined;
+
+  if (!state) {
+    const wrap = document.createElement('div');
+    wrap.style.position = 'fixed';
+    wrap.style.top = '24px'; // below texture toggle
+    wrap.style.right = '2px';
+    wrap.style.zIndex = '10000';
+    wrap.style.padding = '2px 4px';
+    wrap.style.background = 'rgba(0,0,0,0.5)';
+    wrap.style.color = '#fff';
+    wrap.style.font = '12px sans-serif';
+    wrap.style.borderRadius = '2px';
+
+    const label = document.createElement('label');
+    label.style.cursor = 'pointer';
+
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.style.marginRight = '2px';
+
+    label.appendChild(cb);
+    label.appendChild(document.createTextNode('Dev objects'));
+    wrap.appendChild(label);
+    document.body.appendChild(wrap);
+
+    state = { wrap, cb, handler: null, last: false };
+    (window as any).__dpDevObjectsToggle = state;
+  }
+
+  if (state.handler) state.cb.removeEventListener('change', state.handler);
+
+  const desired = (typeof initial === 'boolean') ? initial : (state.last ?? false);
+  state.cb.checked = desired;
+
+  state.handler = async () => {
+    state!.last = state!.cb.checked;
+    await onChange(state!.cb.checked);
+  };
+
+  state.cb.addEventListener('change', state.handler);
+}
 function ensureTextureToggleUI(
   onChange: (enabled: boolean) => void | Promise<void>,
   initial?: boolean
@@ -733,7 +1361,7 @@ function ensureTextureToggleUI(
       state!.last = state!.cb.checked;
       await onChange(state!.cb.checked);
     } catch (e) {
-      console.error('Texture toggle handler error:', e);
+    //  console.error('Texture toggle handler error:', e);
     }
   };
   state.cb.addEventListener('change', state.handler);
@@ -1239,9 +1867,10 @@ if (firstMod !== null) {
         await texFetcher.loadSubdirs(['dragrock'], context.dataFetcher);
     } else if (subdir === 'mmshrine') {
         await texFetcher.loadSubdirs(['gpshrine'], context.dataFetcher);
+            } else if (subdir === 'dbshrine') {
+        await texFetcher.loadSubdirs(['gpshrine'], context.dataFetcher);
     }
 } else {
-    await texFetcher.loadSubdirs(['Copy of swaphol'], context.dataFetcher);
 }
 
      await texFetcher.preloadPngOverrides(
@@ -1710,11 +2339,11 @@ texFetcher.setCurrentModelID(this.mapNum);
     }
 }
 
-
+const ZERO_ENVFX_MAPS = [2, 3, 11, 15, 16, 21, 27, 28, 30, 31, 32, 33, 34, 39, 40, 41, 42, 48, 50, 51, 52, 53, 54];
 export class DPMapSceneDesc implements Viewer.SceneDesc {
     constructor(public mapNum: number, public id: string, public name: string, private gameInfo?: GameInfo) {}
 
-    public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+ public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
         const gInfo = this.gameInfo ?? DP_GAME_INFO;
         const animController = new SFAAnimationController();
         const materialFactory = new MaterialFactory(device);
@@ -1725,13 +2354,58 @@ export class DPMapSceneDesc implements Viewer.SceneDesc {
         const texFetcher = await SFATextureFetcher.create(gInfo, context.dataFetcher, false);
         texFetcher.setModelVersion(ModelVersion.DinosaurPlanet);
 
-        // === THE PHOTO FRAME INTERCEPTOR & BLUE FRINGE FIX ===
-        if (!texFetcher.textureHolder) {
-            texFetcher.textureHolder = { viewerTextures: [], onnewtextures: null };
-        }
-        
-        let pointSampler: any = null; 
+        // 1. SETUP OBJECT MANAGER WITH ID PATCH
+        const dpModelFetcher = new PreloadingDPModelFetcher(gInfo, context.dataFetcher, texFetcher, materialFactory);
+        await dpModelFetcher.init();
 
+        const fakeWorld: any = {
+            renderCache: (materialFactory as any).cache ?? (materialFactory as any).getCache?.(),
+            gameInfo: gInfo,
+            worldLights: mapRenderer.worldLights,
+            resColl: { 
+                texFetcher: texFetcher,
+                modelFetcher: dpModelFetcher,
+                amapCollection: { getAmap: () => null } as any, 
+                animCollection: { getAnim: () => null } as any,
+                modanimCollection: { getModanim: () => null } as any,
+            },
+            animController: { animController: animController, enableFineSkinAnims: false },
+            objectMan: null 
+        };
+
+        const objectManager = await ObjectManager.create(fakeWorld as World, context.dataFetcher, false);
+        fakeWorld.objectMan = objectManager;
+
+        // FETCH TABLES FOR ID TRANSLATION
+        const objTab = (await context.dataFetcher.fetchData(`${gInfo.pathBase}/OBJECTS.tab`)).createDataView();
+        const objBin = (await context.dataFetcher.fetchData(`${gInfo.pathBase}/OBJECTS.bin`)).createDataView();
+        const objIdx = (await context.dataFetcher.fetchData(`${gInfo.pathBase}/OBJINDEX.bin`)).createDataView();
+        let modelInd: DataView | null = null; 
+        try { modelInd = (await context.dataFetcher.fetchData(`${gInfo.pathBase}/MODELIND.bin`)).createDataView(); } catch(e) {}
+        
+        // APPLY THE PATCH TO FIX WRONG MODELS
+        applyDPObjectManagerPatch(objectManager, objTab, objBin, objIdx, modelInd);
+
+        // 2. PRELOAD MODELS
+        const objData = mapSceneInfo.getObjectsData?.();
+        if (objData) {
+            const requiredModels = new Set<number>();
+            let offset = 0;
+            while (offset < objData.byteLength) {
+                const size = objData.getUint8(offset + 2) * 4;
+                if (size === 0) break;
+                try {
+                    const ot = objectManager.getObjectType(objData.getUint16(offset), false);
+                    ot.modelNums.forEach(m => requiredModels.add(m));
+                } catch(e) {}
+                offset += size;
+            }
+            await dpModelFetcher.preloadModels(Array.from(requiredModels));
+        }
+
+        // KEEP YOUR TEXTURE FIXES
+        if (!texFetcher.textureHolder) texFetcher.textureHolder = { viewerTextures: [], onnewtextures: null };
+        let pointSampler: any = null;
         const origGetTexture = (texFetcher as any).getTexture.bind(texFetcher);
         (texFetcher as any).getTexture = function(cache: any, id: number, useTex1: boolean) {
             const res = origGetTexture(cache, id, useTex1);
@@ -1739,81 +2413,69 @@ export class DPMapSceneDesc implements Viewer.SceneDesc {
                 const vt = res.viewerTexture;
                 if (!this.textureHolder.viewerTextures.includes(vt)) {
                     this.textureHolder.viewerTextures.push(vt);
-                    if (this.textureHolder.onnewtextures) {
-                        this.textureHolder.onnewtextures();
-                    }
+                    if (this.textureHolder.onnewtextures) this.textureHolder.onnewtextures();
                 }
-
-                const cutoutTextures = [ 0 ];
+                const cutoutTextures = [0];
                 if (cutoutTextures.includes(id)) {
-                    if (!pointSampler) {
-                        pointSampler = cache.device.createSampler({
-                            wrapS: 1, wrapT: 1,
-                            minFilter: 0, magFilter: 0, mipFilter: 0,
-                            minLOD: 0, maxLOD: 100,
-                        });
-                    }
-                    res.gfxSampler = pointSampler; 
+                    if (!pointSampler) pointSampler = cache.device.createSampler({
+                        wrapS: 1, wrapT: 1, minFilter: 0, magFilter: 0, mipFilter: 0, minLOD: 0, maxLOD: 100,
+                    });
+                    res.gfxSampler = pointSampler;
                 }
             }
             return res;
         };
 
-        const ZERO_ENVFX_MAPS = [2, 3, 11, 15, 16,21,27,28,30,31,32,33,34,39,40,41,42,48,50,51,52,53,54];
+        const ZERO_ENVFX_MAPS = [2,  11, 15, 16, 21, 27, 28, 30, 31, 32, 33, 34, 39, 40, 41, 42, 48, 50, 51, 52, 53, 54];
         const isZeroEnvMap = ZERO_ENVFX_MAPS.includes(this.mapNum as number);
         const startingEnvFx = isZeroEnvMap ? 0 : DP_ENV_DEFAULT.envfxIndex;
-
-        const fakeWorld: any = {
-            renderCache: (materialFactory as any).cache ?? (materialFactory as any).getCache?.(),
-            gameInfo: gInfo,
-            worldLights: mapRenderer.worldLights,
-            resColl: { texFetcher: texFetcher },
-            objectMan: { createObjectInstance: () => ({ destroy: () => {}, addRenderInsts: () => {} }) }
-        };
 
         try {
             mapRenderer.envfxMan = await EnvfxManager.create(fakeWorld as World, context.dataFetcher);
             fakeWorld.envfxMan = mapRenderer.envfxMan; 
             mapRenderer.envfxMan.loadEnvfx(startingEnvFx); 
-        } catch (e) {
-            console.warn("Failed to load ENVFXACT.bin for DP Map", e);
-        }
+        } catch (e) {}
         
         (texFetcher as any).dataFetcherRef = context.dataFetcher;
-        const blockFetcher = await DPBlockFetcher.create(
-            gInfo, context.dataFetcher, materialFactory, Promise.resolve(texFetcher)
-        );
+const blockFetcher = await DPBlockFetcher.create(gInfo, context.dataFetcher, materialFactory, Promise.resolve(texFetcher));
+       
+if (texFetcher.textureHolder) mapRenderer.textureHolder = texFetcher.textureHolder;
 
-        if (texFetcher.textureHolder)
-            mapRenderer.textureHolder = texFetcher.textureHolder;
+await mapRenderer.create(mapSceneInfo, gInfo, context.dataFetcher, blockFetcher, { 
+    objectManager,
+    dpMapScene: true,
+    
+});
+ensureTextureToggleUI(async (enabled: boolean) => {
+    texFetcher.setTexturesEnabled(enabled);
+    (materialFactory as any).texturesEnabled = enabled;
+    await mapRenderer.reloadForTextureToggle();
+}, texFetcher.getTexturesEnabled?.() ?? true);
+// Default OFF
+mapRenderer.showDevObjects = false;
 
-        // --- NEW: Texture Toggle UI Integration ---
-        ensureTextureToggleUI(async (enabled: boolean) => {
-            texFetcher.setTexturesEnabled(enabled);
-            (materialFactory as any).texturesEnabled = enabled;
-            await mapRenderer.reloadForTextureToggle();
-        }, texFetcher.getTexturesEnabled?.() ?? true);
-
-        await mapRenderer.create(mapSceneInfo, gInfo, context.dataFetcher, blockFetcher);
-        
+ensureDPDevObjectsUI(async (enabled: boolean) => {
+    mapRenderer.showDevObjects = enabled;
+}, false);
         setTimeout(async () => {
             const mr = mapRenderer as any;
             if (mr.envSelect) {
                 const sequence = isZeroEnvMap ? [0] : [95, 96, 97, 98, 99, 100];
                 for (const val of sequence) {
                     mr.envSelect.setValue(val);
-                    if (mr.envSelect.onvalue) {
-                        await mr.envSelect.onvalue(val);
-                    }
+                    if (mr.envSelect.onvalue) await mr.envSelect.onvalue(val);
                     await new Promise(resolve => setTimeout(resolve, 16)); 
                 }
             }
         }, 10);
 
+        // MAP STAYS AT LOCAL 0,0 (No 135-degree rotation hack needed for DP!)
+        const matrix = mat4.create();
+        mapRenderer.setMatrix(matrix);
+
         return mapRenderer;
     }
 }
-
 
 type DPGlobalMapEntry = {
     CoordX: number;
@@ -1841,10 +2503,8 @@ class DPFullWorldRenderer extends SFARenderer {
     private camGX = 0;
     private camGZ = 0;
 
-    // --- NEW ENVFX INTEGRATION ---
     public envfxMan: EnvfxManager | null = null;
     public worldLights: WorldLights = new WorldLights();
-    // -----------------------------
 
     constructor(
         private device: GfxDevice,
@@ -2020,7 +2680,7 @@ export class DPFullWorldSceneDesc implements Viewer.SceneDesc {
           maxZ = Math.max(maxZ, e.CoordZ);
         }
 
-        console.log('DP globalmap bounds:', { minX, maxX, minZ, maxZ, count: valid.length });
+      //  console.log('DP globalmap bounds:', { minX, maxX, minZ, maxZ, count: valid.length });
 
         const placed: DPPlacedMap[] = valid.map((e) => {
           const gx = e.CoordX - minX;
@@ -2080,7 +2740,7 @@ export class CombinedOldIceMtSceneDesc implements Viewer.SceneDesc {
             musicState.audio = null;
         }
 
-        console.log(`Creating scene for ${this.name} using combined bins with Sky/EnvFx...`);
+       // console.log(`Creating scene for ${this.name} using combined bins with Sky/EnvFx...`);
 
         const animController = new SFAAnimationController();
         const materialFactory = new MaterialFactory(device);

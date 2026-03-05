@@ -48,6 +48,7 @@ interface Fur {
 export interface ModelRenderContext {
     sceneCtx: SceneRenderContext;
     showDevGeometry: boolean;
+showDevObjects?: boolean;
     showMeshes: boolean; // <--- ADD THIS LINE
     ambienceIdx: number;
     outdoorAmbientColor: Color;
@@ -326,10 +327,14 @@ export class ModelInstance {
         this.modelShapes = model.createInstanceShapes();
     }
 
-    public getAmap(modelAnimNum: number): DataView {
-        const stride = (((this.model.joints.length + 8) / 8)|0) * 8;
-        return dataSubarray(this.amap, modelAnimNum * stride, stride);
-    }
+public getAmap(modelAnimNum: number): DataView {
+        // DP C Code: ALIGN8(model->jointCount - 1)
+        // #define ALIGN8(a)  (((u32) (a) & ~0x7) + 0x8)
+        const a = Math.max(0, this.model.joints.length - 1);
+        const stride = (a & ~0x7) + 0x8;
+        
+        return dataSubarray(this.amap, modelAnimNum * stride, stride);
+    }
 
     public setAmap(amap: DataView) {
         this.amap = amap;

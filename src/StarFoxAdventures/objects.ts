@@ -22,7 +22,133 @@ const scratchVec0 = vec3.create();
 const scratchVec1 = vec3.create();
 const scratchMtx0 = mat4.create();
 const scratchMtx1 = mat4.create();
+// ===================== DP SAFE DATAVIEW =====================
+// Stops DP object classes from crashing the whole map when params are shorter than expected.
+// Returns 0 on OOB reads and logs once per tag.
+// ===================== DP PARAM FIXUP + SAFE DATAVIEW =====================
+// Goal:
+// - Never crash on short params
+// - Learn how big each (type,class) blob *needs* to be based on real OOB reads
+// - Pad next time to satisfy those reads (zero-filled)
+// - Limit log spam
 
+const __dp_paramNeed = new Map<string, number>();   // key -> required minimum byte length
+const __dp_oobWarned = new Set<string>();           // reuse for "log once" keys
+let __dp_padLogCount = 0;
+const __dp_PAD_LOG_LIMIT = 50;                      // after this, stop printing PAD lines
+let __dp_oobLogCount = 0;
+const __dp_OOB_LOG_LIMIT = 50;                      // after this, stop printing OOB lines
+
+function __dpAlign4(n: number): number { return (n + 3) & ~3; }
+
+function __dpPadParams(dv: DataView, want: number, tag: string): DataView {
+    if (dv.byteLength >= want) return dv;
+    const wantA = __dpAlign4(want);
+
+    const buf = new ArrayBuffer(wantA);
+    new Uint8Array(buf).set(new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength));
+    const out = new DataView(buf);
+
+    const k = `${tag}|PAD|0x${dv.byteLength.toString(16)}->0x${wantA.toString(16)}`;
+    if (!__dp_oobWarned.has(k) && __dp_padLogCount < __dp_PAD_LOG_LIMIT) {
+        __dp_oobWarned.add(k);
+        __dp_padLogCount++;
+        console.warn(`[DP_OBJ_PAD] ${tag} 0x${dv.byteLength.toString(16)} -> 0x${wantA.toString(16)}`);
+        if (__dp_padLogCount === __dp_PAD_LOG_LIMIT)
+            console.warn(`[DP_OBJ_PAD] (pad log limit hit: further PAD logs suppressed)`);
+    }
+
+    return out;
+}
+
+function __dpMakeSafeDataView(dv: DataView, tag: string): DataView {
+    const warn = (fn: string, offs: number, need: number) => {
+        // Learn required size for this object key.
+        const req = (offs | 0) + need;
+        const prev = __dp_paramNeed.get(tag) ?? 0;
+        if (req > prev) __dp_paramNeed.set(tag, req);
+
+        // Log-limited + log-once per unique site.
+        const k = `${tag}|${fn}|0x${(offs | 0).toString(16)}|need=${need}|len=0x${dv.byteLength.toString(16)}`;
+        if (__dp_oobWarned.has(k)) return;
+        __dp_oobWarned.add(k);
+
+        if (__dp_oobLogCount < __dp_OOB_LOG_LIMIT) {
+            __dp_oobLogCount++;
+            console.warn(`[DP_OBJ_OOB] ${tag} ${fn}(0x${(offs | 0).toString(16)}) need=${need} len=0x${dv.byteLength.toString(16)}`);
+            if (__dp_oobLogCount === __dp_OOB_LOG_LIMIT)
+                console.warn(`[DP_OBJ_OOB] (oob log limit hit: further OOB logs suppressed)`);
+        }
+    };
+
+    const wrap = (fnName: string, need: number, call: (...args: any[]) => any) => {
+        return (offs: number, ...rest: any[]) => {
+            if ((offs | 0) < 0 || ((offs | 0) + need) > dv.byteLength) {
+                warn(fnName, offs | 0, need);
+                return 0;
+            }
+            return call(offs, ...rest);
+        };
+    };
+
+    return new Proxy(dv as any, {
+        get(_target, prop: string) {
+            switch (prop) {
+                case 'getUint8':   return wrap('getUint8',   1, (o: number) => dv.getUint8(o));
+                case 'getInt8':    return wrap('getInt8',    1, (o: number) => dv.getInt8(o));
+                case 'getUint16':  return wrap('getUint16',  2, (o: number, le?: boolean) => dv.getUint16(o, le));
+                case 'getInt16':   return wrap('getInt16',   2, (o: number, le?: boolean) => dv.getInt16(o, le));
+                case 'getUint32':  return wrap('getUint32',  4, (o: number, le?: boolean) => dv.getUint32(o, le));
+                case 'getInt32':   return wrap('getInt32',   4, (o: number, le?: boolean) => dv.getInt32(o, le));
+                case 'getFloat32': return wrap('getFloat32', 4, (o: number, le?: boolean) => dv.getFloat32(o, le));
+                default:
+                    return (dv as any)[prop];
+            }
+        },
+    }) as any as DataView;
+}
+
+// Call this once per instance before ANY parsing / class constructors.
+function __dpNormalizeObjParams(typeNum: number, classNum: number, objParams: DataView): DataView {
+    const tag = `type=${typeNum} class=${classNum}`;
+
+    // CommonObjectParams reads up to 0x14+4, so ensure at least 0x18 bytes.
+    let want = 0x18;
+
+    // If we’ve learned this (type,class) needs more, honor it.
+    const learned = __dp_paramNeed.get(tag) ?? 0;
+    if (learned > want) want = learned;
+
+    // Pad to required size (zero-filled), then wrap safe.
+    const padded = __dpPadParams(objParams, want, tag);
+    return __dpMakeSafeDataView(padded, tag);
+}
+// =================== end DP PARAM FIXUP + SAFE DATAVIEW ===================
+// =================== end DP SAFE DATAVIEW ===================
+
+// ===================== DP PARAM PADDING =====================
+// DP map object params are often sliced a few bytes short. Pad by +4 (aligned) so classes can't OOB.
+function padObjectParams(dv: DataView, tag: string): DataView {
+    // Always give +4 bytes headroom, aligned to 4 bytes.
+    const want = Math.max(
+        CommonObjectParams_SIZE,
+        (((dv.byteLength + 3) & ~3) + 4) >>> 0
+    );
+
+    if (dv.byteLength >= want)
+        return dv;
+
+    const src = new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength);
+    const dst = new Uint8Array(want);
+    dst.set(src);
+
+const k = `${tag}|${dv.byteLength.toString(16)}->${want.toString(16)}`;
+if (!__dp_oobWarned.has(k)) { // reuse the same Set to avoid new globals
+    __dp_oobWarned.add(k);
+    console.warn(`[DP_OBJ_PAD] ${tag} 0x${dv.byteLength.toString(16)} -> 0x${want.toString(16)}`);
+}    return new DataView(dst.buffer);
+}
+// =================== end DP PARAM PADDING ===================
 // An SFAClass holds common data and logic for one or more ObjectTypes.
 // An ObjectType serves as a template to spawn ObjectInstances.
 
@@ -30,7 +156,7 @@ export interface ObjectUpdateContext {
     viewerInput: ViewerRenderInput;
 }
 
-export const CommonObjectParams_SIZE = 0x14;
+export const CommonObjectParams_SIZE = 0x18;
 interface CommonObjectParams {
     objType: number;
     ambienceValue: number;
@@ -64,6 +190,8 @@ export class ObjectType {
     constructor(public typeNum: number, private data: DataView, private isEarlyObject: boolean) {
         // FIXME: where are these fields for early objects?
         this.scale = this.data.getFloat32(0x4);
+        if (!Number.isFinite(this.scale) || this.scale <= 0 || this.scale > 10.0)
+    this.scale = 1.0;
         this.objClass = this.data.getInt16(0x50);
 
         this.name = '';
@@ -136,45 +264,57 @@ export class ObjectInstance {
 
     public internalClass?: SFAClass;
 
-    constructor(public world: World, public objType: ObjectType, public objParams: DataView, public posInMap: vec3) {
-        this.scale = objType.scale;
+constructor(public world: World, public objType: ObjectType, public objParams: DataView, public posInMap: vec3) {
+    this.scale = objType.scale;
 
-        this.commonObjectParams = parseCommonObjectParams(objParams);
+    const objClass = this.objType.objClass;
+    const typeNum = this.objType.typeNum;
 
-        if (this.commonObjectParams.ambienceValue !== 0)
-            this.ambienceIdx = this.commonObjectParams.ambienceValue - 1;
-        else
-            this.ambienceIdx = objType.ambienceNum;
-if (this.ambienceIdx < 0 || this.ambienceIdx >= 3)
-    this.ambienceIdx = 0;
-        vec3.copy(this.position, this.commonObjectParams.position);
-        
-        const objClass = this.objType.objClass;
-        const typeNum = this.objType.typeNum;
-        
-        this.setModelNum(0);
+    // One source of truth for DP params: pad + safe-wrap + learned sizing.
+    this.objParams = __dpNormalizeObjParams(typeNum, objClass, objParams);
 
+    this.commonObjectParams = parseCommonObjectParams(this.objParams);
+
+    if (this.commonObjectParams.ambienceValue !== 0)
+        this.ambienceIdx = this.commonObjectParams.ambienceValue - 1;
+    else
+        this.ambienceIdx = objType.ambienceNum;
+
+    if (this.ambienceIdx < 0 || this.ambienceIdx >= 3)
+        this.ambienceIdx = 0;
+
+    vec3.copy(this.position, this.commonObjectParams.position);
+
+    this.setModelNum(0);
+
+    const dpNoClasses = (this.world as any).dpNoSfaClasses === true;
+
+    if (!dpNoClasses) {
         if (objClass in SFA_CLASSES) {
             try {
-                this.internalClass = new SFA_CLASSES[objClass](this, objParams);
+                // IMPORTANT: pass normalized params
+                this.internalClass = new SFA_CLASSES[objClass](this, this.objParams);
             } catch (e) {
-                console.warn(`Failed to setup object class ${objClass} type ${typeNum} due to exception:`);
+                console.warn(`[OBJ_CLASS_FAIL] type=${typeNum} class=${objClass} name="${this.objType.name}"`);
                 console.error(e);
+                this.internalClass = undefined;
             }
-        } else {
-            console.log(`Don't know how to setup object class ${objClass} objType ${typeNum}`);
         }
     }
 
-    public mount() {
-        if (this.internalClass !== undefined)
-            this.internalClass.mount(this, this.world);
-    }
+}
 
-    public unmount() {
-        if (this.internalClass !== undefined)
-            this.internalClass.unmount(this, this.world);
-    }
+public mount() {
+    if ((this.world as any).dpNoSfaClasses === true) return;
+    if (this.internalClass !== undefined)
+        this.internalClass.mount(this, this.world);
+}
+
+public unmount() {
+    if ((this.world as any).dpNoSfaClasses === true) return;
+    if (this.internalClass !== undefined)
+        this.internalClass.unmount(this, this.world);
+}
 
     public setParent(parent: ObjectInstance | null) {
         this.parent = parent;
@@ -240,15 +380,28 @@ if (this.ambienceIdx < 0 || this.ambienceIdx >= 3)
         this.srtDirty = true;
     }
 
-    public setModelNum(num: number) {
+ public setModelNum(num: number) {
         try {
             const modelNum = this.objType.modelNums[num];
+            
+            // Failsafe if the object type has no model assigned
+            if (modelNum === undefined) {
+                this.modelInst = null;
+                return;
+            }
 
             const modelInst = this.world.resColl.modelFetcher.createModelInstance(modelNum);
-            const amap = this.world.resColl.amapColl.getAmap(modelNum);
-            modelInst.setAmap(amap);
-            this.modanim = this.world.resColl.modanimColl.getModanim(modelNum);
             this.modelInst = modelInst;
+
+            // Safely attempt to fetch animation maps
+// Safely attempt to fetch animation maps only if the collections exist
+            const amap = this.world.resColl.amapColl ? this.world.resColl.amapColl.getAmap(modelNum) : null;
+            this.modanim = this.world.resColl.modanimColl ? this.world.resColl.modanimColl.getModanim(modelNum) : new DataView(new ArrayBuffer(0));
+            
+            // Only set AMAP if we have a dummy/real object and the method exists
+            if (amap && typeof modelInst.setAmap === 'function') {
+                modelInst.setAmap(amap);
+            }
 
             this.cullRadius = 10;
             if (this.modelInst.model.cullRadius > this.cullRadius)
@@ -256,11 +409,11 @@ if (this.ambienceIdx < 0 || this.ambienceIdx >= 3)
             if (this.objType.adjustCullRadius !== 0)
                 this.cullRadius *= 10 * this.objType.adjustCullRadius / 255;
 
-            if (this.modanim.byteLength > 0 && amap.byteLength > 0)
+            // Only trigger animation logic if all collections are actually present
+            if (this.world.resColl.animColl && this.modanim && this.modanim.byteLength > 0 && amap && amap.byteLength > 0)
                 this.setModelAnimNum(0);
         } catch (e) {
-            console.warn(`Failed to load model ${num} due to exception:`);
-            console.error(e);
+          //  console.warn(`Failed to load model index ${num} for object ${this.objType.name} due to exception:`, e);
             this.modelInst = null;
         }
     }
@@ -286,10 +439,11 @@ if (this.ambienceIdx < 0 || this.ambienceIdx >= 3)
 
     private curKeyframe: Keyframe | undefined = undefined;
 
-    public update(updateCtx: ObjectUpdateContext) {
-        if (this.internalClass !== undefined)
-            this.internalClass.update(this, updateCtx);
-    }
+public update(updateCtx: ObjectUpdateContext) {
+    if ((this.world as any).dpNoSfaClasses === true) return;
+    if (this.internalClass !== undefined)
+        this.internalClass.update(this, updateCtx);
+}
 
     private isFrustumCulled(viewerInput: ViewerRenderInput): boolean {
         const worldMtx = scratchMtx0;
@@ -362,9 +516,11 @@ export class ObjectManager {
         return self;
     }
 
-    public getObjectType(typeNum: number, skipObjindex: boolean = false): ObjectType {
-        if (!this.useEarlyObjects && !skipObjindex)
-            typeNum = readUint16(this.objindexBin!, 0, typeNum);
+public getObjectType(typeNum: number, skipObjindex: boolean = false): ObjectType {
+        // Force the lookup for Map IDs (like 0x033F) to find the correct entry
+        if (this.objindexBin && !skipObjindex) {
+            typeNum = readUint16(this.objindexBin, 0, typeNum);
+        }
 
         if (this.objectTypes[typeNum] === undefined) {
             const offs = readUint32(this.objectsTab, 0, typeNum);
@@ -375,9 +531,34 @@ export class ObjectManager {
         return this.objectTypes[typeNum];
     }
 
-    public createObjectInstance(typeNum: number, objParams: DataView, posInMap: vec3, skipObjindex: boolean = false) {
-        const objType = this.getObjectType(typeNum, skipObjindex);
+public createObjectInstance(typeNum: number, objParams: DataView, posInMap: vec3, skipObjindex: boolean = false) {
+    const objType = this.getObjectType(typeNum, skipObjindex);
+
+    try {
         const objInst = new ObjectInstance(this.world, objType, objParams, posInMap);
         return objInst;
+    } catch (e) {
+        console.warn(`[OBJ_SPAWN_FAIL] type=${typeNum} class=${objType.objClass} name="${objType.name}" paramsLen=0x${objParams.byteLength.toString(16)}`);
+        console.error(e);
+
+        // Return a harmless dummy so the map keeps loading even if one object is bad.
+        const dummy: any = {
+            world: this.world,
+            objType,
+            objParams,
+            posInMap,
+            modelInst: null,
+            internalClass: undefined,
+            mount() {},
+            unmount() {},
+            update() {},
+            addRenderInsts() {},
+            destroy() {},
+            getType() { return objType; },
+            getClass() { return objType.objClass; },
+            getName() { return objType.name; },
+        };
+        return dummy as ObjectInstance;
     }
+}
 }

@@ -53,8 +53,6 @@ export class AnimCurvFile {
 
         const data = dataSubarray(this.animcurvBin, offs, byteLength);
 
-        // TODO
-
         return {};
     }
 }
@@ -71,7 +69,7 @@ function createAxis(): Axis {
 
 const NUM_AXES = 3;
 interface Pose {
-    axes: Axis[/* 3 */];
+    axes: Axis[];
 }
 
 function createPose(): Pose {
@@ -99,13 +97,17 @@ export class AnimFile {
     private constructor() {
     }
 
-    public static async create(dataFetcher: DataFetcher, path: string): Promise<AnimFile> {
-        const self = new AnimFile();
-
+    public static async create(dataFetcher: DataFetcher, path: string, allowMissing: boolean = false): Promise<AnimFile | null> {
         const [tab, bin] = await Promise.all([
-            dataFetcher.fetchData(`${path}.TAB`),
-            dataFetcher.fetchData(`${path}.BIN`),
+            dataFetcher.fetchData(`${path}.TAB`, { allow404: allowMissing }).catch(() => null),
+            dataFetcher.fetchData(`${path}.BIN`, { allow404: allowMissing }).catch(() => null),
         ]);
+
+        if (!tab || !bin || tab.byteLength === 0 || bin.byteLength === 0) {
+            return null;
+        }
+
+        const self = new AnimFile();
         self.tab = tab.createDataView();
         self.bin = bin.createDataView();
 
@@ -113,18 +115,30 @@ export class AnimFile {
     }
 
     public hasAnim(num: number): boolean {
-        if (num < 0 || num * 4 >= this.tab.byteLength) {
+        if (num < 0 || (num + 1) * 4 > this.tab.byteLength) {
             return false;
         }
         
-        return (readUint32(this.tab, 0, num) & 0xff000000) === 0x10000000;
+        // FIX: Cleanly supports both SFA bitmasks (0x10000000) and DP raw offsets
+        const val = this.tab.getUint32(num * 4);
+        const nextVal = this.tab.getUint32((num + 1) * 4);
+        
+        const isSFA = (val & 0xFF000000) === 0x10000000;
+        const offs = isSFA ? (val & 0x0FFFFFFF) : val;
+        const nextOffs = isSFA ? (nextVal & 0x0FFFFFFF) : nextVal;
+        
+        return (nextOffs - offs) > 0;
     }
 
     public getAnim(num: number): Anim {
-        const offs = readUint32(this.tab, 0, num) & 0x0fffffff;
-        const nextOffs = readUint32(this.tab, 0, num + 1) & 0x0fffffff;
+        const val = this.tab.getUint32(num * 4);
+        const nextVal = this.tab.getUint32((num + 1) * 4);
+        
+        const isSFA = (val & 0xFF000000) === 0x10000000;
+        const offs = isSFA ? (val & 0x0FFFFFFF) : val;
+        const nextOffs = isSFA ? (nextVal & 0x0FFFFFFF) : nextVal;
+        
         const byteLength = nextOffs - offs;
-
         const data = dataSubarray(this.bin, offs, byteLength);
 
         const HEADER_SIZE = 0xa;
@@ -135,8 +149,6 @@ export class AnimFile {
             numKeyframes: data.getUint8(0x7),
             keyframeStride: data.getUint8(0x8),
         };
-        // console.log(`keyframe count: ${header.numKeyframes}`);
-        // console.log(`Anim ${num} header: ${JSON.stringify(header, null, '\t')}`);
 
         function loadKeyframe(kfNum: number): Keyframe {
             let cmdOffs = HEADER_SIZE;
@@ -150,7 +162,7 @@ export class AnimFile {
             }
 
             function loadAxis(): Axis {
-                const result: Axis = createAxis();
+                const result: Axis = { translation: 0, rotation: 0, scale: 1 };
 
                 let cmd = getNextCmd();
 
@@ -201,19 +213,22 @@ export class AnimFile {
             }
 
             function loadPose(): Pose {
-                const result: Pose = createPose();
+                const result: Pose = { axes: [
+                    { translation: 0, rotation: 0, scale: 1 },
+                    { translation: 0, rotation: 0, scale: 1 },
+                    { translation: 0, rotation: 0, scale: 1 }
+                ]};
 
-                for (let i = 0; i < NUM_AXES; i++)
+                for (let i = 0; i < 3; i++)
                     result.axes[i] = loadAxis();
 
                 return result;
             }
 
-            const result: Keyframe = createKeyframe(header.numBones);
+            const result: Keyframe = { poses: [] };
 
             for (let i = 0; i < header.numBones; i++) {
                 result.poses[i] = loadPose();
-                // console.log(`pose ${i}: ${JSON.stringify(pose, null, '\t')}`);
             }
 
             return result;
@@ -231,20 +246,14 @@ export class AnimFile {
 
             speed = data.getFloat32(timesOffs);
             timesOffs += 0x4;
-            // console.log(`speed: ${speed}`);
             const numTimes = data.getUint16(timesOffs);
             timesOffs += 0x2;
-            // console.log(`num times: ${numTimes} for ${header.numKeyframes} keyframes`);
             for (let i = 0; i < numTimes; i++) {
-                const time = data.getUint16(timesOffs);
                 timesOffs += 0x2;
-                // console.log(`time ${i}: ${time}`);
             }
         }
 
-        const anim = { keyframes, speed, times: [] };
-        // console.log(`loaded anim #${num} from offs 0x${offs.toString(16)}: ${JSON.stringify({speed, times}, null, '\t')}`);
-        return anim;
+        return { keyframes, speed, times: [] };
     }
 }
 
@@ -252,7 +261,7 @@ export function interpolateAxes(axis0: Axis, axis1: Axis, ratio: number, reuse?:
     const result = reuse !== undefined ? reuse : createAxis();
 
     result.translation = lerp(axis0.translation, axis1.translation, ratio);
-    result.rotation = lerpAngle(axis0.rotation, axis1.rotation, ratio); // TODO: use lerpAngle? but lerpAngle assumes 0..2pi whereas we use -pi..pi.
+    result.rotation = lerpAngle(axis0.rotation, axis1.rotation, ratio); 
     result.scale = lerp(axis0.scale, axis1.scale, ratio);
 
     return result;
@@ -291,30 +300,30 @@ const scratchMtx = mat4.create();
 export function applyPosesToModel(poses: Keyframe, modelInst: ModelInstance, amap: DataView | null) {
     modelInst.resetPose();
 
-for (let i = 0; i < poses.poses.length && i < modelInst.model.joints.length; i++) {
-    let poseNum = i;
+    // FIX: Iterate through ALL joints in the model, regardless of pose length!
+    for (let i = 0; i < modelInst.model.joints.length; i++) {
+        let poseNum = -1;
 
-    if (amap && i < amap.byteLength) {
-        const mapped = amap.getInt8(i);
-        if (mapped >= 0 && mapped < poses.poses.length) {
-            poseNum = mapped;
+        if (amap && i < amap.byteLength) {
+            const mapped = amap.getInt8(i);
+            // Verify the mapped pose actually exists in this compressed animation
+            if (mapped >= 0 && mapped < poses.poses.length) {
+                poseNum = mapped;
+            }
+        } else if (!amap && i < poses.poses.length) {
+            // SFA Fallback
+            poseNum = i; 
+        }
+
+        if (poseNum >= 0 && poseNum < poses.poses.length) {
+            const pose = poses.poses[poseNum];
+            getLocalTransformForPose(scratchMtx, pose);
+            modelInst.setJointPose(i, scratchMtx);
         }
     }
-
-    if (poseNum < 0 || poseNum >= poses.poses.length) {
-        // Out-of-range mapping; skip to avoid crash.
-        continue;
-    }
-
-    const pose = poses.poses[poseNum];
-    getLocalTransformForPose(scratchMtx, pose);
-    modelInst.setJointPose(i, scratchMtx);
-}
-
 }
 
 export function applyAnimationToModel(time: number, modelInst: ModelInstance, anim: Anim, animNum: number) {
-    // No anim data or no joints? stay in bind pose.
     if (!anim || !anim.keyframes || anim.keyframes.length === 0 || modelInst.model.joints.length === 0) {
         modelInst.resetPose();
         return;
@@ -323,7 +332,6 @@ export function applyAnimationToModel(time: number, modelInst: ModelInstance, an
     const keyframeCount = anim.keyframes.length;
     const amap = modelInst.getAmap(animNum);
 
-    // Use keyframeCount after guards to avoid modulo-by-zero.
     const keyframeTime = (time * keyframeCount) % keyframeCount;
 
     const kf0Num = Math.floor(keyframeTime);
@@ -341,8 +349,8 @@ export function applyAnimationToModel(time: number, modelInst: ModelInstance, an
 
 
 export class AmapCollection {
-    private amapTab: DataView;
-    private amapBin: DataView;
+    public amapTab: DataView;
+    public amapBin: DataView;
 
     private constructor() {
     }
@@ -364,14 +372,13 @@ export class AmapCollection {
     public getAmap(modelNum: number): DataView {
         const offs = readUint32(this.amapTab, 0, modelNum);
         const nextOffs = readUint32(this.amapTab, 0, modelNum + 1);
-        // console.log(`loading amap for model ${modelNum} from 0x${offs.toString(16)}, size 0x${(nextOffs - offs).toString(16)}`);
         return dataSubarray(this.amapBin, offs, nextOffs - offs);
     }
 }
 
 export class ModanimCollection {
-    private modanimTab: DataView;
-    private modanimBin: DataView;
+    public modanimTab: DataView;
+    public modanimBin: DataView;
 
     private constructor() {
     }
@@ -393,52 +400,52 @@ export class ModanimCollection {
     public getModanim(modelNum: number): DataView {
         const offs = readUint16(this.modanimTab, 0, modelNum);
         const nextOffs = readUint16(this.modanimTab, 0, modelNum + 1);
-        // console.log(`loading modanim for model ${modelNum} from 0x${offs.toString(16)}, size 0x${(nextOffs - offs).toString(16)}`);
         return dataSubarray(this.modanimBin, offs, nextOffs - offs);
     }
 }
 
 export class AnimCollection {
-private animFiles: AnimFile[] = [];
-    private preanimFile: AnimFile;
+    private animFiles: AnimFile[] = [];
+    private preanimFile: AnimFile | null = null; 
 
     private constructor() {
     }
 
-public static async create(gameInfo: GameInfo, dataFetcher: DataFetcher, subdirs: string[] | string): Promise<AnimCollection> {
-    const self = new AnimCollection();
-    const pathBase = gameInfo.pathBase;
+    public static async create(gameInfo: GameInfo, dataFetcher: DataFetcher, subdirs: string[] | string): Promise<AnimCollection> {
+        const self = new AnimCollection();
+        const pathBase = gameInfo.pathBase;
 
-    // Always load PREANIM first
-    self.preanimFile = await AnimFile.create(dataFetcher, `${pathBase}/PREANIM`);
-
-if (typeof subdirs === 'string') {
-    self.animFiles = [await AnimFile.create(dataFetcher, `${pathBase}/${subdirs}/ANIM`)];
-} else {
-    self.animFiles = await Promise.all(subdirs.map(subdir =>
-        AnimFile.create(dataFetcher, `${pathBase}/${subdir}/ANIM`)
-    ));
-}
-
-
-    return self;
-}
-
-
-public getAnim(num: number): Anim {
-    if (this.preanimFile.hasAnim(num)) {
-        return this.preanimFile.getAnim(num);
-    }
-
-    for (const file of this.animFiles) {
-        if (file.hasAnim(num)) {
-            return file.getAnim(num);
+        // FIX: Request PREANIM but explicitly allow missing 404s
+        self.preanimFile = await AnimFile.create(dataFetcher, `${pathBase}/PREANIM`, true);
+        if (!self.preanimFile) {
+            console.warn(`[AnimCollection] PREANIM not found. Safely skipping.`);
         }
+
+        if (typeof subdirs === 'string') {
+            const file = await AnimFile.create(dataFetcher, `${pathBase}/${subdirs}/ANIM`, true);
+            if (file) self.animFiles.push(file);
+        } else {
+            const files = await Promise.all(subdirs.map(subdir =>
+                AnimFile.create(dataFetcher, `${pathBase}/${subdir}/ANIM`, true)
+            ));
+            // Filter out any nulls from missing ANIM files
+            self.animFiles = files.filter(f => f !== null) as AnimFile[];
+        }
+
+        return self;
     }
 
-    // Graceful fallback: a no-op anim (0 keyframes) so callers can bail safely.
-    return { keyframes: [], speed: 1, times: [] };
-}
+    public getAnim(num: number): Anim {
+        if (this.preanimFile !== null && this.preanimFile.hasAnim(num)) {
+            return this.preanimFile.getAnim(num);
+        }
 
+        for (const file of this.animFiles) {
+            if (file.hasAnim(num)) {
+                return file.getAnim(num);
+            }
+        }
 
+        return { keyframes: [], speed: 1, times: [] };
+    }
 }

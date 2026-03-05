@@ -153,8 +153,13 @@ self.envfxactBin = (await dataFetcher.fetchData(`${pathBase}/${envName}`)).creat
     const safeSpawn = (typeId: number) => {
         if (!typeId) return;
         try {
-            const obj = this.world.objectMan.createObjectInstance(typeId, new DataView(new ArrayBuffer(128)), vec3.create());
-            if (obj) {
+// DP skyscape type IDs are already “real” IDs (not SCN indices), so skip OBJINDEX remap.
+const obj = this.world.objectMan.createObjectInstance(
+    typeId,
+    new DataView(new ArrayBuffer(0x80)),
+    vec3.create(),
+    /*skipObjindex=*/true
+);            if (obj) {
                 // Force the engine to never hide this object
                 obj.cullRadius = 999999; 
                 

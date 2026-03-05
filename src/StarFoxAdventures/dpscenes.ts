@@ -91,7 +91,7 @@ const sceneDescs: (string | Viewer.SceneDesc)[] = [
     'Full World Maps (experimental)',
     makeLazyDPFullWorldSceneDesc('dp_full_world', 'DP: Full World', DP_GAME_INFO),
 //'Cutscenes & Sequences',
-   // makeLazyDPSequenceSceneDesc(65, 'dp_seq_0', 'DP Sequence: 0 (Test/Intro)', DP_GAME_INFO),
+    makeLazyDPSequenceSceneDesc(65, 'dp_seq_0', 'DP Sequence: 0 (Test/Intro)', DP_GAME_INFO),
     'Ancient Maps',
     makeLazyCombinedOldIceMtSceneDesc('dp_old_icemt_combo', 'DP: Old Ice Mountain (1, 2 & 3)', DP_GAME_INFO),    
 makeLazyManualGridSceneDesc('dp_yeti_mt_multi', 'Yeti Mountain', DP_GAME_INFO), makeLazyDPMapSceneDesc(17, 'dp11_cr_traprooms',      'DP: CloudRunner - TrapRooms', DP_GAME_INFO),

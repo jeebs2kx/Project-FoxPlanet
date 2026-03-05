@@ -19,6 +19,7 @@ import {
 import {
   MaterialFactory,
   NormalFlags,
+  LightFlags, 
   SFAMaterial,
   Shader,
   ShaderAttrFlags,
@@ -712,673 +713,1009 @@ function loadDinosaurPlanetModel(
 
     const isCharacter = ptr0C > ptr00;
 
-    if (isCharacter) {
-        // ==========================================
-        // DINOSAUR PLANET CHARACTER PARSER
-        // ==========================================
-        model.isMapBlock = false;
-        
-        const matOff = data.getUint32(0x00); 
-        const vtxOff = data.getUint32(0x04);
-        const faceOff = data.getUint32(0x08);
-        const dlOff = data.getUint32(0x0C); 
-        const jointOff = data.getUint32(0x20);
+if (isCharacter) {
+  // ==========================================
+  // DINOSAUR PLANET CHARACTER PARSER (ROBUST + FOLIAGE TINT FIX)
+  //
+  // Key fixes:
+  // - Decode per-material tint from RGB565 at (matStruct + 0x06).
+  // - Apply that tint ONLY when facebatch flags has 0x80 (matches your logs).
+  // - If N64 lighting is enabled (G_LIGHTING), vertex bytes 12..14 are normals, NOT colors.
+  //   In that case we ignore them and use tint/prim instead.
+  // ==========================================
+  model.isMapBlock = false;
 
-        const dlLength = data.getUint16(0x6C); 
-        const jointCount = Math.min(data.getUint8(0x6F), 200); 
-        const textureCount = data.getUint8(0x73); 
+  const DP_CHAR_DEBUG = true;
 
-        const faceBatchCount = Math.floor((matOff - faceOff) / 16);
-//console.warn(
- // `[DPHDR] len=0x${data.byteLength.toString(16)} matOff=0x${matOff.toString(16)} vtxOff=0x${vtxOff.toString(16)} ` +
-//  `faceOff=0x${faceOff.toString(16)} dlOff=0x${dlOff.toString(16)} jointOff=0x${jointOff.toString(16)} ` +
- // `dlLength=${dlLength} jointCount=${jointCount} texCount=${textureCount} faceBatchCount=${faceBatchCount}`
-//);
-        // --- 1. SKELETON (Absolute World Matrices) ---
-        model.joints = [];
-        model.skeleton = new Skeleton();
-        model.invBindTranslations = nArray(jointCount, () => vec3.create());
+  // N64 geometry mode bit (F3DEX2)
+  const G_LIGHTING = 0x00020000;
 
-        const jointMats: mat4[] = [];
-for (let i = 0; i < jointCount; i++) {
-    const jo = jointOff + i * 16;
-    if (jo + 16 > data.byteLength) { jointMats.push(mat4.create()); continue; }
+  const opCounts = new Uint32Array(256);
+  let sawAnyVtx = false;
 
-    const p = data.getInt8(jo + 0);
+  const matOff  = data.getUint32(0x00, false);
+  const vtxOff  = data.getUint32(0x04, false);
+  const faceOff = data.getUint32(0x08, false);
+  const dlOff   = data.getUint32(0x0C, false);
+  const jointOff = data.getUint32(0x20, false);
 
-    const beX = data.getFloat32(jo + 4, false);
-    const beY = data.getFloat32(jo + 8, false);
-    const beZ = data.getFloat32(jo + 12, false);
+  const dlLengthRaw = data.getUint16(0x6C, false);
+  const maxDlCmdsByFile = Math.max(0, ((data.byteLength - dlOff) / 8) | 0);
+  const dlLength = Math.min(dlLengthRaw, maxDlCmdsByFile);
 
-    const leX = data.getFloat32(jo + 4, true);
-    const leY = data.getFloat32(jo + 8, true);
-    const leZ = data.getFloat32(jo + 12, true);
+  const jointCount = Math.min(data.getUint8(0x6F), 200);
+  const textureCount = Math.min(data.getUint8(0x73), 128);
 
-    // Pick the one that looks sane (translations shouldn’t be enormous/NaN)
-    const useLE = !Number.isFinite(beX) || Math.abs(beX) > 100000;
-    const lx = useLE ? leX : beX;
-    const ly = useLE ? leY : beY;
-    const lz = useLE ? leZ : beZ;
+  const faceBatchCountRaw = (matOff > faceOff) ? (((matOff - faceOff) / 16) | 0) : 0;
+  const faceBatchCount = Math.max(0, Math.min(faceBatchCountRaw, 512));
 
-    if (i < 8) {
-        //console.log(`[DPJNT] i=${i} parent=${p} useLE=${useLE} BE=(${beX},${beY},${beZ}) LE=(${leX},${leY},${leZ})`);
+  if (DP_CHAR_DEBUG) {
+    console.warn(
+      `[DP_CHAR] matOff=0x${matOff.toString(16)} vtxOff=0x${vtxOff.toString(16)} faceOff=0x${faceOff.toString(16)} ` +
+      `dlOff=0x${dlOff.toString(16)} jointOff=0x${jointOff.toString(16)} dlLength=${dlLength} joints=${jointCount} ` +
+      `texCount=${textureCount} faceBatches=${faceBatchCount}`
+    );
+  }
+
+  // --- helpers ---
+  const clamp8 = (v: number) => v < 0 ? 0 : v > 255 ? 255 : v | 0;
+  const rgb565ToRGBA8 = (c: number) => {
+    const r5 = (c >>> 11) & 0x1F;
+    const g6 = (c >>> 5)  & 0x3F;
+    const b5 = (c >>> 0)  & 0x1F;
+    const r = ((r5 * 255 + 15) / 31) | 0;
+    const g = ((g6 * 255 + 31) / 63) | 0;
+    const b = ((b5 * 255 + 15) / 31) | 0;
+    return { r, g, b, a: 255 };
+  };
+  const hex8 = (x: number) => x.toString(16).padStart(2, '0');
+  // --- DP lighting helpers (when G_LIGHTING is ON, vtx[12..14] are normals) ---
+  const toS8 = (u: number) => (u << 24) >> 24;
+  const clamp255 = (v: number) => (v < 0 ? 0 : v > 255 ? 255 : v | 0);
+
+  // simple directional light (good-enough for DP)
+  const Lx = 0.25, Ly = 0.85, Lz = 0.45;
+  const Llen = Math.hypot(Lx, Ly, Lz) || 1;
+  const L0 = Lx / Llen, L1 = Ly / Llen, L2 = Lz / Llen;
+
+  const AMBIENT = 0.35;
+  const DIFFUSE = 0.65;
+
+  function shadeRGB(baseR: number, baseG: number, baseB: number, nxU8: number, nyU8: number, nzU8: number) {
+    const nx = toS8(nxU8) / 127.0;
+    const ny = toS8(nyU8) / 127.0;
+    const nz = toS8(nzU8) / 127.0;
+    const ndotl = Math.max(0, nx * L0 + ny * L1 + nz * L2);
+    const i = AMBIENT + DIFFUSE * ndotl;
+    return {
+      r: clamp255(baseR * i),
+      g: clamp255(baseG * i),
+      b: clamp255(baseB * i),
+    };
+  }
+  // --- MATERIAL TABLE (8 bytes each) ---
+  type DPMat = {
+    texId: number;
+    texW: number;
+    texH: number;
+    tintR: number; tintG: number; tintB: number; tintA: number;
+     tintEnabled: boolean;
+    raw: string;
+  };
+
+  const mats: DPMat[] = [];
+  const MAT_STRIDE = 8;
+
+  for (let i = 0; i < textureCount; i++) {
+    const o = matOff + i * MAT_STRIDE;
+    if (o + MAT_STRIDE > data.byteLength) break;
+
+const rawTexSigned = data.getInt32(o + 0x00, false);
+const tintEnabled = rawTexSigned < 0;
+const rawTex = tintEnabled ? -rawTexSigned : rawTexSigned;
+
+// In your logs, this is correct (e.g. 0x0ABB -> 2747)
+const texId = rawTex & 0x7FFF;
+
+    const texW = data.getUint8(o + 0x04) || 32;
+    const texH = data.getUint8(o + 0x05) || 32;
+
+    // IMPORTANT: tint is RGB565 at +0x06 (matches your raw: [.. 25 00], [.. 17 00])
+    const tint565 = data.getUint16(o + 0x06, false);
+    const tint = rgb565ToRGBA8(tint565);
+
+    const rawBytes =
+      `${hex8(data.getUint8(o+0))} ${hex8(data.getUint8(o+1))} ${hex8(data.getUint8(o+2))} ${hex8(data.getUint8(o+3))} ` +
+      `${hex8(data.getUint8(o+4))} ${hex8(data.getUint8(o+5))} ${hex8(data.getUint8(o+6))} ${hex8(data.getUint8(o+7))}`;
+
+mats[i] = {
+  texId,
+  texW, texH,
+  tintR: tint.r, tintG: tint.g, tintB: tint.b, tintA: 255,
+  tintEnabled, // <-- ADD
+  raw: rawBytes,
+};
+
+    if (DP_CHAR_DEBUG) {
+      console.warn(
+        `[DP_CHAR][MAT] matIdx=${i} texId=${texId} tex=${texW}x${texH} tint=(${tint.r},${tint.g},${tint.b},255) raw=[${rawBytes}]`
+      );
     }
-            const m = mat4.create();
-            if (p !== -1 && p < i && p < jointMats.length) {
-                // Apply this bone's local translation to its parent's absolute matrix
-                mat4.translate(m, jointMats[p], [lx, ly, lz]);
-            } else {
-                mat4.fromTranslation(m, [lx, ly, lz]);
-            }
-            jointMats.push(m);
-
-            model.joints.push({
-                parent: p !== -1 ? p : 0xff,
-                boneNum: i,
-                translation: vec3.fromValues(lx, ly, lz),
-                bindTranslation: vec3.create() 
-            });
-            model.skeleton.addJoint(p !== -1 ? p : undefined, vec3.fromValues(lx, ly, lz));
-        }
-
-        // --- 2. FACEBATCHES ---
-        interface Facebatch { 
-            materialID: number; 
-            dlStartCmd: number; 
-            renderFlags: number;
-            tris: { i0: number, i1: number, i2: number }[];
-        }
-        
-        const facebatches: Facebatch[] = [];
-        for (let i = 0; i < faceBatchCount; i++) {
-            const o = faceOff + i * 16; 
-            if (o + 16 > data.byteLength) break;
-            
-            const matIdx = data.getUint8(o + 0);
-            const dlStartCmd = data.getInt16(o + 8, false);
-            const renderFlags = data.getUint8(o + 0x0C); 
-
-            let globalTexId = 0;
-            if (matIdx < textureCount) {
-                const matStructOff = matOff + (matIdx * 8); 
-                if (matStructOff + 4 <= data.byteLength) {
-                    let rawTex = data.getInt32(matStructOff, false);
-                    if (rawTex < 0) rawTex = -rawTex; 
-                    // Strip the 0x8000 flag so the fetcher actually finds the texture
-                    globalTexId = rawTex & 0x7FFF; 
-                }
-            }
-
-            facebatches.push({ materialID: globalTexId, dlStartCmd, renderFlags, tris: [] });
-        }
-        facebatches.sort((a, b) => a.dlStartCmd - b.dlStartCmd);
-
-        // --- 3. PURE F3DEX2 EMULATION ---
-        const outPos: number[] = [];
-        const outClr: number[] = [];
-        const outTex: number[] = [];
-
-        // True N64 vertex cache. Maps Cache Slot (0-63) -> Index in outPos
-        const vtxCache = new Int32Array(64).fill(0); 
-        const vboMap = new Map<string, number>();
-
-        let fbIndex = -1;
-        let currentFb: Facebatch | null = null;
-        let cmdIdx = 0;
-        let currentMtxIdx = 0; // Tracks the currently active bone matrix
-// --- DP: N64 segment base table (character DLs) ---
-const segmentBases = new Uint32Array(16);
-
-// In your files, G_VTX is coming in as seg=0x05 (see your logs).
-// Treat 0x05 as the vertex segment base.
-segmentBases[0x05] = vtxOff;
-
-// (Optional) some files might use 0x04 instead.
-segmentBases[0x04] = vtxOff;
-        while (cmdIdx < dlLength) {
-            const cmdOffset = dlOff + cmdIdx * 8;
-            if (cmdOffset + 8 > data.byteLength) break;
-
-            while (fbIndex + 1 < facebatches.length && cmdIdx >= facebatches[fbIndex + 1].dlStartCmd) {
-                fbIndex++;
-                currentFb = facebatches[fbIndex];
-            }
-
-            const w0 = data.getUint32(cmdOffset);
-            const w1 = data.getUint32(cmdOffset + 4);
-            const opcode = w0 >>> 24;
-
-            if (opcode === 0xDA) { // G_MTX
-                const seg = w1 >>> 24;
-                if (seg === 0x03) { // Segment 3 = Bone Matrices
-                    // Each matrix is 64 bytes long
-                    currentMtxIdx = Math.floor((w1 & 0x00FFFFFF) / 64);
-                }
-            }
-            else if (opcode === 0x01 && currentFb) { // G_VTX
-const num = (w0 >>> 12) & 0xFF;
-
-// DP/F3DEX-style: v0 is stored as (slot*2) in the high byte.
-// This keeps v0 aligned and prevents weird v0=31 cases.
-// DP/F3DEX2-style: v0 is encoded as (v0 + num) in bits 1..7 of w0.
-const v0_encoded = (w0 >>> 1) & 0x7F;
-const v0 = (v0_encoded - num) & 0x3F; // keep in 0..63
-if (cmdIdx < 120) {
- // console.log(`[G_VTX2] cmd=${cmdIdx} num=${num} v0=${v0} (rawV0=${(w0>>>16)&0xFF})`);
-}
-if (cmdIdx < 80) {
- // console.log(`[G_VTX2] cmd=${cmdIdx} num=${num} v0=${v0}`);
-}
-                // YOUR EXACT, CORRECT OFFSET MATH
-// DP segment -> file base mapping
-const seg = (w1 >>> 24) & 0xFF;
-const off24 = (w1 & 0x00FFFFFF) >>> 0;
-
-let segBase = segmentBases[seg] >>> 0;
-
-// If unknown segment, try a safe fallback: interpret it as vtx segment
-// (this keeps you moving instead of exploding indices).
-if (segBase === 0 && seg !== 0x00) {
-  segBase = vtxOff >>> 0;
-  segmentBases[seg] = segBase;
- // console.warn(`[DPSEG] unknown seg=0x${seg.toString(16)} -> assuming base=vtxOff (0x${segBase.toString(16)})`);
-}
-
-const fileByteOff = (segBase + off24) >>> 0;
-const baseVtxIndex = Math.floor((fileByteOff - vtxOff) / 16);
-
-if (cmdIdx < 60) {
-  //console.log(
- //   `[G_VTX] cmd=${cmdIdx} seg=0x${seg.toString(16)} base=0x${segBase.toString(16)} ` +
-  //  `off24=0x${off24.toString(16)} fileByteOff=0x${fileByteOff.toString(16)} baseVtxIndex=${baseVtxIndex}`
- // );
-}
-                for (let v = 0; v < num; v++) {
-                    const romIdx = baseVtxIndex + v;
-const cacheIdx = (v0 + v) & 0x3F;
-                    
-                    // Key by both ROM Index AND Matrix Index to prevent seams!
-                    const key = `${romIdx}_${currentMtxIdx}`;
-                    let newIdx = vboMap.get(key);
-
-                    if (newIdx === undefined) {
-                        const o = vtxOff + romIdx * 16;
-                        if (o + 16 <= data.byteLength) {
-                            let vx = data.getInt16(o + 0, false);
-                            let vy = data.getInt16(o + 2, false);
-                            let vz = data.getInt16(o + 4, false);
-
-                            // CPU BAKING: Transform vertex by the currently loaded bone matrix
-                            if (currentMtxIdx >= 0 && currentMtxIdx < jointMats.length) {
-                                const vPos = vec3.fromValues(vx, vy, vz);
-                                vec3.transformMat4(vPos, vPos, jointMats[currentMtxIdx]);
-                                vx = vPos[0]; vy = vPos[1]; vz = vPos[2];
-                            }
-
-                            newIdx = outPos.length / 3;
-                            outPos.push(vx, vy, vz);
-                            outTex.push(data.getInt16(o + 8, false), data.getInt16(o + 10, false));
-                            outClr.push(data.getUint8(o + 12), data.getUint8(o + 13), data.getUint8(o + 14), data.getUint8(o + 15));
-                            vboMap.set(key, newIdx);
-                        } else {
-                            newIdx = 0; // Fallback
-                        }
-                    }
-                    
-                    // Push into N64 cache
-vtxCache[cacheIdx] = newIdx;                }
-            }
-else if (opcode === 0x05 && currentFb) { // G_TRI1 (DP/F3DEX variants)
-  // Many DP lists store TRI1 indices in w0 low24 and leave w1 as 0.
-  const src = ((w1 & 0x00FFFFFF) !== 0) ? w1 : w0;
-
-  const a = (src >>> 16) & 0xFF;
-  const b = (src >>>  8) & 0xFF;
-  const c = (src >>>  0) & 0xFF;
-
-  const i0 = vtxCache[(a >>> 1) & 0x3F];
-  const i1 = vtxCache[(b >>> 1) & 0x3F];
-  const i2 = vtxCache[(c >>> 1) & 0x3F];
-
-  if (cmdIdx < 160) {
-//    console.log(
- //     `[G_TRI1] cmd=${cmdIdx} src=${src===w1?'w1':'w0'} raw=${a},${b},${c} ` +
- //     `slots=${a>>>1},${b>>>1},${c>>>1} -> idx=${i0},${i1},${i2}`
- //   );
   }
 
-  currentFb.tris.push({ i0, i1, i2 });
-} if (opcode === 0x06 && currentFb) { // G_TRI2 (F3DEX2)
-  // tri A in w0 (low 24 bits)
-  const a0 = (w0 >>> 16) & 0xFF;
-  const a1 = (w0 >>>  8) & 0xFF;
-  const a2 = (w0 >>>  0) & 0xFF;
+  // --- SKELETON (optional) ---
+  model.joints = [];
+  model.skeleton = new Skeleton();
+  model.invBindTranslations = nArray(jointCount, () => vec3.create());
 
-  // tri B in w1 (low 24 bits)
-  const b0 = (w1 >>> 16) & 0xFF;
-  const b1 = (w1 >>>  8) & 0xFF;
-  const b2 = (w1 >>>  0) & 0xFF;
+  const jointMats: mat4[] = [];
+  if (jointCount > 0 && jointOff !== 0 && (jointOff + jointCount * 16) <= data.byteLength) {
+    for (let i = 0; i < jointCount; i++) {
+      const jo = jointOff + i * 16;
+      const p = data.getInt8(jo + 0);
 
-  currentFb.tris.push({
-    i0: vtxCache[(a0 >>> 1) & 0x3F],
-    i1: vtxCache[(a1 >>> 1) & 0x3F],
-    i2: vtxCache[(a2 >>> 1) & 0x3F],
-  });
+      // DP seems to store these as big-endian floats in the cases you've shown.
+      const lx = data.getFloat32(jo + 4, false);
+      const ly = data.getFloat32(jo + 8, false);
+      const lz = data.getFloat32(jo + 12, false);
 
-  currentFb.tris.push({
-    i0: vtxCache[(b0 >>> 1) & 0x3F],
-    i1: vtxCache[(b1 >>> 1) & 0x3F],
-    i2: vtxCache[(b2 >>> 1) & 0x3F],
-  });
+      const m = mat4.create();
+      if (p !== -1 && p < i && p < jointMats.length) mat4.translate(m, jointMats[p], [lx, ly, lz]);
+      else mat4.fromTranslation(m, [lx, ly, lz]);
+      jointMats.push(m);
 
-  if (cmdIdx < 120) {
- //   console.log(
- //     `[G_TRI2] cmd=${cmdIdx} Araw=${a0},${a1},${a2} slots=${a0>>>1},${a1>>>1},${a2>>>1} ` +
-  //    `Braw=${b0},${b1},${b2} slots=${b0>>>1},${b1>>>1},${b2>>>1}`
-  //  );
+      model.joints.push({
+        parent: p !== -1 ? p : 0xff,
+        boneNum: i,
+        translation: vec3.fromValues(lx, ly, lz),
+        bindTranslation: vec3.create(),
+      });
+
+      model.skeleton.addJoint(p !== -1 ? p : undefined, vec3.fromValues(lx, ly, lz));
+    }
+  } else if (jointCount > 0) {
+    // keep consistent sizes even if joints table is missing
+    for (let i = 0; i < jointCount; i++) {
+      jointMats.push(mat4.create());
+      model.joints.push({ parent: 0xff, boneNum: i, translation: vec3.create(), bindTranslation: vec3.create() });
+      model.skeleton.addJoint(undefined, vec3.create());
+    }
   }
 
-            }
-            cmdIdx++;
+  // --- FACEBATCHES (16 bytes each) ---
+interface Facebatch {
+  materialID: number;
+  texW: number;
+  texH: number;
+  dlStartCmd: number;
+  renderFlags: number;
+  tintR: number; tintG: number; tintB: number; tintA: number;
+  tintEnabled: boolean; // <-- ADD
+  tris: { i0: number; i1: number; i2: number }[];
+}
+
+  const facebatches: Facebatch[] = [];
+  for (let i = 0; i < faceBatchCount; i++) {
+    const o = faceOff + i * 16;
+    if (o + 16 > data.byteLength) break;
+
+    const matIdx = data.getUint8(o + 0);
+    const dlStartCmd = data.getInt16(o + 8, false);
+    const renderFlags = data.getUint8(o + 0x0c);
+
+    const m = mats[matIdx];
+    const texId = m ? m.texId : -1;
+    const texW = m ? m.texW : 32;
+    const texH = m ? m.texH : 32;
+
+facebatches.push({
+  materialID: texId,
+  texW, texH,
+  dlStartCmd: Math.max(0, dlStartCmd | 0),
+  renderFlags,
+  tintR: m ? m.tintR : 255,
+  tintG: m ? m.tintG : 255,
+  tintB: m ? m.tintB : 255,
+  tintA: 255,
+  tintEnabled: m ? m.tintEnabled : false, // <-- ADD
+  tris: [],
+});
+  }
+
+  facebatches.sort((a, b) => a.dlStartCmd - b.dlStartCmd);
+
+  if (DP_CHAR_DEBUG) {
+    console.warn(`[DP_CHAR] Facebatches (first 10):`);
+    for (let i = 0; i < Math.min(10, facebatches.length); i++) {
+      const fb = facebatches[i];
+      console.warn(
+        `  #${i} cmd=${fb.dlStartCmd} texId=${fb.materialID} tex=${fb.texW}x${fb.texH} ` +
+        `tint=(${fb.tintR},${fb.tintG},${fb.tintB},255) flags=0x${fb.renderFlags.toString(16)}`
+      );
+    }
+  }
+
+  // --- F3DEX2-ish parse to build one big VBO ---
+  const outPos: number[] = [];
+  const outClr: number[] = [];
+  const outTex: number[] = [];
+  const outBone: number[] = [];
+
+  const vtxCache = new Int32Array(64).fill(0);
+  const vtxValid = new Uint8Array(64);
+
+  function pickSlot(x: number): number {
+    const sA = (x >>> 1) & 0x3f; // classic
+    const sB = x & 0x3f;         // raw
+    const aOK = vtxValid[sA] !== 0;
+    const bOK = vtxValid[sB] !== 0;
+    if (aOK && !bOK) return sA;
+    if (bOK && !aOK) return sB;
+    return sA;
+  }
+
+  const vboMap = new Map<string, number>();
+
+  let fbIndex = -1;
+  let currentFb: Facebatch | null = null;
+  let cmdIdx = 0;
+  let currentMtxIdx = 0;
+
+  // Prim/Env colors (if ever present)
+  let primR = 255, primG = 255, primB = 255, primA = 255;
+  let envR = 255, envG = 255, envB = 255, envA = 255;
+
+  // Geometry mode tracking (for G_LIGHTING detection)
+  let geomMode = 0 >>> 0;
+  let lightingEnabled = false;
+
+  const segmentBases = new Uint32Array(16);
+  segmentBases[0x05] = vtxOff >>> 0;
+  segmentBases[0x04] = vtxOff >>> 0;
+
+  while (cmdIdx < dlLength) {
+    const cmdOffset = dlOff + cmdIdx * 8;
+    if (cmdOffset + 8 > data.byteLength) break;
+
+    while (fbIndex + 1 < facebatches.length && cmdIdx >= facebatches[fbIndex + 1].dlStartCmd) {
+      fbIndex++;
+      currentFb = facebatches[fbIndex];
+    }
+
+    const w0 = data.getUint32(cmdOffset + 0, false);
+    const w1 = data.getUint32(cmdOffset + 4, false);
+    const opcode = (w0 >>> 24) & 0xFF;
+    opCounts[opcode]++;
+
+    // Some models do triangles early; skip until we see vertices
+    if (!sawAnyVtx && (opcode === 0x05 || opcode === 0x06)) {
+      cmdIdx++;
+      continue;
+    }
+
+    if (opcode === 0xD9) {
+      // gSPGeometryMode(clear, set)
+      const clearMask = (w0 & 0x00FFFFFF) >>> 0;
+      const setMask = w1 >>> 0;
+      geomMode = ((geomMode & (~clearMask >>> 0)) | setMask) >>> 0;
+      const newLighting = (geomMode & G_LIGHTING) !== 0;
+      if (newLighting !== lightingEnabled && DP_CHAR_DEBUG) {
+        console.warn(`[DP_CHAR] G_LIGHTING ${newLighting ? 'ON' : 'OFF'} at cmd=${cmdIdx}`);
+      }
+      lightingEnabled = newLighting;
+
+    } else if (opcode === 0xFA) {
+      // G_SETPRIMCOLOR
+      primR = (w1 >>> 24) & 0xFF;
+      primG = (w1 >>> 16) & 0xFF;
+      primB = (w1 >>> 8)  & 0xFF;
+      primA = (w1 >>> 0)  & 0xFF;
+
+    } else if (opcode === 0xFB) {
+      // G_SETENVCOLOR
+      envR = (w1 >>> 24) & 0xFF;
+      envG = (w1 >>> 16) & 0xFF;
+      envB = (w1 >>> 8)  & 0xFF;
+      envA = (w1 >>> 0)  & 0xFF;
+
+    } else if (opcode === 0xDA) {
+      // G_MTX
+      const seg = (w1 >>> 24) & 0xFF;
+      if (seg === 0x03) currentMtxIdx = (((w1 & 0x00FFFFFF) / 64) | 0);
+
+    } else if (opcode === 0x01) {
+      // G_VTX
+      sawAnyVtx = true;
+
+      const num = (w0 >>> 12) & 0xFF;
+      const v0_encoded = (w0 >>> 1) & 0x7F;
+      const v0 = (v0_encoded - num) & 0x3F;
+
+      const seg = (w1 >>> 24) & 0xFF;
+      const off24 = (w1 & 0x00FFFFFF) >>> 0;
+
+      let segBase = segmentBases[seg] >>> 0;
+      if (segBase === 0 && seg !== 0x00) {
+        segBase = vtxOff >>> 0;
+        segmentBases[seg] = segBase;
+      }
+
+      const fileByteOff = (segBase + off24) >>> 0;
+      if (fileByteOff < vtxOff || fileByteOff >= data.byteLength) {
+        cmdIdx++;
+        continue;
+      }
+
+      const baseVtxIndex = ((fileByteOff - vtxOff) / 16) | 0;
+
+      for (let v = 0; v < num; v++) {
+        const romIdx = baseVtxIndex + v;
+        const cacheIdx = (v0 + v) & 0x3F;
+
+        // IMPORTANT: include lighting + renderFlags in key so we don’t reuse a “normal-as-color” vertex
+       // IMPORTANT: include lighting + renderFlags + material + tint in key so one batch can't "steal" another's color
+const fbFlags = currentFb ? (currentFb.renderFlags & 0xFF) : 0;
+const matKey  = currentFb ? (currentFb.materialID | 0) : -1;
+const tintKey = currentFb ? ((currentFb.tintR << 16) | (currentFb.tintG << 8) | currentFb.tintB) : 0;
+const key = `${romIdx}_${currentMtxIdx}_${lightingEnabled ? 1 : 0}_${fbFlags}_${matKey}_${tintKey}`;
+        let newIdx = vboMap.get(key);
+
+        if (newIdx === undefined) {
+          const o = vtxOff + romIdx * 16;
+          if (o + 16 <= data.byteLength) {
+            const vx = data.getInt16(o + 0, false);
+            const vy = data.getInt16(o + 2, false);
+            const vz = data.getInt16(o + 4, false);
+
+            const s = data.getInt16(o + 8, false);
+            const t = data.getInt16(o + 10, false);
+
+const nxU8 = data.getUint8(o + 12);
+const nyU8 = data.getUint8(o + 13);
+const nzU8 = data.getUint8(o + 14);
+const a    = data.getUint8(o + 15);
+
+// When lighting is OFF, 12..14 are real RGB.
+// When lighting is ON, 12..14 are normals (signed bytes).
+let r = nxU8, g = nyU8, b = nzU8;
+
+// Tint is a BASE color for foliage/cutouts, not a flat override for everything.
+const hasTint = !!currentFb && !(currentFb.tintR === 255 && currentFb.tintG === 255 && currentFb.tintB === 255);
+const wantsTintBase = !!currentFb && hasTint && currentFb.tintEnabled;
+if (lightingEnabled) {
+  const baseR = wantsTintBase ? currentFb!.tintR : 255;
+  const baseG = wantsTintBase ? currentFb!.tintG : 255;
+  const baseB = wantsTintBase ? currentFb!.tintB : 255;
+  const lit = shadeRGB(baseR, baseG, baseB, nxU8, nyU8, nzU8);
+  r = lit.r; g = lit.g; b = lit.b;
+} else if (wantsTintBase) {
+  r = currentFb!.tintR;
+  g = currentFb!.tintG;
+  b = currentFb!.tintB;
+}
+
+            newIdx = (outPos.length / 3) | 0;
+            outPos.push(vx, vy, vz);
+            outTex.push(s, t);
+            outClr.push(r, g, b, a);
+            outBone.push(currentMtxIdx);
+
+            vboMap.set(key, newIdx);
+            vtxCache[cacheIdx] = newIdx;
+            vtxValid[cacheIdx] = 1;
+          } else {
+            vtxCache[cacheIdx] = 0;
+            vtxValid[cacheIdx] = 0;
+          }
+        } else {
+          vtxCache[cacheIdx] = newIdx;
+          vtxValid[cacheIdx] = 1;
         }
+      }
 
-        // --- 4. SHAPE GENERATION ---
-        const finalVerts = outPos.length / 3;
-        const posAB = new ArrayBuffer(finalVerts * 6);
-        const clrAB = new ArrayBuffer(finalVerts * 4);
-        const texAB = new ArrayBuffer(finalVerts * 4);
-        const posDV = new DataView(posAB);
-        const clrDV = new DataView(clrAB);
-        const texDV = new DataView(texAB);
+    } else if (opcode === 0x05 && currentFb) {
+      // G_TRI1
+      const src = ((w1 & 0x00FFFFFF) !== 0) ? w1 : w0;
+      const a = (src >>> 16) & 0xFF;
+      const b = (src >>> 8) & 0xFF;
+      const c = (src >>> 0) & 0xFF;
 
-        let minX = Infinity, minY = Infinity, minZ = Infinity;
-        let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+      currentFb.tris.push({
+        i0: vtxCache[pickSlot(a)],
+        i1: vtxCache[pickSlot(b)],
+        i2: vtxCache[pickSlot(c)],
+      });
 
-        for(let j = 0; j < finalVerts; j++) {
-            const px = outPos[j*3+0]; const py = outPos[j*3+1]; const pz = outPos[j*3+2];
-            minX = Math.min(minX, px); minY = Math.min(minY, py); minZ = Math.min(minZ, pz);
-            maxX = Math.max(maxX, px); maxY = Math.max(maxY, py); maxZ = Math.max(maxZ, pz);
+    } else if (opcode === 0x06 && currentFb) {
+      // G_TRI2
+      const a0 = (w0 >>> 16) & 0xFF;
+      const a1 = (w0 >>> 8) & 0xFF;
+      const a2 = (w0 >>> 0) & 0xFF;
 
-            posDV.setInt16(j*6 + 0, px, false);
-            posDV.setInt16(j*6 + 2, py, false);
-            posDV.setInt16(j*6 + 4, pz, false);
-            texDV.setInt16(j*4 + 0, outTex[j*2+0], false);
-            texDV.setInt16(j*4 + 2, outTex[j*2+1], false);
-            clrDV.setUint8(j*4 + 0, outClr[j*4+0]);
-            clrDV.setUint8(j*4 + 1, outClr[j*4+1]);
-            clrDV.setUint8(j*4 + 2, outClr[j*4+2]);
-            clrDV.setUint8(j*4 + 3, outClr[j*4+3]);
+      const b0 = (w1 >>> 16) & 0xFF;
+      const b1 = (w1 >>> 8) & 0xFF;
+      const b2 = (w1 >>> 0) & 0xFF;
+
+      currentFb.tris.push({ i0: vtxCache[pickSlot(a0)], i1: vtxCache[pickSlot(a1)], i2: vtxCache[pickSlot(a2)] });
+      currentFb.tris.push({ i0: vtxCache[pickSlot(b0)], i1: vtxCache[pickSlot(b1)], i2: vtxCache[pickSlot(b2)] });
+    }
+
+    cmdIdx++;
+  }
+
+  if (DP_CHAR_DEBUG) {
+    const parts: string[] = [];
+    for (let i = 0; i < 256; i++) if (opCounts[i]) parts.push(`0x${i.toString(16)}=${opCounts[i]}`);
+    console.warn(`[DP_CHAR] Opcode counts: ${parts.join(' ')}`);
+  }
+
+  // --- Buffers ---
+  const finalVerts = (outPos.length / 3) | 0;
+  const posAB = new ArrayBuffer(finalVerts * 6);
+  const clrAB = new ArrayBuffer(finalVerts * 4);
+  const texAB = new ArrayBuffer(finalVerts * 4);
+  const posDV = new DataView(posAB);
+  const clrDV = new DataView(clrAB);
+  const texDV = new DataView(texAB);
+
+  const originalLocalPos = new Int16Array(outPos); // Int16 local-space vertices
+
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+
+  for (let j = 0; j < finalVerts; j++) {
+    const lx = outPos[j * 3 + 0];
+    const ly = outPos[j * 3 + 1];
+    const lz = outPos[j * 3 + 2];
+
+    let wx = lx, wy = ly, wz = lz;
+    if (jointCount > 0) {
+      const bindMtx = jointMats[outBone[j] || 0];
+      if (bindMtx) {
+        wx = bindMtx[0]*lx + bindMtx[4]*ly + bindMtx[8]*lz + bindMtx[12];
+        wy = bindMtx[1]*lx + bindMtx[5]*ly + bindMtx[9]*lz + bindMtx[13];
+        wz = bindMtx[2]*lx + bindMtx[6]*ly + bindMtx[10]*lz + bindMtx[14];
+      }
+    }
+
+    minX = Math.min(minX, wx); minY = Math.min(minY, wy); minZ = Math.min(minZ, wz);
+    maxX = Math.max(maxX, wx); maxY = Math.max(maxY, wy); maxZ = Math.max(maxZ, wz);
+
+    posDV.setInt16(j * 6 + 0, wx, false);
+    posDV.setInt16(j * 6 + 2, wy, false);
+    posDV.setInt16(j * 6 + 4, wz, false);
+
+    texDV.setInt16(j * 4 + 0, outTex[j * 2 + 0], false);
+    texDV.setInt16(j * 4 + 2, outTex[j * 2 + 1], false);
+
+    clrDV.setUint8(j * 4 + 0, outClr[j * 4 + 0]);
+    clrDV.setUint8(j * 4 + 1, outClr[j * 4 + 1]);
+    clrDV.setUint8(j * 4 + 2, outClr[j * 4 + 2]);
+    clrDV.setUint8(j * 4 + 3, outClr[j * 4 + 3]);
+  }
+
+  // UV scaling: N64 s,t are 1/32 texel; convert to GX fixed (1/1024) normalized:
+  // gx = raw * (32 / texW or texH)
+  for (const fb of facebatches) {
+    if (fb.materialID < 0 || fb.tris.length === 0) continue;
+    for (const tri of fb.tris) {
+      for (const idx of [tri.i0, tri.i1, tri.i2]) {
+        const rawS = outTex[idx * 2 + 0];
+        const rawT = outTex[idx * 2 + 1];
+        texDV.setInt16(idx * 4 + 0, Math.round(rawS * (32.0 / fb.texW)), false);
+        texDV.setInt16(idx * 4 + 2, Math.round(rawT * (32.0 / fb.texH)), false);
+      }
+    }
+  }
+
+  (model as any).bbox = new AABB(minX, minY, minZ, maxX, maxY, maxZ);
+
+  // --- GX setup ---
+  const vcd: GX_VtxDesc[] = nArray(GX.Attr.MAX + 1, () => ({ type: GX.AttrType.NONE }));
+  vcd[GX.Attr.POS].type = GX.AttrType.INDEX16;
+  vcd[GX.Attr.CLR0].type = GX.AttrType.INDEX16;
+  vcd[GX.Attr.TEX0].type = GX.AttrType.INDEX16;
+
+  const vat: GX_VtxAttrFmt[][] = nArray(8, () =>
+    nArray(GX.Attr.MAX + 1, () => ({ compType: GX.CompType.U8, compShift: 0, compCnt: 0 } as GX_VtxAttrFmt))
+  );
+  vat[0][GX.Attr.POS]  = { compType: GX.CompType.S16,  compShift: 0,  compCnt: GX.CompCnt.POS_XYZ };
+  vat[0][GX.Attr.CLR0] = { compType: GX.CompType.RGBA8, compShift: 0,  compCnt: GX.CompCnt.CLR_RGBA };
+  vat[0][GX.Attr.TEX0] = { compType: GX.CompType.S16,  compShift: 10, compCnt: GX.CompCnt.TEX_ST };
+
+  const vtxArrays: GX_Array[] = [];
+  vtxArrays[GX.Attr.POS]  = { buffer: ArrayBufferSlice.fromView(posDV), offs: 0, stride: 6 };
+  vtxArrays[GX.Attr.CLR0] = { buffer: ArrayBufferSlice.fromView(clrDV), offs: 0, stride: 4 };
+  vtxArrays[GX.Attr.TEX0] = { buffer: ArrayBufferSlice.fromView(texDV), offs: 0, stride: 4 };
+
+  model.createModelShapes = () => {
+    const shapes = new ModelShapes(model, posDV, undefined);
+    shapes.shapes[0] = [];
+    shapes.shapes[1] = [];
+    shapes.shapes[2] = [];
+
+    let usedFb = 0;
+    let totalTris = 0;
+
+    for (const fb of facebatches) {
+      if (fb.tris.length === 0 || fb.materialID < 0) continue;
+      usedFb++;
+      totalTris += fb.tris.length;
+
+      // Foliage cutout/tint flag in your logs is 0x80
+      const wantsCutout = (fb.renderFlags & 0x80) !== 0;
+
+      let shaderFlags = 0;
+      let targetList = 0;
+
+      if (wantsCutout) {
+        shaderFlags |= ShaderFlags.AlphaCompare;
+        targetList = 0; // cutouts should stay in opaque pass
+      }
+
+      // IMPORTANT: always include CLR so vertex/tint actually affects output
+// DP objects MUST use CLR shading (your shadeRGB) -> tevMode must be "modulate"
+// Remove the pre-tinted texture hack; it causes green bleed and kills shading.
+const shader: Shader = {
+  layers: [{
+    texId: fb.materialID,
+    tevMode: 1,          // <-- IMPORTANT: uses vertex color (CLR0)
+    enableScroll: 0,
+  }],
+  attrFlags: (ShaderAttrFlags.CLR | (ShaderAttrFlags as any).TEX0),
+  flags: shaderFlags,
+  hasHemisphericProbe: false,
+  hasReflectiveProbe: false,
+  reflectiveProbeMaskTexId: null,
+  reflectiveProbeIdx: 0,
+  reflectiveAmbFactor: 0.0,
+  hasNBTTexture: false,
+  nbtTexId: null,
+  nbtParams: 0,
+  furRegionsTexId: null,
+
+  // IMPORTANT: keep this white so we don't "double tint"
+  color: { r: 1, g: 1, b: 1, a: 1 },
+
+normalFlags: NormalFlags.HasVertexColor | NormalFlags.HasVertexAlpha,
+lightFlags: LightFlags.OverrideLighting,
+  texMtxCount: 0,
+};
+
+      const material = materialFactory.buildObjectMaterial(shader, texFetcher, false);
+
+      const vtxCountOut = fb.tris.length * 3;
+      const out = new Uint8Array(3 + vtxCountOut * 6);
+      let p = 0;
+      out[p++] = 0x90;
+      out[p++] = (vtxCountOut >>> 8) & 0xff;
+      out[p++] = (vtxCountOut >>> 0) & 0xff;
+
+      for (const tri of fb.tris) {
+        for (const idx of [tri.i0, tri.i1, tri.i2]) {
+          out[p++] = (idx >>> 8) & 0xff; out[p++] = idx & 0xff; // POS
+          out[p++] = (idx >>> 8) & 0xff; out[p++] = idx & 0xff; // CLR
+          out[p++] = (idx >>> 8) & 0xff; out[p++] = idx & 0xff; // TEX0
         }
-        (model as any).bbox = new AABB(minX, minY, minZ, maxX, maxY, maxZ);
+      }
 
-        const vcd: GX_VtxDesc[] = nArray(GX.Attr.MAX + 1, () => ({ type: GX.AttrType.NONE }));
-        vcd[GX.Attr.POS].type = GX.AttrType.INDEX16;
-        vcd[GX.Attr.CLR0].type = GX.AttrType.INDEX16;
-        vcd[GX.Attr.TEX0].type = GX.AttrType.INDEX16;
 
-        const vat: GX_VtxAttrFmt[][] = nArray(8, () => nArray(GX.Attr.MAX + 1, () => ({ compType: GX.CompType.U8, compShift: 0, compCnt: 0 } as GX_VtxAttrFmt)));
-        vat[0][GX.Attr.POS] = { compType: GX.CompType.S16, compShift: 0, compCnt: GX.CompCnt.POS_XYZ };
-        vat[0][GX.Attr.CLR0] = { compType: GX.CompType.RGBA8, compShift: 0, compCnt: GX.CompCnt.CLR_RGBA };
-        vat[0][GX.Attr.TEX0] = { compType: GX.CompType.S16, compShift: 11, compCnt: GX.CompCnt.TEX_ST };
 
-        const vtxArrays: GX_Array[] = [];
-        vtxArrays[GX.Attr.POS] = { buffer: ArrayBufferSlice.fromView(posDV), offs: 0, stride: 6 };
-        vtxArrays[GX.Attr.CLR0] = { buffer: ArrayBufferSlice.fromView(clrDV), offs: 0, stride: 4 };
-        vtxArrays[GX.Attr.TEX0] = { buffer: ArrayBufferSlice.fromView(texDV), offs: 0, stride: 4 };
+const geom = new ShapeGeometry(vtxArrays, vcd, vat, new DataView(out.buffer), false);     const pnMatrixMap = nArray(10, () => 0);
+      geom.setPnMatrixMap(pnMatrixMap, false, false);
 
-        model.createModelShapes = () => {
-            const shapes = new ModelShapes(model, posDV, undefined);
-            shapes.shapes[0] = []; shapes.shapes[1] = []; shapes.shapes[2] = [];
+      shapes.shapes[targetList].push(new Shape(geom, new ShapeMaterial(material), false));
+    }
 
-            for (const fb of facebatches) {
-                if (fb.tris.length === 0) continue;
-                
-                // FIXED FOR SEE-THROUGH / MISSING LIMBS:
-                // 1. Force AlphaCompare (Allows hair/eye transparency)
-                // 2. Disable CullBackface (Restores mirrored arms and legs)
-                // 3. Force targetList 0 (Writes to Z-Buffer to fix x-ray overlaps)
-                let shaderFlags = ShaderFlags.AlphaCompare; 
-                let targetList = 0;
+    if (DP_CHAR_DEBUG) {
+      console.warn(`[DP_CHAR] Facebatches used=${usedFb}/${facebatches.length} vertsOut=${finalVerts} trisOut=${totalTris}`);
+    }
 
-                const shader: Shader = {
-                    layers: [{ texId: fb.materialID, tevMode: 0, enableScroll: 0 }],
-                    flags: shaderFlags,
-                    attrFlags: ShaderAttrFlags.CLR | (ShaderAttrFlags as any).TEX0, 
-                    hasHemisphericProbe: false, hasReflectiveProbe: false, reflectiveProbeMaskTexId: null,
-                    reflectiveProbeIdx: 0, reflectiveAmbFactor: 0.0, hasNBTTexture: false, nbtTexId: null,
-                    nbtParams: 0, furRegionsTexId: null, color: { r: 1, g: 1, b: 1, a: 1 },
-                    normalFlags: 0, lightFlags: 0, texMtxCount: 0,
-                };
-                
-                // NO HARDWARE SKINNING
-                const material = materialFactory.buildObjectMaterial(shader, texFetcher, false);
+    // CPU skinning (optional)
+    if (jointCount > 0) {
+      const origAddRenderInsts = shapes.addRenderInsts.bind(shapes);
+      shapes.addRenderInsts = (device, renderInstManager, modelCtx, renderLists, matrix, matrixPalette, overrideSortDepth, overrideSortLayer) => {
+        if (matrixPalette && matrixPalette.length > 0) {
+          for (let j = 0; j < finalVerts; j++) {
+            const lx = originalLocalPos[j * 3 + 0];
+            const ly = originalLocalPos[j * 3 + 1];
+            const lz = originalLocalPos[j * 3 + 2];
+            const boneMtx = matrixPalette[outBone[j] || 0];
 
-                const vtxCountOut = fb.tris.length * 3;
-                const out = new Uint8Array(3 + vtxCountOut * 6); 
-                let p = 0;
-                out[p++] = 0x90; 
-                out[p++] = (vtxCountOut >>> 8) & 0xFF;
-                out[p++] = (vtxCountOut >>> 0) & 0xFF;
+            if (boneMtx) {
+              const wx = boneMtx[0]*lx + boneMtx[4]*ly + boneMtx[8]*lz + boneMtx[12];
+              const wy = boneMtx[1]*lx + boneMtx[5]*ly + boneMtx[9]*lz + boneMtx[13];
+              const wz = boneMtx[2]*lx + boneMtx[6]*ly + boneMtx[10]*lz + boneMtx[14];
 
-                for (const tri of fb.tris) {
-                    out[p++] = (tri.i0 >>> 8) & 0xFF; out[p++] = tri.i0 & 0xFF; // POS
-                    out[p++] = (tri.i0 >>> 8) & 0xFF; out[p++] = tri.i0 & 0xFF; // CLR
-                    out[p++] = (tri.i0 >>> 8) & 0xFF; out[p++] = tri.i0 & 0xFF; // TEX0
-                    
-                    out[p++] = (tri.i1 >>> 8) & 0xFF; out[p++] = tri.i1 & 0xFF; // POS
-                    out[p++] = (tri.i1 >>> 8) & 0xFF; out[p++] = tri.i1 & 0xFF; // CLR
-                    out[p++] = (tri.i1 >>> 8) & 0xFF; out[p++] = tri.i1 & 0xFF; // TEX0
-                    
-                    out[p++] = (tri.i2 >>> 8) & 0xFF; out[p++] = tri.i2 & 0xFF; // POS
-                    out[p++] = (tri.i2 >>> 8) & 0xFF; out[p++] = tri.i2 & 0xFF; // CLR
-                    out[p++] = (tri.i2 >>> 8) & 0xFF; out[p++] = tri.i2 & 0xFF; // TEX0
-                }
-
-                const geom = new ShapeGeometry(vtxArrays, vcd, vat, new DataView(out.buffer), false);
-                
-                const pnMatrixMap = nArray(10, () => 0);
-                geom.setPnMatrixMap(pnMatrixMap, false, false);
-
-                shapes.shapes[targetList].push(new Shape(geom, new ShapeMaterial(material), false));
+              posDV.setInt16(j * 6 + 0, wx, false);
+              posDV.setInt16(j * 6 + 2, wy, false);
+              posDV.setInt16(j * 6 + 4, wz, false);
             }
-            return shapes;
-        };
-        
-        model.sharedModelShapes = model.createModelShapes();
-        return model;
+          }
+          shapes.reloadVertices();
+        }
+        origAddRenderInsts(device, renderInstManager, modelCtx, renderLists, matrix, matrixPalette, overrideSortDepth, overrideSortLayer);
+      };
+    }
+
+    return shapes;
+  };
+
+  model.hasFineSkinning = false;
+  model.sharedModelShapes = model.createModelShapes();
+  return model;
+
+
+
+
+
 
     } else {
         // ==========================================
         // DINOSAUR PLANET MAP BLOCK PARSER
         // ==========================================
-        model.isMapBlock = true;
+       // ==========================================
+// DINOSAUR PLANET MAP BLOCK PARSER  (FIXED)
+// - DO NOT use SFA water material
+// - DO NOT push into modelShapes.waters (SFA path)
+// - MUCH stricter "water" detection
+// - Optional UV scroll for water / waterfall-ish translucent
+// ==========================================
+model.isMapBlock = true;
 
-        const matOff = data.getUint32(0x00); 
-        const vtxOff = data.getUint32(0x04); 
-        const triOff = data.getUint32(0x08); 
-        const batOff = data.getUint32(0x0C); 
-        const materialCount = data.getUint8(0x4A); 
+const matOff = data.getUint32(0x00);
+const vtxOff = data.getUint32(0x04);
+const triOff = data.getUint32(0x08);
+const batOff = data.getUint32(0x0C);
+const materialCount = data.getUint8(0x4A);
 
-        const batchCount = ((matOff - batOff) / 0x18) | 0;
-        if (batchCount <= 0) throw new Error(`DP Map: bad batchCount=${batchCount}`);
+const batchCount = ((matOff - batOff) / 0x18) | 0;
+if (batchCount <= 0) throw new Error(`DP Map: bad batchCount=${batchCount}`);
 
-        const totalVerts = ((triOff - vtxOff) / 16) | 0;
-        const totalTris  = ((batOff - triOff) / 8)  | 0;
+const totalVerts = ((triOff - vtxOff) / 16) | 0;
+const totalTris  = ((batOff - triOff) / 8)  | 0;
 
-        const posAB = new ArrayBuffer(totalVerts * 6);
-        const posDV = new DataView(posAB);
-        const clrAB = new ArrayBuffer(totalVerts * 4);
-        const clrDV = new DataView(clrAB);
+const posAB = new ArrayBuffer(totalVerts * 6);
+const posDV = new DataView(posAB);
+const clrAB = new ArrayBuffer(totalVerts * 4);
+const clrDV = new DataView(clrAB);
 
-        type DPMapBatch = {
-            isOpaque: boolean; 
-            pixelFormat: number; 
-            drawMode: number;
-            materialId: number; 
-            blendMaterialId: number;
-            vStart: number; vEnd: number; 
-            tStart: number; tEnd: number;
-            texW: number; texH: number; 
-            blendTexW: number; blendTexH: number;
-        };
+type DPMapBatch = {
+    isOpaque: boolean;
+    pixelFormat: number;
+    drawMode: number;
+    materialId: number;
+    blendMaterialId: number;
+    vStart: number; vEnd: number;
+    tStart: number; tEnd: number;
+    texW: number; texH: number;
+    blendTexW: number; blendTexH: number;
 
-        const batches: DPMapBatch[] = [];
-        const requestedTextures = new Set<number>();
+    // effect-ish
+    isWater: boolean;
+    scrollPxU: number; // pixels per frame
+    scrollPxV: number; // pixels per frame
+};
 
-        for (let i = 0; i < batchCount; i++) {
-            const o = batOff + i * 0x18;
+const batches: DPMapBatch[] = [];
 
-            const vStart = data.getUint16(o + 0x04, false);
-            const tStart = data.getUint16(o + 0x06, false);
+for (let i = 0; i < batchCount; i++) {
+    const o = batOff + i * 0x18;
 
-            const nextO = batOff + (i + 1) * 0x18;
-            const vEnd = (i + 1 < batchCount) ? data.getUint16(nextO + 0x04, false) : totalVerts;
-            const tEnd = (i + 1 < batchCount) ? data.getUint16(nextO + 0x06, false) : totalTris;
+    const vStart = data.getUint16(o + 0x04, false);
+    const tStart = data.getUint16(o + 0x06, false);
 
-            const drawMode = data.getUint8(o + 0x03); 
-            const matIdx = data.getUint8(o + 0x12);
-            const blendMatIdx = data.getUint8(o + 0x15); 
+    const nextO = batOff + (i + 1) * 0x18;
+    const vEnd = (i + 1 < batchCount) ? data.getUint16(nextO + 0x04, false) : totalVerts;
+    const tEnd = (i + 1 < batchCount) ? data.getUint16(nextO + 0x06, false) : totalTris;
 
-            let globalTexId = -1;
-            let blendGlobalTexId = -1;
-            let isOpaque = true;
-            let pixelFormat = 0;
-            let texW = 32, texH = 32;
-            let blendTexW = 32, blendTexH = 32;
+    const drawMode = data.getUint8(o + 0x03);
+    const matIdx = data.getUint8(o + 0x12);
+    const blendMatIdx = data.getUint8(o + 0x15);
 
-            if (matIdx < materialCount) {
-                const matStructOff = matOff + (matIdx * 0x0C);
-                if (matStructOff + 0x0B < data.byteLength) {
-                    globalTexId = data.getUint32(matStructOff + 0x00, false) & 0xFFFF;
-                    texW = data.getUint8(matStructOff + 0x08);
-                    texH = data.getUint8(matStructOff + 0x09);
-                    
-                    const matFormat = data.getUint8(matStructOff + 0x0A);
-                    isOpaque = (matFormat & 0x10) !== 0;
-                    pixelFormat = (matFormat & 0x0F);
+    let materialId = -1;
+    let blendMaterialId = -1;
 
-                    if (globalTexId >= 0 && globalTexId < 10000) {
-                        requestedTextures.add(globalTexId);
-                    } else {
-                        globalTexId = -1;
-                    }
-                }
-            }
+    let isOpaque = true;
+    let pixelFormat = 0;
 
-            if (blendMatIdx !== 0x00 && blendMatIdx !== 0xFF && blendMatIdx < materialCount) {
-                const blendMatStructOff = matOff + (blendMatIdx * 0x0C);
-                blendGlobalTexId = data.getUint32(blendMatStructOff + 0x00, false) & 0xFFFF;
-                blendTexW = data.getUint8(blendMatStructOff + 0x08); 
-                blendTexH = data.getUint8(blendMatStructOff + 0x09); 
-                if (blendGlobalTexId >= 0 && blendGlobalTexId < 10000) {
-                    requestedTextures.add(blendGlobalTexId);
-                } else {
-                    blendGlobalTexId = -1;
-                }
-            }
+    let texW = 32, texH = 32;
+    let blendTexW = 32, blendTexH = 32;
 
-            if (texW <= 0) texW = 32;
-            if (texH <= 0) texH = 32;
-            if (blendTexW <= 0) blendTexW = 32;
-            if (blendTexH <= 0) blendTexH = 32;
+    if (matIdx < materialCount) {
+        const matStructOff = matOff + (matIdx * 0x0C);
+        if (matStructOff + 0x0B < data.byteLength) {
+            materialId = data.getUint32(matStructOff + 0x00, false) & 0xFFFF;
+            texW = data.getUint8(matStructOff + 0x08) || 32;
+            texH = data.getUint8(matStructOff + 0x09) || 32;
 
-            if (vEnd > vStart && tEnd > tStart) {
-                batches.push({ isOpaque, pixelFormat, drawMode, materialId: globalTexId, blendMaterialId: blendGlobalTexId, vStart, vEnd, tStart, tEnd, texW, texH, blendTexW, blendTexH });
-            }
+            const matFormat = data.getUint8(matStructOff + 0x0A);
+            isOpaque = (matFormat & 0x10) !== 0;
+            pixelFormat = (matFormat & 0x0F);
+
+            if (materialId < 0 || materialId >= 10000) materialId = -1;
         }
+    }
 
-        let minX = Infinity, minY = Infinity, minZ = Infinity;
-        let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    if (blendMatIdx !== 0x00 && blendMatIdx !== 0xFF && blendMatIdx < materialCount) {
+        const blendMatStructOff = matOff + (blendMatIdx * 0x0C);
+        if (blendMatStructOff + 0x0B < data.byteLength) {
+            blendMaterialId = data.getUint32(blendMatStructOff + 0x00, false) & 0xFFFF;
+            blendTexW = data.getUint8(blendMatStructOff + 0x08) || 32;
+            blendTexH = data.getUint8(blendMatStructOff + 0x09) || 32;
 
-        for (let i = 0; i < totalVerts; i++) {
-            const o = vtxOff + i * 16;
-            const px = data.getInt16(o + 0, false);
-            const py = data.getInt16(o + 2, false);
-            const pz = data.getInt16(o + 4, false);
-
-            minX = Math.min(minX, px); minY = Math.min(minY, py); minZ = Math.min(minZ, pz);
-            maxX = Math.max(maxX, px); maxY = Math.max(maxY, py); maxZ = Math.max(maxZ, pz);
-
-            posDV.setInt16(i * 6 + 0, px, false);
-            posDV.setInt16(i * 6 + 2, py, false);
-            posDV.setInt16(i * 6 + 4, pz, false);
-            
-            clrDV.setUint8(i * 4 + 0, data.getUint8(o + 0x0C));
-            clrDV.setUint8(i * 4 + 1, data.getUint8(o + 0x0D));
-            clrDV.setUint8(i * 4 + 2, data.getUint8(o + 0x0E));
-            clrDV.setUint8(i * 4 + 3, data.getUint8(o + 0x0F));
+            if (blendMaterialId < 0 || blendMaterialId >= 10000) blendMaterialId = -1;
         }
+    }
 
-        (model as any).bbox = new AABB(minX, minY, minZ, maxX, maxY, maxZ);
-
-        type DPTri = { flip: boolean; i0: number; i1: number; i2: number };
-        const tris: DPTri[] = [];
-        for (let i = 0; i < totalTris; i++) {
-            const o = triOff + i * 8;
-            const f = data.getUint8(o + 0);
-            tris.push({
-                flip: !!(f & 0x80),
-                i0: data.getUint8(o + 1),
-                i1: data.getUint8(o + 2),
-                i2: data.getUint8(o + 3),
-            });
-        }
-
-        const vcd: GX_VtxDesc[] = nArray(GX.Attr.MAX + 1, () => ({ type: GX.AttrType.NONE }));
-        vcd[GX.Attr.POS].type = GX.AttrType.INDEX16;
-        vcd[GX.Attr.CLR0].type = GX.AttrType.INDEX16;
-        vcd[GX.Attr.TEX0].type = GX.AttrType.INDEX16;
-        vcd[GX.Attr.TEX1].type = GX.AttrType.INDEX16; 
-
-        const vat: GX_VtxAttrFmt[][] = nArray(8, () => nArray(GX.Attr.MAX + 1, () => ({ compType: GX.CompType.U8, compShift: 0, compCnt: 0 } as GX_VtxAttrFmt)));
-        vat[0][GX.Attr.POS] = { compType: GX.CompType.S16, compShift: 0, compCnt: GX.CompCnt.POS_XYZ };
-        vat[0][GX.Attr.CLR0] = { compType: GX.CompType.RGBA8, compShift: 0, compCnt: GX.CompCnt.CLR_RGBA };
-        vat[0][GX.Attr.TEX0] = { compType: GX.CompType.S16, compShift: 10, compCnt: GX.CompCnt.TEX_ST };
-        vat[0][GX.Attr.TEX1] = { compType: GX.CompType.S16, compShift: 10, compCnt: GX.CompCnt.TEX_ST }; 
-
-        model.createModelShapes = () => {
-            const shapes = new ModelShapes(model, new DataView(posAB), undefined);
-            shapes.shapes[0] = []; shapes.shapes[1] = []; shapes.shapes[2] = [];
-
-            for (const b of batches) {
-                const isSoftFormat = (b.pixelFormat !== 1 && b.pixelFormat !== 7 && b.pixelFormat !== 8);
-                const isWaterBlend = (b.blendMaterialId !== -1 && isSoftFormat);
-                const isTerrainBlend = (b.blendMaterialId !== -1 && !isWaterBlend);
-
-                const layers: any[] = [];
-                let activeTexFlags = 0;
-                
-                if (b.materialId !== -1) {
-                    layers.push({ texId: b.materialId, tevMode: 0, enableScroll: 0 });
-                    activeTexFlags |= (ShaderAttrFlags as any).TEX0;
-                }
-                if (b.blendMaterialId !== -1) {
-layers.push({ texId: b.blendMaterialId, tevMode: isWaterBlend ? 0 : 9, enableScroll: 0 });                    activeTexFlags |= (ShaderAttrFlags as any).TEX1; 
-                }
-
-                let isTrueTrans = false;
-                let isCutout = false;
-                let isWater = false;
-
-                const hasTexBlend = (b.drawMode & 0x40) !== 0;
-                const hasSemiTrans = (b.drawMode & 0x04) !== 0;
-
-                if (b.blendMaterialId !== -1) {
-                    if (isWaterBlend) {
-                        isTrueTrans = true; 
-                        isWater = true;
-} else {
-    // Terrain blend: not framebuffer transparency, it's a 2-layer TEV blend.
-    isTrueTrans = false;
-    isCutout = false;
+    if (vEnd > vStart && tEnd > tStart) {
+        batches.push({
+            isOpaque, pixelFormat, drawMode,
+            materialId, blendMaterialId,
+            vStart, vEnd, tStart, tEnd,
+            texW, texH, blendTexW, blendTexH,
+            isWater: false,
+            scrollPxU: 0,
+            scrollPxV: 0,
+        });
+    }
 }
-                } else if (!b.isOpaque) {
-                    const isKnownTree = [2087,1122, 1125, 1127, 1050, 1049, 1051, 1066, 1075, 1423].includes(b.materialId);
 
-                    if (isKnownTree || (b.drawMode & 0x80) !== 0) {
-                        isCutout = true; 
-                    } else if (isSoftFormat) {
-                        isTrueTrans = true; 
-                        isWater = true; 
-                    } else {
-                        isCutout = true; 
-                    }
-                } else if (b.drawMode === 0x00 || b.drawMode === 0x05 || b.drawMode === 0x14 || b.drawMode === 0x15 || b.drawMode === 0x18 || b.drawMode === 0x19) {
-                    isTrueTrans = true; 
-                    isWater = true;
-                } else if (hasTexBlend || hasSemiTrans) {
-                    isTrueTrans = true;
-                }
-                
-                let shaderFlags = 0;
-                let targetList = 0;
-                
-                if (isTrueTrans) {
-                    shaderFlags |= 0x40000000; 
-                    targetList = 1; 
-                } else if (isCutout) {
-                    shaderFlags |= ShaderFlags.AlphaCompare; 
-                    targetList = 0; 
-                } else {
-                    shaderFlags |= 0x10; 
-                    targetList = 0; 
-                }
+let minX = Infinity, minY = Infinity, minZ = Infinity;
+let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
 
-                if (isWater) {
-                    shaderFlags |= ShaderFlags.Water;
-                }
+for (let i = 0; i < totalVerts; i++) {
+    const o = vtxOff + i * 16;
+    const px = data.getInt16(o + 0, false);
+    const py = data.getInt16(o + 2, false);
+    const pz = data.getInt16(o + 4, false);
 
+    minX = Math.min(minX, px); minY = Math.min(minY, py); minZ = Math.min(minZ, pz);
+    maxX = Math.max(maxX, px); maxY = Math.max(maxY, py); maxZ = Math.max(maxZ, pz);
 
-                
-                const shader: Shader = {
-                    layers: layers,
-                    flags: shaderFlags,
-                    attrFlags: ShaderAttrFlags.CLR | activeTexFlags, 
-                    hasHemisphericProbe: false, hasReflectiveProbe: false, reflectiveProbeMaskTexId: null,
-                    reflectiveProbeIdx: 0, reflectiveAmbFactor: 0.0, hasNBTTexture: false, nbtTexId: null,
-                    nbtParams: 0, furRegionsTexId: null, color: { r: 1, g: 1, b: 1, a: 1 },
-                    normalFlags: 0, lightFlags: 0, texMtxCount: 0,
-                };
-                
-                const material = materialFactory.buildMapMaterial(shader, texFetcher);
-                
-                const tex0AB = new ArrayBuffer(totalVerts * 4);
-                const tex1AB = new ArrayBuffer(totalVerts * 4);
-                const tex0DV = new DataView(tex0AB);
-                const tex1DV = new DataView(tex1AB);
+    posDV.setInt16(i * 6 + 0, px, false);
+    posDV.setInt16(i * 6 + 2, py, false);
+    posDV.setInt16(i * 6 + 4, pz, false);
 
-                for (let ti = b.tStart; ti < b.tEnd; ti++) {
-                    let { flip, i0, i1, i2 } = tris[ti];
-                    const a = b.vStart + i0, bb = b.vStart + i1, c = b.vStart + i2;
-                    for (const idx of [a, bb, c]) {
-                        const o = vtxOff + idx * 16;
-                        const rawS = data.getInt16(o + 8, false);
-                        const rawT = data.getInt16(o + 10, false);
-                        
-                        tex0DV.setInt16(idx * 4 + 0, Math.round(rawS * (32.0 / b.texW)), false);
-                        tex0DV.setInt16(idx * 4 + 2, Math.round(rawT * (32.0 / b.texH)), false);
-                        
-                        tex1DV.setInt16(idx * 4 + 0, Math.round(rawS * (32.0 / b.blendTexW)), false);
-                        tex1DV.setInt16(idx * 4 + 2, Math.round(rawT * (32.0 / b.blendTexH)), false);
-                    }
-                }
+    clrDV.setUint8(i * 4 + 0, data.getUint8(o + 0x0C));
+    clrDV.setUint8(i * 4 + 1, data.getUint8(o + 0x0D));
+    clrDV.setUint8(i * 4 + 2, data.getUint8(o + 0x0E));
+    clrDV.setUint8(i * 4 + 3, data.getUint8(o + 0x0F));
+}
 
-                const batchVtxArrays: GX_Array[] = [];
-                batchVtxArrays[GX.Attr.POS] = { buffer: ArrayBufferSlice.fromView(new DataView(posAB)), offs: 0, stride: 6 };
-                batchVtxArrays[GX.Attr.CLR0] = { buffer: ArrayBufferSlice.fromView(new DataView(clrAB)), offs: 0, stride: 4 };
-                batchVtxArrays[GX.Attr.TEX0] = { buffer: ArrayBufferSlice.fromView(tex0DV), offs: 0, stride: 4 };
-                batchVtxArrays[GX.Attr.TEX1] = { buffer: ArrayBufferSlice.fromView(tex1DV), offs: 0, stride: 4 };
+(model as any).bbox = new AABB(minX, minY, minZ, maxX, maxY, maxZ);
 
-                const triCount = (b.tEnd - b.tStart);
-                const vtxCount = triCount * 3;
-                const out = new Uint8Array(3 + vtxCount * 8);
-                let p = 0;
-                out[p++] = 0x90;
-                out[p++] = (vtxCount >>> 8) & 0xFF;
-                out[p++] = (vtxCount >>> 0) & 0xFF;
-                
-                for (let ti = b.tStart; ti < b.tEnd; ti++) {
-                    let { flip, i0, i1, i2 } = tris[ti];
-                    if (flip) { const tmp = i1; i1 = i2; i2 = tmp; }
-                    const a = b.vStart + i0, bb = b.vStart + i1, c = b.vStart + i2;
-                    for (const idx of [a, bb, c]) {
-                        out[p++] = (idx >>> 8) & 0xFF; out[p++] = idx & 0xFF; // POS
-                        out[p++] = (idx >>> 8) & 0xFF; out[p++] = idx & 0xFF; // CLR
-                        out[p++] = (idx >>> 8) & 0xFF; out[p++] = idx & 0xFF; // TEX0
-                        out[p++] = (idx >>> 8) & 0xFF; out[p++] = idx & 0xFF; // TEX1
-                    }
-                }
-                const geom = new ShapeGeometry(batchVtxArrays, vcd, vat, new DataView(out.buffer), false);
-                
-                const pnMatrixMap = nArray(10, () => 0);
-                geom.setPnMatrixMap(pnMatrixMap, false, false);
+type DPTri = { flip: boolean; i0: number; i1: number; i2: number };
+const tris: DPTri[] = [];
+for (let i = 0; i < totalTris; i++) {
+    const o = triOff + i * 8;
+    const f = data.getUint8(o + 0);
+    tris.push({
+        flip: !!(f & 0x80),
+        i0: data.getUint8(o + 1),
+        i1: data.getUint8(o + 2),
+        i2: data.getUint8(o + 3),
+    });
+}
 
-                shapes.shapes[targetList].push(new Shape(geom, new ShapeMaterial(material), false));            
+const vcd: GX_VtxDesc[] = nArray(GX.Attr.MAX + 1, () => ({ type: GX.AttrType.NONE }));
+vcd[GX.Attr.POS].type = GX.AttrType.INDEX16;
+vcd[GX.Attr.CLR0].type = GX.AttrType.INDEX16;
+vcd[GX.Attr.TEX0].type = GX.AttrType.INDEX16;
+vcd[GX.Attr.TEX1].type = GX.AttrType.INDEX16;
+
+const vat: GX_VtxAttrFmt[][] = nArray(8, () =>
+    nArray(GX.Attr.MAX + 1, () => ({ compType: GX.CompType.U8, compShift: 0, compCnt: 0 } as GX_VtxAttrFmt))
+);
+vat[0][GX.Attr.POS]  = { compType: GX.CompType.S16,  compShift: 0,  compCnt: GX.CompCnt.POS_XYZ };
+vat[0][GX.Attr.CLR0] = { compType: GX.CompType.RGBA8, compShift: 0,  compCnt: GX.CompCnt.CLR_RGBA };
+vat[0][GX.Attr.TEX0] = { compType: GX.CompType.S16,  compShift: 10, compCnt: GX.CompCnt.TEX_ST };
+vat[0][GX.Attr.TEX1] = { compType: GX.CompType.S16,  compShift: 10, compCnt: GX.CompCnt.TEX_ST };
+
+model.createModelShapes = () => {
+    const shapes = new ModelShapes(model, new DataView(posAB), undefined);
+    shapes.shapes[0] = [];
+    shapes.shapes[1] = [];
+    shapes.shapes[2] = [];
+
+    // STRICT DP water modes (same ones you were using, but now gated properly)
+    const DP_WATER_DRAW_MODES = new Set<number>([0x00, 0x05, 0x14, 0x15, 0x18, 0x19]);
+// Scroll only these DP textures (keeps beams/vines from scrolling).
+// Put your known water + waterfall texIds here.
+const DP_SCROLL_WATER_TEXIDS = new Set<number>([
+  3561,3569, 3570,2715, 2514,   3553,3563,   2248,1912,3604,2292, 1682
+]);
+
+const DP_SCROLL_WATERFALL_TEXIDS = new Set<number>([
+ 358,123 ,253,254,368,368,1127, 3560,     3563,3562,1941,2750,2048,270, 
+]);
+
+// Optional: log once per texture that *would* have scrolled under the old heuristic
+const __dpScrollCandidateLogged = new Set<number>();
+    for (const b of batches) {
+        const isSoftFormat = (b.pixelFormat !== 1 && b.pixelFormat !== 7 && b.pixelFormat !== 8);
+
+        const isKnownCutoutTex =
+            [119,164,355,356,2087,1122,1125,1050,1049,1051,1066,1075,1423].includes(b.materialId);
+
+        // Cutouts first (never water)
+        const wantsCutout =
+            !b.isOpaque && (isKnownCutoutTex || (b.drawMode & 0x80) !== 0);
+
+        // Terrain blend: 2-layer blend, NOT framebuffer transparency
+        const wantsTerrainBlend =
+            (b.blendMaterialId !== -1) && ((b.drawMode & 0x40) !== 0);
+
+        // Water blend: has blend tex, soft format, semi-trans bit, and NOT terrain-blend
+        const wantsWaterBlend =
+            (b.blendMaterialId !== -1) && isSoftFormat && !wantsTerrainBlend && ((b.drawMode & 0x04) !== 0);
+
+        // Standalone water surface: soft format + known water draw modes
+        const wantsWaterSurface =
+            (b.blendMaterialId === -1) && isSoftFormat && DP_WATER_DRAW_MODES.has(b.drawMode);
+
+        b.isWater = !wantsCutout && (wantsWaterBlend || wantsWaterSurface);
+
+// Only scroll if it's actual water OR texture is in an explicit allow-list.
+const allowScroll =
+  b.isWater ||
+  DP_SCROLL_WATER_TEXIDS.has(b.materialId) ||
+  DP_SCROLL_WATER_TEXIDS.has(b.blendMaterialId) ||
+  DP_SCROLL_WATERFALL_TEXIDS.has(b.materialId) ||
+  DP_SCROLL_WATERFALL_TEXIDS.has(b.blendMaterialId);
+
+// Optional debug: show you which texIds were getting scrolled by the old rule,
+// so you can copy the waterfall texId into DP_SCROLL_WATERFALL_TEXIDS.
+const bHasSemiTrans = (b.drawMode & 0x04) !== 0;
+if (!allowScroll && bHasSemiTrans && !b.isOpaque) {
+  const tid = b.materialId | 0;
+  if (tid >= 0 && !__dpScrollCandidateLogged.has(tid)) {
+    __dpScrollCandidateLogged.add(tid);
+    console.warn(`[DP_SCROLL_CANDIDATE] texId=${tid} drawMode=0x${b.drawMode.toString(16)} fmt=${b.pixelFormat} blendTex=${b.blendMaterialId}`);
+  }
+}
+
+b.scrollPxU = 0;
+
+// Keep your direction: water uses -1, waterfalls use +2
+b.scrollPxV = allowScroll ? (b.isWater ? -1 : 2) : 0;
+        // Build shader layers
+        const layers: any[] = [];
+        let attrFlags = ShaderAttrFlags.CLR;
+
+        if (b.materialId !== -1) {
+            layers.push({ texId: b.materialId, tevMode: 0, enableScroll: 0 });
+            attrFlags |= (ShaderAttrFlags as any).TEX0;
+        }
+        if (b.blendMaterialId !== -1) {
+            // Water blend uses tevMode=0 (simple), terrain blend uses tevMode=9 (your existing)
+            layers.push({ texId: b.blendMaterialId, tevMode: wantsTerrainBlend ? 9 : 0, enableScroll: 0 });
+            attrFlags |= (ShaderAttrFlags as any).TEX1;
+        }
+
+        // Decide pass + flags
+        let shaderFlags = 0;
+        let targetList = 0;
+
+        const hasSemiTrans = (b.drawMode & 0x04) !== 0;
+        const hasTexBlend  = (b.drawMode & 0x40) !== 0;
+
+        const wantsTrueTrans =
+            (!wantsCutout && (!b.isOpaque || hasSemiTrans || hasTexBlend || b.isWater));
+
+        if (wantsTrueTrans) {
+            shaderFlags |= 0x40000000; // your transparent bit
+            targetList = 1;
+        } else if (wantsCutout) {
+            shaderFlags |= ShaderFlags.AlphaCompare;
+            targetList = 0;
+        } else {
+            shaderFlags |= 0x10; // your opaque marker
+            targetList = 0;
+        }
+
+        // IMPORTANT: DO NOT set ShaderFlags.Water in DP.
+        // That’s what makes it go down the SFA water rendering path.
+shaderFlags |= ShaderFlags.Fog;
+        // Add scroll slot (DP-style) using batch tex sizes (no renderCache needed)
+        const addScroll = (layer: any, texW: number, texH: number) => {
+            if (!layer || b.scrollPxU === 0 && b.scrollPxV === 0) return;
+            const dxPerFrame = ((b.scrollPxU << 16) / Math.max(1, texW)) | 0;
+            const dyPerFrame = ((b.scrollPxV << 16) / Math.max(1, texH)) | 0;
+            const slot = (materialFactory as any).addScrollSlot?.(dxPerFrame, dyPerFrame);
+            if (slot !== undefined) {
+                layer.enableScroll = 1;
+                layer.scrollSlot = slot;
             }
-            return shapes;
         };
-        model.sharedModelShapes = model.createModelShapes();
-        return model;
+
+        if (layers.length > 0) addScroll(layers[0], b.texW, b.texH);
+        if (layers.length > 1) addScroll(layers[1], b.blendTexW, b.blendTexH);
+
+        const shader: Shader = {
+            layers,
+            flags: shaderFlags,
+            attrFlags,
+            hasHemisphericProbe: false,
+            hasReflectiveProbe: false,
+            reflectiveProbeMaskTexId: null,
+            reflectiveProbeIdx: 0,
+            reflectiveAmbFactor: 0.0,
+            hasNBTTexture: false,
+            nbtTexId: null,
+            nbtParams: 0,
+            furRegionsTexId: null,
+            color: { r: 1, g: 1, b: 1, a: 1 },
+            normalFlags: 0,
+            lightFlags: 0,
+            texMtxCount: 0,
+        };
+
+        // IMPORTANT: Always use normal DP map material (NOT buildWaterMaterial)
+        const material = materialFactory.buildMapMaterial(shader, texFetcher);
+
+        // Build UVs for this batch (TEX0 and TEX1 always exist in the geometry for simplicity)
+        const tex0AB = new ArrayBuffer(totalVerts * 4);
+        const tex1AB = new ArrayBuffer(totalVerts * 4);
+        const tex0DV = new DataView(tex0AB);
+        const tex1DV = new DataView(tex1AB);
+
+        for (let ti = b.tStart; ti < b.tEnd; ti++) {
+            let { i0, i1, i2 } = tris[ti];
+            const a = b.vStart + i0, bb = b.vStart + i1, c = b.vStart + i2;
+
+            for (const idx of [a, bb, c]) {
+                const vo = vtxOff + idx * 16;
+                const rawS = data.getInt16(vo + 8, false);
+                const rawT = data.getInt16(vo + 10, false);
+
+                tex0DV.setInt16(idx * 4 + 0, Math.round(rawS * (32.0 / b.texW)), false);
+                tex0DV.setInt16(idx * 4 + 2, Math.round(rawT * (32.0 / b.texH)), false);
+
+                tex1DV.setInt16(idx * 4 + 0, Math.round(rawS * (32.0 / b.blendTexW)), false);
+                tex1DV.setInt16(idx * 4 + 2, Math.round(rawT * (32.0 / b.blendTexH)), false);
+            }
+        }
+
+        const batchVtxArrays: GX_Array[] = [];
+        batchVtxArrays[GX.Attr.POS]  = { buffer: ArrayBufferSlice.fromView(new DataView(posAB)), offs: 0, stride: 6 };
+        batchVtxArrays[GX.Attr.CLR0] = { buffer: ArrayBufferSlice.fromView(new DataView(clrAB)), offs: 0, stride: 4 };
+        batchVtxArrays[GX.Attr.TEX0] = { buffer: ArrayBufferSlice.fromView(tex0DV), offs: 0, stride: 4 };
+        batchVtxArrays[GX.Attr.TEX1] = { buffer: ArrayBufferSlice.fromView(tex1DV), offs: 0, stride: 4 };
+
+        const triCount = (b.tEnd - b.tStart);
+        const vtxCount = triCount * 3;
+        const out = new Uint8Array(3 + vtxCount * 8);
+        let p = 0;
+        out[p++] = 0x90;
+        out[p++] = (vtxCount >>> 8) & 0xFF;
+        out[p++] = (vtxCount >>> 0) & 0xFF;
+
+        for (let ti = b.tStart; ti < b.tEnd; ti++) {
+            let { flip, i0, i1, i2 } = tris[ti];
+            if (flip) { const tmp = i1; i1 = i2; i2 = tmp; }
+
+            const a = b.vStart + i0, bb = b.vStart + i1, c = b.vStart + i2;
+            for (const idx of [a, bb, c]) {
+                out[p++] = (idx >>> 8) & 0xFF; out[p++] = idx & 0xFF; // POS
+                out[p++] = (idx >>> 8) & 0xFF; out[p++] = idx & 0xFF; // CLR
+                out[p++] = (idx >>> 8) & 0xFF; out[p++] = idx & 0xFF; // TEX0
+                out[p++] = (idx >>> 8) & 0xFF; out[p++] = idx & 0xFF; // TEX1
+            }
+        }
+
+        const geom = new ShapeGeometry(batchVtxArrays, vcd, vat, new DataView(out.buffer), false);
+        const pnMatrixMap = nArray(10, () => 0);
+        geom.setPnMatrixMap(pnMatrixMap, false, false);
+
+        shapes.shapes[targetList].push(new Shape(geom, new ShapeMaterial(material), false));
+    }
+
+    return shapes;
+};
+
+model.sharedModelShapes = model.createModelShapes();
+return model;
     }
 }
 // ===== end DP loader =====
