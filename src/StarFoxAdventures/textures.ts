@@ -47,31 +47,65 @@ function decodeRareN64Texture(data: DataView): { width: number, height: number, 
     const width_bytes = Math.ceil((width * bpp) / 8);
     const deinterleaved = new Uint8Array(width_bytes * height);
 
-    if (pixelFormat === 0) {
-        for (let i = 0; i < width_bytes * height; i++) {
-            deinterleaved[i] = rawData[pixelOffset + i];
-        }
-    } else {
-        const stride = 8;
-        const half_stride = stride / 2;
+    if (pixelFormat === 0) { // RGBA32 uses a different odd-row swizzle: swap 8-byte halves inside each 16-byte chunk
+        const stride = 16;
+        const half_stride = 8;
 
         for (let y = 0; y < height; y++) {
-            const row_start = y * width_bytes;
-            if (y % 2 === 0) {
+            const src_row_start = pixelOffset + y * width_bytes;
+            const dst_row_start = y * width_bytes;
+
+            if ((y & 1) === 0) {
                 for (let i = 0; i < width_bytes; i++) {
-                    deinterleaved[row_start + i] = rawData[pixelOffset + row_start + i];
+                    deinterleaved[dst_row_start + i] = rawData[src_row_start + i];
                 }
             } else {
                 for (let x = 0; x < width_bytes; x += stride) {
-                    for (let i = 0; i < half_stride; i++) {
-                        if (x + half_stride + i < width_bytes) {
-                            deinterleaved[row_start + x + i] = rawData[pixelOffset + row_start + x + half_stride + i];
-                            deinterleaved[row_start + x + half_stride + i] = rawData[pixelOffset + row_start + x + i];
+                    const chunk = Math.min(stride, width_bytes - x);
+
+                    if (chunk >= stride) {
+                        for (let i = 0; i < half_stride; i++) {
+                            deinterleaved[dst_row_start + x + i] = rawData[src_row_start + x + half_stride + i];
+                            deinterleaved[dst_row_start + x + half_stride + i] = rawData[src_row_start + x + i];
+                        }
+                    } else {
+                        for (let i = 0; i < chunk; i++) {
+                            deinterleaved[dst_row_start + x + i] = rawData[src_row_start + x + i];
                         }
                     }
                 }
             }
         }
+    } else {
+        const stride = 8;
+        const half_stride = 4;
+
+        for (let y = 0; y < height; y++) {
+            const src_row_start = pixelOffset + y * width_bytes;
+            const dst_row_start = y * width_bytes;
+
+            if ((y & 1) === 0) {
+                for (let i = 0; i < width_bytes; i++) {
+                    deinterleaved[dst_row_start + i] = rawData[src_row_start + i];
+                }
+            } else {
+                for (let x = 0; x < width_bytes; x += stride) {
+                    const chunk = Math.min(stride, width_bytes - x);
+
+                    if (chunk >= stride) {
+                        for (let i = 0; i < half_stride; i++) {
+                            deinterleaved[dst_row_start + x + i] = rawData[src_row_start + x + half_stride + i];
+                            deinterleaved[dst_row_start + x + half_stride + i] = rawData[src_row_start + x + i];
+                        }
+                    } else {
+                        for (let i = 0; i < chunk; i++) {
+                            deinterleaved[dst_row_start + x + i] = rawData[src_row_start + x + i];
+                        }
+                    }
+                }
+            }
+        }
+    
     }
 
     const dv = new DataView(deinterleaved.buffer);
@@ -159,24 +193,34 @@ const swapRB = false; // FIX: N64 characters are standard RGB. Stop swapping Red
         rgba8[i * 4 + 3] = a;
     }
 }
-    else if (pixelFormat === 2) { // I8
+    else if (pixelFormat === 2) { // Packed IA8 variant: high nibble = intensity, full byte carries alpha
         for (let i = 0; i < pixelCount; i++) {
-            const intensity = deinterleaved[i];
+            const byte = deinterleaved[i];
+            const intensity4 = (byte >> 4) & 0xF;
+            const intensity = (intensity4 << 4) | intensity4;
+            const alpha = byte;
+
             rgba8[i * 4 + 0] = intensity;
             rgba8[i * 4 + 1] = intensity;
             rgba8[i * 4 + 2] = intensity;
-            rgba8[i * 4 + 3] = intensity; 
+            rgba8[i * 4 + 3] = alpha;
         }
     }
-    else if (pixelFormat === 3) { // I4 (NEW)
+    else if (pixelFormat === 3) { // Packed IA4 variant: top 3 bits intensity, whole nibble carries alpha
         for (let i = 0; i < pixelCount; i++) {
             const byte = deinterleaved[i >> 1];
-            const intensity = (i & 1) ? (byte & 0xF) : (byte >> 4);
-            const val = (intensity << 4) | intensity;
-            rgba8[i * 4 + 0] = val;
-            rgba8[i * 4 + 1] = val;
-            rgba8[i * 4 + 2] = val;
-            rgba8[i * 4 + 3] = val;
+            const nibble = (i & 1) ? (byte & 0xF) : (byte >> 4);
+
+            const intensity3 = (nibble >> 1) & 0x7;
+            const alpha4 = nibble & 0xF;
+
+            const intensity = (intensity3 << 5) | (intensity3 << 2) | (intensity3 >> 1);
+            const alpha = (alpha4 << 4) | alpha4;
+
+            rgba8[i * 4 + 0] = intensity;
+            rgba8[i * 4 + 1] = intensity;
+            rgba8[i * 4 + 2] = intensity;
+            rgba8[i * 4 + 3] = alpha;
         }
     }
     else if (pixelFormat === 4) { // IA16
@@ -513,7 +557,15 @@ const EARLY4_PER_MODEL_REMAP: { [mapNum: number]: { [srcId: number]: number } } 
 const EARLYDUP_PER_MODEL_REMAP: { [mapNum: number]: { [srcId: number]: number } } = {
   7: { 1030: 1030, 1031: 1031, 1032: 1032 }
 };
+const DP_FACE_CLAMP_TEXIDS = new Set<number>([2562, 2575, 2581, 2761, 2762]);
+const DP_FACE_SOFT_ALPHA_TEXIDS = new Set<number>([2562, 2581]);
+const DP_FORCE_MIRROR_S_TEXIDS = new Set<number>([
+ 1172,1173 // put broken texId here
+]);
 
+const DP_FORCE_MIRROR_T_TEXIDS = new Set<number>([
+  // put broken texId here if needed
+]);
 export class SFATextureFetcher extends TextureFetcher {
     private texturesEnabled = true;
     private dpBinCache = new Map<number, SFATextureArray>();
@@ -583,6 +635,9 @@ public getDPTintedTexId(baseId: number, r: number, g: number, b: number): number
             if (!buf) return;
 
             const decoded = decodeRareN64Texture(buf.createDataView());
+            if (decoded && (texId === 2562 || texId === 2581 || texId === 2575 || texId === 2761 || texId === 2762)) {
+    console.warn(`[DP TEX DEBUG] texId=${texId} fmt=${decoded.pixelFormat} size=${decoded.width}x${decoded.height}`);
+}
 if (decoded) {
                 const device = cache.device;
  if (texId === 16 || texId === 17) {
@@ -590,6 +645,9 @@ if (decoded) {
                         decoded.pixels[i + 3] = 0; // Set Alpha to 0 (Invisible)
                     }
                 }               
+                const forceClampFace = DP_FACE_CLAMP_TEXIDS.has(texId);
+                const preserveSoftAlpha = DP_FACE_SOFT_ALPHA_TEXIDS.has(texId);
+
                 let solidLeft = 0;
                 let solidRight = 0;
                 let solidTop = 0;
@@ -599,31 +657,43 @@ if (decoded) {
                 for (let y = 0; y < decoded.height; y++) {
                     for (let x = 0; x < decoded.width; x++) {
                         const i = (y * decoded.width + x) * 4;
-                        let r = decoded.pixels[i];
-                        let g = decoded.pixels[i+1];
-                        let b = decoded.pixels[i+2];
-                        let a = decoded.pixels[i+3];
+                        const r = decoded.pixels[i + 0];
+                        const g = decoded.pixels[i + 1];
+                        const b = decoded.pixels[i + 2];
+                        let a = decoded.pixels[i + 3];
 
-                        // 1. Strict N64 "Blue Screen" Chroma-Key
-                        if (b > 200 && r < 40 && g < 40) {
-                            a = 0;
-                        }
+                        // Krystal face-detail overlays from the GLB need their original alpha preserved.
+                        // Do NOT chroma-key / defringe / alpha-boost them.
+                        if (!preserveSoftAlpha) {
+                            // 1. Strict N64 "Blue Screen" Chroma-Key
+                            if (b > 200 && r < 40 && g < 40) {
+                                a = 0;
+                            }
 
-                        // 2. The Defringe Fix (Fixes blue halos on fences)
-                        if (a === 0) {
-                            decoded.pixels[i] = 0;
-                            decoded.pixels[i+1] = 0;
-                            decoded.pixels[i+2] = 0;
-                            decoded.pixels[i+3] = 0;
-                            invisibleCount++;
-                            continue; 
-                        }
+                            // 2. The Defringe Fix (Fixes blue halos on fences)
+                            if (a === 0) {
+                                decoded.pixels[i + 0] = 0;
+                                decoded.pixels[i + 1] = 0;
+                                decoded.pixels[i + 2] = 0;
+                                decoded.pixels[i + 3] = 0;
+                                invisibleCount++;
+                                continue;
+                            }
 
-                        // 3. Gentle Alpha Boost
-                        // Leaves faint pixels (<= 20) alone so light beams fade smoothly
-                        if (a > 20 && a < 255) {
-                            a = Math.min(255, Math.floor(a * 1.2));
-                            decoded.pixels[i+3] = a;
+                            // 3. Gentle Alpha Boost
+                            // Leaves faint pixels (<= 20) alone so light beams fade smoothly
+                            if (a > 20 && a < 255) {
+                                a = Math.min(255, Math.floor(a * 1.2));
+                                decoded.pixels[i + 3] = a;
+                            }
+                        } else {
+                            // Keep original alpha exactly as decoded
+                            decoded.pixels[i + 3] = a;
+
+                            if (a === 0) {
+                                invisibleCount++;
+                                continue;
+                            }
                         }
 
                         // 4. Record Solid Edge Connections
@@ -639,38 +709,61 @@ if (decoded) {
                 const gfxTexture = device.createTexture(makeTextureDescriptor2D(GfxFormat.U8_RGBA_NORM, decoded.width, decoded.height, 1));
                 device.uploadTextureData(gfxTexture, 0, [decoded.pixels]);
                 
-// 5) N64 wrap modes (cms/cmt): 0=wrap, 1=mirror, 2=clamp, 3=mirror+clamp
-// 5) N64 wrap modes (cms/cmt): 0=wrap, 1=mirror, 2=clamp, 3=mirror+clamp
-const wrapFromN64 = (cm: number): GfxWrapMode => {
-    // bit1 = clamp
-    if (cm & 0x02) return GfxWrapMode.Clamp;
-
-    // bit0 = mirror (only if your enum has it)
-    // If this line fails to compile, see the note below.
-    if (cm & 0x01) return GfxWrapMode.Mirror;
-
-    return GfxWrapMode.Repeat;
-};
+                // 5) N64 wrap modes (cms/cmt): 0=wrap, 1=mirror, 2=clamp, 3=mirror+clamp
+                const wrapFromN64 = (cm: number): GfxWrapMode => {
+                    if (cm & 0x02) return GfxWrapMode.Clamp;
+                    if (cm & 0x01) return GfxWrapMode.Mirror;
+                    return GfxWrapMode.Repeat;
+                };
 
 let wrapS = wrapFromN64(decoded.cms);
 let wrapT = wrapFromN64(decoded.cmt);
 
-// 6) Your cutout heuristic (FIXED: no "const wrapT" shadow bug)
 const totalPixels = decoded.width * decoded.height;
-if (invisibleCount > (totalPixels * 0.02)) {
+
+// Krystal face textures from the GLB need CLAMP, not Repeat.
+if (DP_FACE_CLAMP_TEXIDS.has(texId)) {
+    wrapS = GfxWrapMode.Clamp;
+    wrapT = GfxWrapMode.Clamp;
+} else if (invisibleCount > (totalPixels * 0.02)) {
     wrapS = (solidLeft > 0 && solidRight > 0) ? GfxWrapMode.Repeat : GfxWrapMode.Clamp;
     wrapT = (solidTop > 0 && solidBottom > 0) ? GfxWrapMode.Repeat : GfxWrapMode.Clamp;
 }
 
-// IMPORTANT: DP BIN loader uploads ONLY base level (no mip chain), so DO NOT enable mip filtering / LOD.
-const gfxSampler = cache.createSampler({
-    wrapS, wrapT,
-    minFilter: GfxTexFilterMode.Bilinear,
-    magFilter: GfxTexFilterMode.Bilinear,
-    mipFilter: GfxMipFilterMode.Nearest,
-    minLOD: 0,
-    maxLOD: 0,
+// Manual test override for DP textures that need mirrored sampling.
+if (DP_FORCE_MIRROR_S_TEXIDS.has(texId))
+    wrapS = GfxWrapMode.Mirror;
+if (DP_FORCE_MIRROR_T_TEXIDS.has(texId))
+    wrapT = GfxWrapMode.Mirror;
+
+const cutoutLikely = invisibleCount > (totalPixels * 0.02);
+
+this.dpDecoded.set(texId, {
+    width: decoded.width,
+    height: decoded.height,
+    pixelFormat: decoded.pixelFormat,
+    pixels: decoded.pixels.slice(),
+    wrapS,
+    wrapT,
+    cutoutLikely,
 });
+
+// Rebuild any derived/tinted textures that depend on this base texture.
+for (const [derivedId, info] of this.dpDerivedInfo) {
+    if (info.baseId === texId)
+        this.buildDPDerivedTexture(cache, derivedId);
+}
+
+                // IMPORTANT: DP BIN loader uploads ONLY base level (no mip chain), so DO NOT enable mip filtering / LOD.
+                const gfxSampler = cache.createSampler({
+                    wrapS,
+                    wrapT,
+                    minFilter: GfxTexFilterMode.Bilinear,
+                    magFilter: GfxTexFilterMode.Bilinear,
+                    mipFilter: GfxMipFilterMode.Nearest,
+                    minLOD: 0,
+                    maxLOD: 0,
+                });
                 
                 const cachedArray = this.dpBinCache.get(texId);
                if (cachedArray && cachedArray.textures[0]) {

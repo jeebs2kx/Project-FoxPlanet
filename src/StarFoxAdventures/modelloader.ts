@@ -715,17 +715,21 @@ function loadDinosaurPlanetModel(
 
 if (isCharacter) {
   // ==========================================
-  // DINOSAUR PLANET CHARACTER PARSER (ROBUST + FOLIAGE TINT FIX)
-  //
-  // Key fixes:
-  // - Decode per-material tint from RGB565 at (matStruct + 0x06).
-  // - Apply that tint ONLY when facebatch flags has 0x80 (matches your logs).
-  // - If N64 lighting is enabled (G_LIGHTING), vertex bytes 12..14 are normals, NOT colors.
-  //   In that case we ignore them and use tint/prim instead.
+  // DINOSAUR PLANET CHARACTER PARSER
+  // Fixes:
+  //  - Safe handling of 0xDE/0xDF (no UI lockups)
+  //  - PATCH invalid facebatches (materialID=-1) to last valid material
+  //    so their triangles don't get skipped (fixes "missing bits")
   // ==========================================
   model.isMapBlock = false;
 
-  const DP_CHAR_DEBUG = true;
+const DP_CHAR_DEBUG = true;
+const DP_LOG_ALL_FACEBATCH_TEXIDS = true;
+const DP_HIDE_TEXIDS_FOR_TEST = new Set<number>([]);
+const DP_NO_TINT_TEXIDS = new Set<number>([237, 2576]);
+  const DP_CHAR_EXEC_LIMIT = 200000;   // max executed commands total (across sub-DLs)
+  const DP_CHAR_STACK_LIMIT = 32;      // max nested calls
+  const DP_CHAR_LOG_LIMIT = 250;       // clamp noisy logs
 
   // N64 geometry mode bit (F3DEX2)
   const G_LIGHTING = 0x00020000;
@@ -758,7 +762,6 @@ if (isCharacter) {
   }
 
   // --- helpers ---
-  const clamp8 = (v: number) => v < 0 ? 0 : v > 255 ? 255 : v | 0;
   const rgb565ToRGBA8 = (c: number) => {
     const r5 = (c >>> 11) & 0x1F;
     const g6 = (c >>> 5)  & 0x3F;
@@ -769,6 +772,7 @@ if (isCharacter) {
     return { r, g, b, a: 255 };
   };
   const hex8 = (x: number) => x.toString(16).padStart(2, '0');
+
   // --- DP lighting helpers (when G_LIGHTING is ON, vtx[12..14] are normals) ---
   const toS8 = (u: number) => (u << 24) >> 24;
   const clamp255 = (v: number) => (v < 0 ? 0 : v > 255 ? 255 : v | 0);
@@ -793,13 +797,14 @@ if (isCharacter) {
       b: clamp255(baseB * i),
     };
   }
+
   // --- MATERIAL TABLE (8 bytes each) ---
   type DPMat = {
     texId: number;
     texW: number;
     texH: number;
     tintR: number; tintG: number; tintB: number; tintA: number;
-     tintEnabled: boolean;
+    tintEnabled: boolean;
     raw: string;
   };
 
@@ -810,17 +815,15 @@ if (isCharacter) {
     const o = matOff + i * MAT_STRIDE;
     if (o + MAT_STRIDE > data.byteLength) break;
 
-const rawTexSigned = data.getInt32(o + 0x00, false);
-const tintEnabled = rawTexSigned < 0;
-const rawTex = tintEnabled ? -rawTexSigned : rawTexSigned;
+    const rawTexSigned = data.getInt32(o + 0x00, false);
+    const tintEnabled = rawTexSigned < 0;
+    const rawTex = tintEnabled ? -rawTexSigned : rawTexSigned;
 
-// In your logs, this is correct (e.g. 0x0ABB -> 2747)
-const texId = rawTex & 0x7FFF;
+    const texId = rawTex & 0x7FFF;
 
     const texW = data.getUint8(o + 0x04) || 32;
     const texH = data.getUint8(o + 0x05) || 32;
 
-    // IMPORTANT: tint is RGB565 at +0x06 (matches your raw: [.. 25 00], [.. 17 00])
     const tint565 = data.getUint16(o + 0x06, false);
     const tint = rgb565ToRGBA8(tint565);
 
@@ -828,13 +831,13 @@ const texId = rawTex & 0x7FFF;
       `${hex8(data.getUint8(o+0))} ${hex8(data.getUint8(o+1))} ${hex8(data.getUint8(o+2))} ${hex8(data.getUint8(o+3))} ` +
       `${hex8(data.getUint8(o+4))} ${hex8(data.getUint8(o+5))} ${hex8(data.getUint8(o+6))} ${hex8(data.getUint8(o+7))}`;
 
-mats[i] = {
-  texId,
-  texW, texH,
-  tintR: tint.r, tintG: tint.g, tintB: tint.b, tintA: 255,
-  tintEnabled, // <-- ADD
-  raw: rawBytes,
-};
+    mats[i] = {
+      texId,
+      texW, texH,
+      tintR: tint.r, tintG: tint.g, tintB: tint.b, tintA: 255,
+      tintEnabled,
+      raw: rawBytes,
+    };
 
     if (DP_CHAR_DEBUG) {
       console.warn(
@@ -854,7 +857,6 @@ mats[i] = {
       const jo = jointOff + i * 16;
       const p = data.getInt8(jo + 0);
 
-      // DP seems to store these as big-endian floats in the cases you've shown.
       const lx = data.getFloat32(jo + 4, false);
       const ly = data.getFloat32(jo + 8, false);
       const lz = data.getFloat32(jo + 12, false);
@@ -874,7 +876,6 @@ mats[i] = {
       model.skeleton.addJoint(p !== -1 ? p : undefined, vec3.fromValues(lx, ly, lz));
     }
   } else if (jointCount > 0) {
-    // keep consistent sizes even if joints table is missing
     for (let i = 0; i < jointCount; i++) {
       jointMats.push(mat4.create());
       model.joints.push({ parent: 0xff, boneNum: i, translation: vec3.create(), bindTranslation: vec3.create() });
@@ -883,16 +884,17 @@ mats[i] = {
   }
 
   // --- FACEBATCHES (16 bytes each) ---
-interface Facebatch {
-  materialID: number;
-  texW: number;
-  texH: number;
-  dlStartCmd: number;
-  renderFlags: number;
-  tintR: number; tintG: number; tintB: number; tintA: number;
-  tintEnabled: boolean; // <-- ADD
-  tris: { i0: number; i1: number; i2: number }[];
-}
+  interface Facebatch {
+    materialID: number;
+    texW: number;
+    texH: number;
+    dlStartCmd: number;
+    renderFlags: number;
+    tintR: number; tintG: number; tintB: number; tintA: number;
+    tintEnabled: boolean;
+    _wasInvalidMat?: boolean; // debug
+    tris: { i0: number; i1: number; i2: number }[];
+  }
 
   const facebatches: Facebatch[] = [];
   for (let i = 0; i < faceBatchCount; i++) {
@@ -905,24 +907,74 @@ interface Facebatch {
 
     const m = mats[matIdx];
     const texId = m ? m.texId : -1;
-    const texW = m ? m.texW : 32;
-    const texH = m ? m.texH : 32;
 
-facebatches.push({
-  materialID: texId,
-  texW, texH,
-  dlStartCmd: Math.max(0, dlStartCmd | 0),
-  renderFlags,
-  tintR: m ? m.tintR : 255,
-  tintG: m ? m.tintG : 255,
-  tintB: m ? m.tintB : 255,
-  tintA: 255,
-  tintEnabled: m ? m.tintEnabled : false, // <-- ADD
-  tris: [],
-});
+    facebatches.push({
+      materialID: texId,
+      texW: m ? m.texW : 32,
+      texH: m ? m.texH : 32,
+      dlStartCmd: Math.max(0, dlStartCmd | 0),
+      renderFlags,
+      tintR: m ? m.tintR : 255,
+      tintG: m ? m.tintG : 255,
+      tintB: m ? m.tintB : 255,
+      tintA: 255,
+      tintEnabled: m ? m.tintEnabled : false,
+      _wasInvalidMat: m ? false : true,
+      tris: [],
+    });
   }
 
   facebatches.sort((a, b) => a.dlStartCmd - b.dlStartCmd);
+
+  // ------------------------------
+  // FIX #1: Patch invalid facebatches (materialID=-1) to last known good
+  // This directly prevents "missing bits" caused by skipping fb.materialID<0.
+  // ------------------------------
+  let patchedFB = 0;
+  let lastGood: Facebatch | null = null;
+
+  // Optional fallback if the file starts with invalids
+  const fallbackTexId = (mats.length > 0) ? mats[0].texId : 0;
+  const fallbackW = (mats.length > 0) ? mats[0].texW : 32;
+  const fallbackH = (mats.length > 0) ? mats[0].texH : 32;
+
+  for (const fb of facebatches) {
+    if (fb.materialID >= 0) {
+      lastGood = fb;
+      continue;
+    }
+    patchedFB++;
+    if (lastGood) {
+      fb.materialID = lastGood.materialID;
+      fb.texW = lastGood.texW;
+      fb.texH = lastGood.texH;
+      fb.tintR = lastGood.tintR;
+      fb.tintG = lastGood.tintG;
+      fb.tintB = lastGood.tintB;
+      fb.tintEnabled = lastGood.tintEnabled;
+    } else {
+      fb.materialID = fallbackTexId;
+      fb.texW = fallbackW;
+      fb.texH = fallbackH;
+      fb.tintR = 255;
+      fb.tintG = 255;
+      fb.tintB = 255;
+      fb.tintEnabled = false;
+    }
+  }
+
+  if (DP_CHAR_DEBUG && patchedFB > 0) {
+    console.warn(`[DP_CHAR][FB_PATCH] patched ${patchedFB} invalid facebatches (materialID=-1) to last-good material`);
+    // show a few patched entries
+    let shown = 0;
+    for (let i = 0; i < facebatches.length && shown < 8; i++) {
+      const fb = facebatches[i];
+      if (fb._wasInvalidMat) {
+        console.warn(`  patched fb@cmd=${fb.dlStartCmd} -> texId=${fb.materialID} tex=${fb.texW}x${fb.texH} flags=0x${fb.renderFlags.toString(16)}`);
+        shown++;
+      }
+    }
+  }
 
   if (DP_CHAR_DEBUG) {
     console.warn(`[DP_CHAR] Facebatches (first 10):`);
@@ -935,7 +987,7 @@ facebatches.push({
     }
   }
 
-  // --- F3DEX2-ish parse to build one big VBO ---
+  // --- Build VBO ---
   const outPos: number[] = [];
   const outClr: number[] = [];
   const outTex: number[] = [];
@@ -945,8 +997,8 @@ facebatches.push({
   const vtxValid = new Uint8Array(64);
 
   function pickSlot(x: number): number {
-    const sA = (x >>> 1) & 0x3f; // classic
-    const sB = x & 0x3f;         // raw
+    const sA = (x >>> 1) & 0x3f;
+    const sB = x & 0x3f;
     const aOK = vtxValid[sA] !== 0;
     const bOK = vtxValid[sB] !== 0;
     if (aOK && !bOK) return sA;
@@ -958,14 +1010,10 @@ facebatches.push({
 
   let fbIndex = -1;
   let currentFb: Facebatch | null = null;
-  let cmdIdx = 0;
-  let currentMtxIdx = 0;
 
-  // Prim/Env colors (if ever present)
   let primR = 255, primG = 255, primB = 255, primA = 255;
   let envR = 255, envG = 255, envB = 255, envA = 255;
 
-  // Geometry mode tracking (for G_LIGHTING detection)
   let geomMode = 0 >>> 0;
   let lightingEnabled = false;
 
@@ -973,55 +1021,186 @@ facebatches.push({
   segmentBases[0x05] = vtxOff >>> 0;
   segmentBases[0x04] = vtxOff >>> 0;
 
-  while (cmdIdx < dlLength) {
-    const cmdOffset = dlOff + cmdIdx * 8;
-    if (cmdOffset + 8 > data.byteLength) break;
+  let logCount = 0;
+  const logOnce = (msg: string) => {
+    if (!DP_CHAR_DEBUG) return;
+    if (logCount < DP_CHAR_LOG_LIMIT) {
+      logCount++;
+      console.warn(msg);
+      if (logCount === DP_CHAR_LOG_LIMIT)
+        console.warn(`[DP_CHAR] (log limit hit: further DP_CHAR logs suppressed)`);
+    }
+  };
 
-    while (fbIndex + 1 < facebatches.length && cmdIdx >= facebatches[fbIndex + 1].dlStartCmd) {
-      fbIndex++;
-      currentFb = facebatches[fbIndex];
+  const VALID_DL_OPS = new Set<number>([
+    0x01, 0x05, 0x06, 0xD9, 0xDA, 0xDE, 0xDF, 0xE7, 0xEF, 0xFC, 0xFA, 0xFB,
+  ]);
+
+function __dpIsPlausibleDL(off: number): boolean {
+  off = off >>> 0;
+
+  // MUST be command-aligned
+  if ((off & 7) !== 0) return false;
+
+  // CRITICAL: never treat anything before the main DL blob as a displaylist
+  // (prevents 0x80000002 -> 0x2)
+  if (off < (dlOff >>> 0)) return false;
+
+  if (off + 8 > (data.byteLength >>> 0)) return false;
+
+  const op = data.getUint16(off);
+  return VALID_DL_OPS.has(op);
+}
+
+function __dpResolveDLTarget(addr: number): number | null {
+  addr = addr >>> 0;
+
+  // --- DP index-form jumps ---
+  // Many DP lists use G_DL with w1 = small number meaning "command index into main DL".
+  // Also seen as 0x800000NN (KSEG0 + index).
+  const isKseg = (addr & 0xFF000000) === 0x80000000;
+  const idx = isKseg ? (addr & 0x00FFFFFF) : addr;
+
+  if (idx !== 0 && idx < 0x1000) {
+    const tgt = ((dlOff >>> 0) + (idx * 8)) >>> 0;
+    if (__dpIsPlausibleDL(tgt)) return tgt;
+    // fall through (maybe it's not an index in this file)
+  }
+
+  // --- segmented pointer form ---
+  const seg = (addr >>> 24) & 0xFF;
+  const off24 = addr & 0x00FFFFFF;
+
+  if (seg !== 0) {
+    const base = segmentBases[seg] >>> 0;
+    if (base !== 0) {
+      const tgt = (base + off24) >>> 0;
+      if (__dpIsPlausibleDL(tgt)) return tgt;
+    }
+  }
+
+  // --- absolute pointer form ---
+  if (__dpIsPlausibleDL(addr)) return addr;
+
+  return null;
+}
+
+  const returnPCStack: number[] = [];
+  let dlCalls = 0;
+  let dlReturns = 0;
+  let dlBadTargets = 0;
+
+  let pc = dlOff >>> 0;
+  const mainEndPC = (dlOff + (dlLength * 8)) >>> 0;
+
+  let execCmdIdx = 0;
+  let currentMtxIdx = 0;
+
+  let triBadRefs = 0;
+  let vtxOob = 0;
+  let unknownOps = 0;
+
+  while (execCmdIdx < DP_CHAR_EXEC_LIMIT) {
+    if (returnPCStack.length === 0 && pc >= mainEndPC) break;
+
+    if (pc + 8 > (data.byteLength >>> 0)) {
+      if (returnPCStack.length > 0) {
+        pc = returnPCStack.pop()! >>> 0;
+        dlReturns++;
+        continue;
+      }
+      break;
     }
 
-    const w0 = data.getUint32(cmdOffset + 0, false);
-    const w1 = data.getUint32(cmdOffset + 4, false);
+    while (fbIndex + 1 < facebatches.length && execCmdIdx >= facebatches[fbIndex + 1].dlStartCmd) {
+      fbIndex++;
+      currentFb = facebatches[fbIndex];
+      if (DP_CHAR_DEBUG) {
+        console.warn(
+   //       `[DP_CHAR][FB] fbIndex=${fbIndex} startCmd=${currentFb.dlStartCmd} texId=${currentFb.materialID} ` +
+   //       `flags=0x${(currentFb.renderFlags & 0xFF).toString(16)} tintEnabled=${currentFb.tintEnabled ? 1 : 0}` +
+   //       `${currentFb._wasInvalidMat ? ' (patched)' : ''}`
+        );
+      }
+    }
+
+    const w0 = data.getUint32(pc + 0, false);
+    const w1 = data.getUint32(pc + 4, false);
     const opcode = (w0 >>> 24) & 0xFF;
     opCounts[opcode]++;
 
-    // Some models do triangles early; skip until we see vertices
     if (!sawAnyVtx && (opcode === 0x05 || opcode === 0x06)) {
-      cmdIdx++;
+      pc = (pc + 8) >>> 0;
+      execCmdIdx++;
       continue;
     }
 
+    const nextPC = (pc + 8) >>> 0;
+    let jumped = false;
+
     if (opcode === 0xD9) {
-      // gSPGeometryMode(clear, set)
       const clearMask = (w0 & 0x00FFFFFF) >>> 0;
       const setMask = w1 >>> 0;
       geomMode = ((geomMode & (~clearMask >>> 0)) | setMask) >>> 0;
       const newLighting = (geomMode & G_LIGHTING) !== 0;
       if (newLighting !== lightingEnabled && DP_CHAR_DEBUG) {
-        console.warn(`[DP_CHAR] G_LIGHTING ${newLighting ? 'ON' : 'OFF'} at cmd=${cmdIdx}`);
+  //      console.warn(`[DP_CHAR] G_LIGHTING ${newLighting ? 'ON' : 'OFF'} at cmd=${execCmdIdx}`);
       }
       lightingEnabled = newLighting;
 
     } else if (opcode === 0xFA) {
-      // G_SETPRIMCOLOR
       primR = (w1 >>> 24) & 0xFF;
       primG = (w1 >>> 16) & 0xFF;
       primB = (w1 >>> 8)  & 0xFF;
       primA = (w1 >>> 0)  & 0xFF;
 
     } else if (opcode === 0xFB) {
-      // G_SETENVCOLOR
       envR = (w1 >>> 24) & 0xFF;
       envG = (w1 >>> 16) & 0xFF;
       envB = (w1 >>> 8)  & 0xFF;
       envA = (w1 >>> 0)  & 0xFF;
 
     } else if (opcode === 0xDA) {
-      // G_MTX
       const seg = (w1 >>> 24) & 0xFF;
       if (seg === 0x03) currentMtxIdx = (((w1 & 0x00FFFFFF) / 64) | 0);
+
+    } else if (opcode === 0xDE) {
+      // Keep safe: these small addresses are NOT real DL pointers in your files
+      const push = (w0 >>> 16) & 0xFF;
+      const tgt = __dpResolveDLTarget(w1);
+      if (tgt !== null) {
+        if (tgt === pc || tgt === nextPC) {
+          dlBadTargets++;
+   //       logOnce(`[DP_CHAR][DL_SKIP] cmd=${execCmdIdx} push=${push} addr=0x${w1.toString(16)} -> tgt=0x${tgt.toString(16)} (self/next)`);
+        } else if (returnPCStack.length >= DP_CHAR_STACK_LIMIT) {
+          dlBadTargets++;
+   //       logOnce(`[DP_CHAR][DL_SKIP] cmd=${execCmdIdx} push=${push} addr=0x${w1.toString(16)} -> tgt=0x${tgt.toString(16)} (stack limit)`);
+        } else {
+          if (push !== 0) returnPCStack.push(nextPC);
+          dlCalls++;
+    //      logOnce(`[DP_CHAR][DL] cmd=${execCmdIdx} push=${push} addr=0x${w1.toString(16)} -> 0x${tgt.toString(16)} depth=${returnPCStack.length}`);
+          pc = tgt >>> 0;
+          jumped = true;
+        }
+      } else {
+        dlBadTargets++;
+   //     logOnce(`[DP_CHAR][DL_SKIP] cmd=${execCmdIdx} push=${push} addr=0x${w1.toString(16)} (unresolved/too-small)`);
+      }
+
+    } else if (opcode === 0xDF) {
+      if (returnPCStack.length > 0) {
+        dlReturns++;
+        const ret = returnPCStack.pop()! >>> 0;
+  //      logOnce(`[DP_CHAR][RET] cmd=${execCmdIdx} -> 0x${ret.toString(16)} depth=${returnPCStack.length}`);
+        pc = ret;
+        jumped = true;
+      } else {
+        // End main list
+        if (DP_CHAR_DEBUG && execCmdIdx + 1 < dlLength) {
+   //       console.warn(`[DP_CHAR] EndDL at cmd=${execCmdIdx} (dlLength=${dlLength})`);
+        }
+        break;
+      }
 
     } else if (opcode === 0x01) {
       // G_VTX
@@ -1041,28 +1220,37 @@ facebatches.push({
       }
 
       const fileByteOff = (segBase + off24) >>> 0;
-      if (fileByteOff < vtxOff || fileByteOff >= data.byteLength) {
-        cmdIdx++;
+      if (fileByteOff < (vtxOff >>> 0) || fileByteOff >= (data.byteLength >>> 0)) {
+        vtxOob++;
+        pc = nextPC;
+        execCmdIdx++;
         continue;
       }
 
-      const baseVtxIndex = ((fileByteOff - vtxOff) / 16) | 0;
+      const baseVtxIndex = ((fileByteOff - (vtxOff >>> 0)) / 16) | 0;
+
+      if (DP_CHAR_DEBUG && logCount < DP_CHAR_LOG_LIMIT) {
+        console.warn(
+     //     `[DP_CHAR][VTX] cmd=${execCmdIdx} num=${num} v0=${v0} seg=0x${seg.toString(16)} off24=0x${off24.toString(16)} ` +
+    //     `file=0x${fileByteOff.toString(16)} baseRomIdx=${baseVtxIndex} mtx=${currentMtxIdx} lighting=${lightingEnabled ? 1 : 0}`
+        );
+      }
 
       for (let v = 0; v < num; v++) {
         const romIdx = baseVtxIndex + v;
         const cacheIdx = (v0 + v) & 0x3F;
 
-        // IMPORTANT: include lighting + renderFlags in key so we don’t reuse a “normal-as-color” vertex
-       // IMPORTANT: include lighting + renderFlags + material + tint in key so one batch can't "steal" another's color
-const fbFlags = currentFb ? (currentFb.renderFlags & 0xFF) : 0;
-const matKey  = currentFb ? (currentFb.materialID | 0) : -1;
-const tintKey = currentFb ? ((currentFb.tintR << 16) | (currentFb.tintG << 8) | currentFb.tintB) : 0;
-const key = `${romIdx}_${currentMtxIdx}_${lightingEnabled ? 1 : 0}_${fbFlags}_${matKey}_${tintKey}`;
+        const fbFlags = currentFb ? (currentFb.renderFlags & 0xFF) : 0;
+        const matKey  = currentFb ? (currentFb.materialID | 0) : -1;
+        const texWKey = currentFb ? (currentFb.texW | 0) : 0;
+        const texHKey = currentFb ? (currentFb.texH | 0) : 0;
+        const tintKey = currentFb ? ((currentFb.tintR << 16) | (currentFb.tintG << 8) | currentFb.tintB) : 0;
+        const key = `${romIdx}_${currentMtxIdx}_${lightingEnabled ? 1 : 0}_${fbFlags}_${matKey}_${texWKey}_${texHKey}_${tintKey}`;
         let newIdx = vboMap.get(key);
 
         if (newIdx === undefined) {
-          const o = vtxOff + romIdx * 16;
-          if (o + 16 <= data.byteLength) {
+          const o = (vtxOff + romIdx * 16) >>> 0;
+          if (o + 16 <= (data.byteLength >>> 0)) {
             const vx = data.getInt16(o + 0, false);
             const vy = data.getInt16(o + 2, false);
             const vz = data.getInt16(o + 4, false);
@@ -1070,18 +1258,17 @@ const key = `${romIdx}_${currentMtxIdx}_${lightingEnabled ? 1 : 0}_${fbFlags}_${
             const s = data.getInt16(o + 8, false);
             const t = data.getInt16(o + 10, false);
 
-const nxU8 = data.getUint8(o + 12);
-const nyU8 = data.getUint8(o + 13);
-const nzU8 = data.getUint8(o + 14);
-const a    = data.getUint8(o + 15);
+            const nxU8 = data.getUint8(o + 12);
+            const nyU8 = data.getUint8(o + 13);
+            const nzU8 = data.getUint8(o + 14);
+            const a    = data.getUint8(o + 15);
 
-// When lighting is OFF, 12..14 are real RGB.
-// When lighting is ON, 12..14 are normals (signed bytes).
 let r = nxU8, g = nyU8, b = nzU8;
 
-// Tint is a BASE color for foliage/cutouts, not a flat override for everything.
+const noTintForThisTex = !!currentFb && DP_NO_TINT_TEXIDS.has(currentFb.materialID);
 const hasTint = !!currentFb && !(currentFb.tintR === 255 && currentFb.tintG === 255 && currentFb.tintB === 255);
-const wantsTintBase = !!currentFb && hasTint && currentFb.tintEnabled;
+const wantsTintBase = !!currentFb && hasTint && currentFb.tintEnabled && !noTintForThisTex;
+
 if (lightingEnabled) {
   const baseR = wantsTintBase ? currentFb!.tintR : 255;
   const baseG = wantsTintBase ? currentFb!.tintG : 255;
@@ -1104,6 +1291,7 @@ if (lightingEnabled) {
             vtxCache[cacheIdx] = newIdx;
             vtxValid[cacheIdx] = 1;
           } else {
+            vtxOob++;
             vtxCache[cacheIdx] = 0;
             vtxValid[cacheIdx] = 0;
           }
@@ -1114,20 +1302,19 @@ if (lightingEnabled) {
       }
 
     } else if (opcode === 0x05 && currentFb) {
-      // G_TRI1
       const src = ((w1 & 0x00FFFFFF) !== 0) ? w1 : w0;
       const a = (src >>> 16) & 0xFF;
       const b = (src >>> 8) & 0xFF;
       const c = (src >>> 0) & 0xFF;
 
-      currentFb.tris.push({
-        i0: vtxCache[pickSlot(a)],
-        i1: vtxCache[pickSlot(b)],
-        i2: vtxCache[pickSlot(c)],
-      });
+      const i0 = vtxCache[pickSlot(a)];
+      const i1 = vtxCache[pickSlot(b)];
+      const i2 = vtxCache[pickSlot(c)];
+      if (i0 < 0 || i1 < 0 || i2 < 0) triBadRefs++;
+
+      currentFb.tris.push({ i0, i1, i2 });
 
     } else if (opcode === 0x06 && currentFb) {
-      // G_TRI2
       const a0 = (w0 >>> 16) & 0xFF;
       const a1 = (w0 >>> 8) & 0xFF;
       const a2 = (w0 >>> 0) & 0xFF;
@@ -1136,17 +1323,32 @@ if (lightingEnabled) {
       const b1 = (w1 >>> 8) & 0xFF;
       const b2 = (w1 >>> 0) & 0xFF;
 
-      currentFb.tris.push({ i0: vtxCache[pickSlot(a0)], i1: vtxCache[pickSlot(a1)], i2: vtxCache[pickSlot(a2)] });
-      currentFb.tris.push({ i0: vtxCache[pickSlot(b0)], i1: vtxCache[pickSlot(b1)], i2: vtxCache[pickSlot(b2)] });
+      const t0 = { i0: vtxCache[pickSlot(a0)], i1: vtxCache[pickSlot(a1)], i2: vtxCache[pickSlot(a2)] };
+      const t1 = { i0: vtxCache[pickSlot(b0)], i1: vtxCache[pickSlot(b1)], i2: vtxCache[pickSlot(b2)] };
+
+      if (t0.i0 < 0 || t0.i1 < 0 || t0.i2 < 0) triBadRefs++;
+      if (t1.i0 < 0 || t1.i1 < 0 || t1.i2 < 0) triBadRefs++;
+
+      currentFb.tris.push(t0);
+      currentFb.tris.push(t1);
+
+    } else {
+      unknownOps++;
+    //  logOnce(`[DP_CHAR][UNK] cmd=${execCmdIdx} op=0x${opcode.toString(16)} w0=0x${w0.toString(16)} w1=0x${w1.toString(16)}`);
     }
 
-    cmdIdx++;
+    if (!jumped)
+      pc = nextPC;
+
+    execCmdIdx++;
   }
 
   if (DP_CHAR_DEBUG) {
     const parts: string[] = [];
     for (let i = 0; i < 256; i++) if (opCounts[i]) parts.push(`0x${i.toString(16)}=${opCounts[i]}`);
-    console.warn(`[DP_CHAR] Opcode counts: ${parts.join(' ')}`);
+  //  console.warn(`[DP_CHAR] Opcode counts: ${parts.join(' ')}`);
+  //  console.warn(`[DP_CHAR] triBadRefs=${triBadRefs} vtxOob=${vtxOob} unknownOps=${unknownOps}`);
+  //  console.warn(`[DP_CHAR] DL calls=${dlCalls} returns=${dlReturns} badTargets=${dlBadTargets} depthLeft=${returnPCStack.length} executed=${execCmdIdx}`);
   }
 
   // --- Buffers ---
@@ -1158,7 +1360,7 @@ if (lightingEnabled) {
   const clrDV = new DataView(clrAB);
   const texDV = new DataView(texAB);
 
-  const originalLocalPos = new Int16Array(outPos); // Int16 local-space vertices
+  const originalLocalPos = new Int16Array(outPos);
 
   let minX = Infinity, minY = Infinity, minZ = Infinity;
   let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
@@ -1194,10 +1396,8 @@ if (lightingEnabled) {
     clrDV.setUint8(j * 4 + 3, outClr[j * 4 + 3]);
   }
 
-  // UV scaling: N64 s,t are 1/32 texel; convert to GX fixed (1/1024) normalized:
-  // gx = raw * (32 / texW or texH)
   for (const fb of facebatches) {
-    if (fb.materialID < 0 || fb.tris.length === 0) continue;
+    if (fb.tris.length === 0) continue;
     for (const tri of fb.tris) {
       for (const idx of [tri.i0, tri.i1, tri.i2]) {
         const rawS = outTex[idx * 2 + 0];
@@ -1236,13 +1436,31 @@ if (lightingEnabled) {
 
     let usedFb = 0;
     let totalTris = 0;
+    let patchedUsed = 0;
 
-    for (const fb of facebatches) {
-      if (fb.tris.length === 0 || fb.materialID < 0) continue;
-      usedFb++;
-      totalTris += fb.tris.length;
+for (const fb of facebatches) {
+  if (fb.tris.length === 0) continue; // <-- DO NOT skip on materialID anymore
 
-      // Foliage cutout/tint flag in your logs is 0x80
+  if (!(model as any).__dpLoggedFaceTexs) (model as any).__dpLoggedFaceTexs = new Set<string>();
+
+  if (DP_LOG_ALL_FACEBATCH_TEXIDS) {
+    const logKey = `${fb.materialID}_${fb.texW}_${fb.texH}_${fb.tintR}_${fb.tintG}_${fb.tintB}_${fb.renderFlags}`;
+    if (!(model as any).__dpLoggedFaceTexs.has(logKey)) {
+      (model as any).__dpLoggedFaceTexs.add(logKey);
+      console.warn(
+        `[DP FB DEBUG] texId=${fb.materialID} tex=${fb.texW}x${fb.texH} tint=(${fb.tintR},${fb.tintG},${fb.tintB},${fb.tintA}) flags=0x${fb.renderFlags.toString(16)}`
+      );
+    }
+  }
+
+  if (DP_HIDE_TEXIDS_FOR_TEST.has(fb.materialID)) {
+    console.warn(`[DP TEST HIDE] skipping texId=${fb.materialID}`);
+    continue;
+  }
+
+  usedFb++;
+  totalTris += fb.tris.length;
+  if (fb._wasInvalidMat) patchedUsed++;
       const wantsCutout = (fb.renderFlags & 0x80) !== 0;
 
       let shaderFlags = 0;
@@ -1250,37 +1468,31 @@ if (lightingEnabled) {
 
       if (wantsCutout) {
         shaderFlags |= ShaderFlags.AlphaCompare;
-        targetList = 0; // cutouts should stay in opaque pass
+        targetList = 0;
       }
 
-      // IMPORTANT: always include CLR so vertex/tint actually affects output
-// DP objects MUST use CLR shading (your shadeRGB) -> tevMode must be "modulate"
-// Remove the pre-tinted texture hack; it causes green bleed and kills shading.
-const shader: Shader = {
-  layers: [{
-    texId: fb.materialID,
-    tevMode: 1,          // <-- IMPORTANT: uses vertex color (CLR0)
-    enableScroll: 0,
-  }],
-  attrFlags: (ShaderAttrFlags.CLR | (ShaderAttrFlags as any).TEX0),
-  flags: shaderFlags,
-  hasHemisphericProbe: false,
-  hasReflectiveProbe: false,
-  reflectiveProbeMaskTexId: null,
-  reflectiveProbeIdx: 0,
-  reflectiveAmbFactor: 0.0,
-  hasNBTTexture: false,
-  nbtTexId: null,
-  nbtParams: 0,
-  furRegionsTexId: null,
-
-  // IMPORTANT: keep this white so we don't "double tint"
-  color: { r: 1, g: 1, b: 1, a: 1 },
-
-normalFlags: NormalFlags.HasVertexColor | NormalFlags.HasVertexAlpha,
-lightFlags: LightFlags.OverrideLighting,
-  texMtxCount: 0,
-};
+      const shader: Shader = {
+        layers: [{
+          texId: fb.materialID,
+          tevMode: 1,
+          enableScroll: 0,
+        }],
+        attrFlags: (ShaderAttrFlags.CLR | (ShaderAttrFlags as any).TEX0),
+        flags: shaderFlags,
+        hasHemisphericProbe: false,
+        hasReflectiveProbe: false,
+        reflectiveProbeMaskTexId: null,
+        reflectiveProbeIdx: 0,
+        reflectiveAmbFactor: 0.0,
+        hasNBTTexture: false,
+        nbtTexId: null,
+        nbtParams: 0,
+        furRegionsTexId: null,
+        color: { r: 1, g: 1, b: 1, a: 1 },
+        normalFlags: NormalFlags.HasVertexColor | NormalFlags.HasVertexAlpha,
+        lightFlags: LightFlags.OverrideLighting,
+        texMtxCount: 0,
+      };
 
       const material = materialFactory.buildObjectMaterial(shader, texFetcher, false);
 
@@ -1293,25 +1505,23 @@ lightFlags: LightFlags.OverrideLighting,
 
       for (const tri of fb.tris) {
         for (const idx of [tri.i0, tri.i1, tri.i2]) {
-          out[p++] = (idx >>> 8) & 0xff; out[p++] = idx & 0xff; // POS
-          out[p++] = (idx >>> 8) & 0xff; out[p++] = idx & 0xff; // CLR
-          out[p++] = (idx >>> 8) & 0xff; out[p++] = idx & 0xff; // TEX0
+          out[p++] = (idx >>> 8) & 0xff; out[p++] = idx & 0xff;
+          out[p++] = (idx >>> 8) & 0xff; out[p++] = idx & 0xff;
+          out[p++] = (idx >>> 8) & 0xff; out[p++] = idx & 0xff;
         }
       }
 
-
-
-const geom = new ShapeGeometry(vtxArrays, vcd, vat, new DataView(out.buffer), false);     const pnMatrixMap = nArray(10, () => 0);
+      const geom = new ShapeGeometry(vtxArrays, vcd, vat, new DataView(out.buffer), false);
+      const pnMatrixMap = nArray(10, () => 0);
       geom.setPnMatrixMap(pnMatrixMap, false, false);
 
       shapes.shapes[targetList].push(new Shape(geom, new ShapeMaterial(material), false));
     }
 
     if (DP_CHAR_DEBUG) {
-      console.warn(`[DP_CHAR] Facebatches used=${usedFb}/${facebatches.length} vertsOut=${finalVerts} trisOut=${totalTris}`);
+   //   console.warn(`[DP_CHAR] Facebatches used=${usedFb}/${facebatches.length} vertsOut=${finalVerts} trisOut=${totalTris} (patchedUsed=${patchedUsed})`);
     }
 
-    // CPU skinning (optional)
     if (jointCount > 0) {
       const origAddRenderInsts = shapes.addRenderInsts.bind(shapes);
       shapes.addRenderInsts = (device, renderInstManager, modelCtx, renderLists, matrix, matrixPalette, overrideSortDepth, overrideSortLayer) => {
@@ -1344,6 +1554,8 @@ const geom = new ShapeGeometry(vtxArrays, vcd, vat, new DataView(out.buffer), fa
   model.hasFineSkinning = false;
   model.sharedModelShapes = model.createModelShapes();
   return model;
+
+
 
 
 
@@ -1532,184 +1744,159 @@ const DP_SCROLL_WATERFALL_TEXIDS = new Set<number>([
 
 // Optional: log once per texture that *would* have scrolled under the old heuristic
 const __dpScrollCandidateLogged = new Set<number>();
-    for (const b of batches) {
-        const isSoftFormat = (b.pixelFormat !== 1 && b.pixelFormat !== 7 && b.pixelFormat !== 8);
+  for (const b of batches) {
+            const isSoftFormat = (b.pixelFormat !== 1 && b.pixelFormat !== 7 && b.pixelFormat !== 8);
+            const isKnownCutoutTex = [119,164,349,351,355,544,356,2087,1101,1028,1122,1125,1050,1049,1051,1066,1075,1423].includes(b.materialId);
 
-        const isKnownCutoutTex =
-            [119,164,355,356,2087,1122,1125,1050,1049,1051,1066,1075,1423].includes(b.materialId);
+            // Cutouts first (never water)
+            const wantsCutout = !b.isOpaque && (isKnownCutoutTex || (b.drawMode & 0x80) !== 0);
 
-        // Cutouts first (never water)
-        const wantsCutout =
-            !b.isOpaque && (isKnownCutoutTex || (b.drawMode & 0x80) !== 0);
+            // Terrain blend: 2-layer blend, NOT framebuffer transparency
+            const wantsTerrainBlend = (b.blendMaterialId !== -1) && ((b.drawMode & 0x40) !== 0);
 
-        // Terrain blend: 2-layer blend, NOT framebuffer transparency
-        const wantsTerrainBlend =
-            (b.blendMaterialId !== -1) && ((b.drawMode & 0x40) !== 0);
+            // Water blend: has blend tex, soft format, semi-trans bit, and NOT terrain-blend
+            const wantsWaterBlend = (b.blendMaterialId !== -1) && isSoftFormat && !wantsTerrainBlend && ((b.drawMode & 0x04) !== 0);
 
-        // Water blend: has blend tex, soft format, semi-trans bit, and NOT terrain-blend
-        const wantsWaterBlend =
-            (b.blendMaterialId !== -1) && isSoftFormat && !wantsTerrainBlend && ((b.drawMode & 0x04) !== 0);
+            // Standalone water surface: soft format + known water draw modes
+            const wantsWaterSurface = (b.blendMaterialId === -1) && isSoftFormat && DP_WATER_DRAW_MODES.has(b.drawMode);
 
-        // Standalone water surface: soft format + known water draw modes
-        const wantsWaterSurface =
-            (b.blendMaterialId === -1) && isSoftFormat && DP_WATER_DRAW_MODES.has(b.drawMode);
+            b.isWater = !wantsCutout && (wantsWaterBlend || wantsWaterSurface);
 
-        b.isWater = !wantsCutout && (wantsWaterBlend || wantsWaterSurface);
+            // Only scroll if it's actual water OR texture is in an explicit allow-list.
+            const allowScroll =
+                b.isWater ||
+                DP_SCROLL_WATER_TEXIDS.has(b.materialId) ||
+                DP_SCROLL_WATER_TEXIDS.has(b.blendMaterialId) ||
+                DP_SCROLL_WATERFALL_TEXIDS.has(b.materialId) ||
+                DP_SCROLL_WATERFALL_TEXIDS.has(b.blendMaterialId);
 
-// Only scroll if it's actual water OR texture is in an explicit allow-list.
-const allowScroll =
-  b.isWater ||
-  DP_SCROLL_WATER_TEXIDS.has(b.materialId) ||
-  DP_SCROLL_WATER_TEXIDS.has(b.blendMaterialId) ||
-  DP_SCROLL_WATERFALL_TEXIDS.has(b.materialId) ||
-  DP_SCROLL_WATERFALL_TEXIDS.has(b.blendMaterialId);
+            b.scrollPxU = 0;
+            b.scrollPxV = allowScroll ? (b.isWater ? -1 : 2) : 0;
 
-// Optional debug: show you which texIds were getting scrolled by the old rule,
-// so you can copy the waterfall texId into DP_SCROLL_WATERFALL_TEXIDS.
-const bHasSemiTrans = (b.drawMode & 0x04) !== 0;
-if (!allowScroll && bHasSemiTrans && !b.isOpaque) {
-  const tid = b.materialId | 0;
-  if (tid >= 0 && !__dpScrollCandidateLogged.has(tid)) {
-    __dpScrollCandidateLogged.add(tid);
-    console.warn(`[DP_SCROLL_CANDIDATE] texId=${tid} drawMode=0x${b.drawMode.toString(16)} fmt=${b.pixelFormat} blendTex=${b.blendMaterialId}`);
-  }
-}
+            // Build shader layers
+            const layers: any[] = [];
+            let attrFlags = ShaderAttrFlags.CLR;
 
-b.scrollPxU = 0;
-
-// Keep your direction: water uses -1, waterfalls use +2
-b.scrollPxV = allowScroll ? (b.isWater ? -1 : 2) : 0;
-        // Build shader layers
-        const layers: any[] = [];
-        let attrFlags = ShaderAttrFlags.CLR;
-
-        if (b.materialId !== -1) {
-            layers.push({ texId: b.materialId, tevMode: 0, enableScroll: 0 });
-            attrFlags |= (ShaderAttrFlags as any).TEX0;
-        }
-        if (b.blendMaterialId !== -1) {
-            // Water blend uses tevMode=0 (simple), terrain blend uses tevMode=9 (your existing)
-            layers.push({ texId: b.blendMaterialId, tevMode: wantsTerrainBlend ? 9 : 0, enableScroll: 0 });
-            attrFlags |= (ShaderAttrFlags as any).TEX1;
-        }
-
-        // Decide pass + flags
-        let shaderFlags = 0;
-        let targetList = 0;
-
-        const hasSemiTrans = (b.drawMode & 0x04) !== 0;
-        const hasTexBlend  = (b.drawMode & 0x40) !== 0;
-
-        const wantsTrueTrans =
-            (!wantsCutout && (!b.isOpaque || hasSemiTrans || hasTexBlend || b.isWater));
-
-        if (wantsTrueTrans) {
-            shaderFlags |= 0x40000000; // your transparent bit
-            targetList = 1;
-        } else if (wantsCutout) {
-            shaderFlags |= ShaderFlags.AlphaCompare;
-            targetList = 0;
-        } else {
-            shaderFlags |= 0x10; // your opaque marker
-            targetList = 0;
-        }
-
-        // IMPORTANT: DO NOT set ShaderFlags.Water in DP.
-        // That’s what makes it go down the SFA water rendering path.
-shaderFlags |= ShaderFlags.Fog;
-        // Add scroll slot (DP-style) using batch tex sizes (no renderCache needed)
-        const addScroll = (layer: any, texW: number, texH: number) => {
-            if (!layer || b.scrollPxU === 0 && b.scrollPxV === 0) return;
-            const dxPerFrame = ((b.scrollPxU << 16) / Math.max(1, texW)) | 0;
-            const dyPerFrame = ((b.scrollPxV << 16) / Math.max(1, texH)) | 0;
-            const slot = (materialFactory as any).addScrollSlot?.(dxPerFrame, dyPerFrame);
-            if (slot !== undefined) {
-                layer.enableScroll = 1;
-                layer.scrollSlot = slot;
+            if (b.materialId !== -1) {
+                layers.push({ texId: b.materialId, tevMode: 0, enableScroll: 0 });
+                attrFlags |= (ShaderAttrFlags as any).TEX0;
             }
-        };
-
-        if (layers.length > 0) addScroll(layers[0], b.texW, b.texH);
-        if (layers.length > 1) addScroll(layers[1], b.blendTexW, b.blendTexH);
-
-        const shader: Shader = {
-            layers,
-            flags: shaderFlags,
-            attrFlags,
-            hasHemisphericProbe: false,
-            hasReflectiveProbe: false,
-            reflectiveProbeMaskTexId: null,
-            reflectiveProbeIdx: 0,
-            reflectiveAmbFactor: 0.0,
-            hasNBTTexture: false,
-            nbtTexId: null,
-            nbtParams: 0,
-            furRegionsTexId: null,
-            color: { r: 1, g: 1, b: 1, a: 1 },
-            normalFlags: 0,
-            lightFlags: 0,
-            texMtxCount: 0,
-        };
-
-        // IMPORTANT: Always use normal DP map material (NOT buildWaterMaterial)
-        const material = materialFactory.buildMapMaterial(shader, texFetcher);
-
-        // Build UVs for this batch (TEX0 and TEX1 always exist in the geometry for simplicity)
-        const tex0AB = new ArrayBuffer(totalVerts * 4);
-        const tex1AB = new ArrayBuffer(totalVerts * 4);
-        const tex0DV = new DataView(tex0AB);
-        const tex1DV = new DataView(tex1AB);
-
-        for (let ti = b.tStart; ti < b.tEnd; ti++) {
-            let { i0, i1, i2 } = tris[ti];
-            const a = b.vStart + i0, bb = b.vStart + i1, c = b.vStart + i2;
-
-            for (const idx of [a, bb, c]) {
-                const vo = vtxOff + idx * 16;
-                const rawS = data.getInt16(vo + 8, false);
-                const rawT = data.getInt16(vo + 10, false);
-
-                tex0DV.setInt16(idx * 4 + 0, Math.round(rawS * (32.0 / b.texW)), false);
-                tex0DV.setInt16(idx * 4 + 2, Math.round(rawT * (32.0 / b.texH)), false);
-
-                tex1DV.setInt16(idx * 4 + 0, Math.round(rawS * (32.0 / b.blendTexW)), false);
-                tex1DV.setInt16(idx * 4 + 2, Math.round(rawT * (32.0 / b.blendTexH)), false);
+            if (b.blendMaterialId !== -1) {
+                layers.push({ texId: b.blendMaterialId, tevMode: wantsTerrainBlend ? 9 : 0, enableScroll: 0 });
+                attrFlags |= (ShaderAttrFlags as any).TEX1;
             }
-        }
 
-        const batchVtxArrays: GX_Array[] = [];
-        batchVtxArrays[GX.Attr.POS]  = { buffer: ArrayBufferSlice.fromView(new DataView(posAB)), offs: 0, stride: 6 };
-        batchVtxArrays[GX.Attr.CLR0] = { buffer: ArrayBufferSlice.fromView(new DataView(clrAB)), offs: 0, stride: 4 };
-        batchVtxArrays[GX.Attr.TEX0] = { buffer: ArrayBufferSlice.fromView(tex0DV), offs: 0, stride: 4 };
-        batchVtxArrays[GX.Attr.TEX1] = { buffer: ArrayBufferSlice.fromView(tex1DV), offs: 0, stride: 4 };
+            // Decide pass + flags
+            let shaderFlags = 0;
+            let targetList = 0;
 
-        const triCount = (b.tEnd - b.tStart);
-        const vtxCount = triCount * 3;
-        const out = new Uint8Array(3 + vtxCount * 8);
-        let p = 0;
-        out[p++] = 0x90;
-        out[p++] = (vtxCount >>> 8) & 0xFF;
-        out[p++] = (vtxCount >>> 0) & 0xFF;
+            const hasSemiTrans = (b.drawMode & 0x04) !== 0;
+            const hasTexBlend  = (b.drawMode & 0x40) !== 0;
 
-        for (let ti = b.tStart; ti < b.tEnd; ti++) {
-            let { flip, i0, i1, i2 } = tris[ti];
-            if (flip) { const tmp = i1; i1 = i2; i2 = tmp; }
+            const wantsTrueTrans = (!wantsCutout && (!b.isOpaque || hasSemiTrans || hasTexBlend || b.isWater));
 
-            const a = b.vStart + i0, bb = b.vStart + i1, c = b.vStart + i2;
-            for (const idx of [a, bb, c]) {
-                out[p++] = (idx >>> 8) & 0xFF; out[p++] = idx & 0xFF; // POS
-                out[p++] = (idx >>> 8) & 0xFF; out[p++] = idx & 0xFF; // CLR
-                out[p++] = (idx >>> 8) & 0xFF; out[p++] = idx & 0xFF; // TEX0
-                out[p++] = (idx >>> 8) & 0xFF; out[p++] = idx & 0xFF; // TEX1
+            if (wantsTrueTrans) {
+                shaderFlags |= 0x40000000; // your transparent bit
+                targetList = 1;
+            } else if (wantsCutout) {
+                shaderFlags |= ShaderFlags.AlphaCompare;
+                targetList = 0;
+            } else {
+                shaderFlags |= 0x10; // your opaque marker
+                targetList = 0;
             }
+
+            shaderFlags |= ShaderFlags.Fog;
+
+            // --- THE SURGICAL BLEND FIX ---
+            // We set normalFlags to 0 by default, exactly like your original working code did.
+            // This guarantees the portals and walls will not vanish.
+            let normalFlags = 0 as NormalFlags; 
+
+            let aMin = 255;
+            for (let vi = b.vStart; vi < b.vEnd; vi++) {
+                const a = clrDV.getUint8(vi * 4 + 3);
+                if (a < aMin) aMin = a;
+            }
+            
+            const isDecalBlend = (b.blendMaterialId === -1 && b.drawMode === 0x0b && aMin === 0);
+
+            // We ONLY change the normal flags if it is explicitly a dirt blend.
+            // Portals and walls will completely bypass this if statement.
+            if (isDecalBlend || hasTexBlend) {
+                shaderFlags |= 0x40000000; 
+                normalFlags = (NormalFlags.HasVertexColor | NormalFlags.HasVertexAlpha) as NormalFlags;
+            }
+            // -------------------------------
+
+            // Add scroll slot
+            const addScroll = (layer: any, texW: number, texH: number) => {
+                if (!layer || (b.scrollPxU === 0 && b.scrollPxV === 0)) return;
+                const dxPerFrame = ((b.scrollPxU << 16) / Math.max(1, texW)) | 0;
+                const dyPerFrame = ((b.scrollPxV << 16) / Math.max(1, texH)) | 0;
+                const slot = (materialFactory as any).addScrollSlot?.(dxPerFrame, dyPerFrame);
+                if (slot !== undefined) {
+                    layer.enableScroll = 1;
+                    layer.scrollSlot = slot;
+                }
+            };
+
+            if (layers.length > 0) addScroll(layers[0], b.texW, b.texH);
+            if (layers.length > 1) addScroll(layers[1], b.blendTexW, b.blendTexH);
+
+            const shader: Shader = {
+                layers, flags: shaderFlags, attrFlags,
+                hasHemisphericProbe: false, hasReflectiveProbe: false,
+                reflectiveProbeMaskTexId: null, reflectiveProbeIdx: 0, reflectiveAmbFactor: 0.0,
+                hasNBTTexture: false, nbtTexId: null, nbtParams: 0, furRegionsTexId: null,
+                color: { r: 1, g: 1, b: 1, a: 1 }, normalFlags, lightFlags: 0, texMtxCount: 0,
+            };
+
+            const material = materialFactory.buildMapMaterial(shader, texFetcher);
+
+            // UV/VBO Builder (Untouched Original)
+            const tex0DV = new DataView(new ArrayBuffer(totalVerts * 4));
+            const tex1DV = new DataView(new ArrayBuffer(totalVerts * 4));
+            for (let ti = b.tStart; ti < b.tEnd; ti++) {
+                let { i0, i1, i2 } = tris[ti];
+                for (const idx of [b.vStart + i0, b.vStart + i1, b.vStart + i2]) {
+                    const vo = vtxOff + idx * 16;
+                    const s = data.getInt16(vo + 8, false);
+                    const t = data.getInt16(vo + 10, false);
+                    tex0DV.setInt16(idx * 4 + 0, Math.round(s * (32.0 / b.texW)), false);
+                    tex0DV.setInt16(idx * 4 + 2, Math.round(t * (32.0 / b.texH)), false);
+                    tex1DV.setInt16(idx * 4 + 0, Math.round(s * (32.0 / b.blendTexW)), false);
+                    tex1DV.setInt16(idx * 4 + 2, Math.round(t * (32.0 / b.blendTexH)), false);
+                }
+            }
+
+            const batchVtxArrays: GX_Array[] = [];
+            batchVtxArrays[GX.Attr.POS]  = { buffer: ArrayBufferSlice.fromView(new DataView(posAB)), offs: 0, stride: 6 };
+            batchVtxArrays[GX.Attr.CLR0] = { buffer: ArrayBufferSlice.fromView(new DataView(clrAB)), offs: 0, stride: 4 };
+            batchVtxArrays[GX.Attr.TEX0] = { buffer: ArrayBufferSlice.fromView(tex0DV), offs: 0, stride: 4 };
+            batchVtxArrays[GX.Attr.TEX1] = { buffer: ArrayBufferSlice.fromView(tex1DV), offs: 0, stride: 4 };
+
+            const vtxCountOut = (b.tEnd - b.tStart) * 3;
+            const out = new Uint8Array(3 + vtxCountOut * 8);
+            let p = 0;
+            out[p++] = 0x90;
+            out[p++] = (vtxCountOut >>> 8) & 0xFF;
+            out[p++] = (vtxCountOut >>> 0) & 0xFF;
+            for (let ti = b.tStart; ti < b.tEnd; ti++) {
+                let { flip, i0, i1, i2 } = tris[ti];
+                if (flip) { const tmp = i1; i1 = i2; i2 = tmp; }
+                for (const idx of [b.vStart + i0, b.vStart + i1, b.vStart + i2]) {
+                    out[p++] = (idx >>> 8) & 0xFF; out[p++] = idx & 0xFF;
+                    out[p++] = (idx >>> 8) & 0xFF; out[p++] = idx & 0xFF;
+                    out[p++] = (idx >>> 8) & 0xFF; out[p++] = idx & 0xFF;
+                    out[p++] = (idx >>> 8) & 0xFF; out[p++] = idx & 0xFF;
+                }
+            }
+
+            const geom = new ShapeGeometry(batchVtxArrays, vcd, vat, new DataView(out.buffer), false);
+            geom.setPnMatrixMap(nArray(10, () => 0), false, false);
+            shapes.shapes[targetList].push(new Shape(geom, new ShapeMaterial(material), false));
         }
-
-        const geom = new ShapeGeometry(batchVtxArrays, vcd, vat, new DataView(out.buffer), false);
-        const pnMatrixMap = nArray(10, () => 0);
-        geom.setPnMatrixMap(pnMatrixMap, false, false);
-
-        shapes.shapes[targetList].push(new Shape(geom, new ShapeMaterial(material), false));
-    }
 
     return shapes;
 };

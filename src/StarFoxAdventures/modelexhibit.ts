@@ -1,19 +1,24 @@
+// modelexhibit.ts (FULL) — DP exhibit: consistent center/scale FIRST TIME (fixes “giant until prev/next”)
+// Changes vs last version:
+//  - Added dpResetNormalizeState() + dpComputeNormalizeFromCurrentModel()
+//  - Called them immediately whenever modelInst changes (async + next/prev buttons)
+//  - addWorldRenderInsts also retries compute until bbox exists
+
 import { mat4, vec3 } from 'gl-matrix';
 import * as UI from '../ui.js';
 import * as Viewer from "../viewer.js";
 import { GfxDevice } from '../gfx/platform/GfxPlatform.js';
-import { GfxRenderInstManager, GfxRenderInst } from "../gfx/render/GfxRenderInstManager.js";
+import { GfxRenderInstManager } from "../gfx/render/GfxRenderInstManager.js";
 import { SceneContext } from '../SceneBase.js';
-import { Color, White, colorCopy, colorNewCopy } from '../Color.js';
+import { White, colorNewCopy } from '../Color.js';
 import { getDebugOverlayCanvas2D, drawWorldSpaceLine, drawWorldSpacePoint } from '../DebugJunk.js';
-import { fillSceneParamsDataOnTemplate } from "../gx/gx_render.js"; // Corrected import syntax
+import { fillSceneParamsDataOnTemplate } from "../gx/gx_render.js";
 import { Light, lightSetDistAttn, lightSetSpot } from '../gx/gx_material.js';
 import { DataFetcher } from '../DataFetcher.js';
 import { GameInfo, SFA_GAME_INFO, DP_GAME_INFO } from './scenes.js';
 import { Anim, SFAAnimationController, AnimCollection, AmapCollection, ModanimCollection, applyAnimationToModel } from './animation.js';
 import { SFARenderer, SceneRenderContext, SFARenderLists } from './render.js';
-import { ModelFetcher, ModelInstance, ModelRenderContext, ModelShapes, } from './models.js';
-import { Shape, } from './shapes.js';
+import { ModelFetcher, ModelInstance, ModelRenderContext } from './models.js';
 import { MaterialFactory } from './materials.js';
 import { dataSubarray, readUint16 } from './util.js';
 import { TextureFetcher, SFATextureFetcher } from './textures.js';
@@ -22,9 +27,9 @@ import { downloadBufferSlice } from '../DownloadUtils.js';
 import ArrayBufferSlice from '../ArrayBufferSlice.js';
 
 class ModelExhibitRenderer extends SFARenderer {
-private turntableEnabled = false;
-private turntableAngle = 0;            
-private turntableSpeed = Math.PI / 8;   
+    private turntableEnabled = false;
+    private turntableAngle = 0;
+    private turntableSpeed = Math.PI / 8;
 
     private modelInst: ModelInstance | null | undefined = undefined;
     private modelNum = 1;
@@ -41,44 +46,84 @@ private turntableSpeed = Math.PI / 8;
     private useGlobalAnimNum: boolean = false;
     private autogenAmap: boolean = false;
 
-    private hasInitializedCamera: boolean = false; 
+    private hasInitializedCamera: boolean = false;
+private modelLoadGeneration = 0;
+    // --- DP exhibit normalization (DP only) ---
+    private dpNormalize = true;
+    private dpTargetMaxDim = 1000; // tweak if you want bigger/smaller DP models globally
 
+    private dpNormReady = false;
+    private dpNormScale = 1.0;
+    private dpNormCenter = vec3.create();
+    private dpTmpNegCenter = vec3.create();
 
-constructor(
-    private context: SceneContext,
-    animController: SFAAnimationController,
-    public override materialFactory: MaterialFactory,
-    private texFetcher: TextureFetcher,
-    private modelFetcher: ModelFetcher,
-    private animColl: AnimCollection,
-    private amapColl: AmapCollection,
-    private modanimColl: ModanimCollection,
-    private gameInfo: GameInfo,
-    private modelVersion: ModelVersion
-) {
-    super(context, animController, materialFactory);
-    (this.animController.animController as any).playbackEnabled = true;
+    constructor(
+        private context: SceneContext,
+        animController: SFAAnimationController,
+        public override materialFactory: MaterialFactory,
+        private texFetcher: TextureFetcher,
+        private modelFetcher: ModelFetcher,
+        private animColl: AnimCollection,
+        private amapColl: AmapCollection,
+        private modanimColl: ModanimCollection,
+        private gameInfo: GameInfo,
+        private modelVersion: ModelVersion
+    ) {
+        super(context, animController, materialFactory);
         (this.animController.animController as any).playbackEnabled = true;
+        (this.animController.animController as any).playbackEnabled = true;
+    }
+
+    // --- DP normalization helpers ---
+    private dpResetNormalizeState(): void {
+        this.dpNormReady = false;
+        this.dpNormScale = 1.0;
+        vec3.set(this.dpNormCenter, 0, 0, 0);
+    }
+
+    // returns true if bbox was valid and we computed center/scale
+    private dpComputeNormalizeFromCurrentModel(): boolean {
+        if (this.modelVersion !== ModelVersion.DinosaurPlanet || !this.dpNormalize) return false;
+        if (!this.modelInst) return false;
+
+        const bbox = (this.modelInst.model as any).bbox;
+        if (!bbox) return false;
+
+        const cx = (bbox.minX + bbox.maxX) * 0.5;
+        const cy = (bbox.minY + bbox.maxY) * 0.5;
+        const cz = (bbox.minZ + bbox.maxZ) * 0.5;
+        vec3.set(this.dpNormCenter, cx, cy, cz);
+
+        const dx = (bbox.maxX - bbox.minX);
+        const dy = (bbox.maxY - bbox.minY);
+        const dz = (bbox.maxZ - bbox.minZ);
+        const maxDim = Math.max(dx, dy, dz);
+
+        if (!(maxDim > 0) || !Number.isFinite(maxDim)) return false;
+
+        this.dpNormScale = this.dpTargetMaxDim / maxDim;
+
+        // Mark ready + force camera recalc for this model
+        this.dpNormReady = true;
+        this.hasInitializedCamera = false;
+        return true;
     }
 
     public createPanels(): UI.Panel[] {
         const panel = new UI.Panel();
-
         panel.setTitle(UI.SAND_CLOCK_ICON, 'Model Viewer');
-panel.elem.style.maxWidth = '300px';
-panel.elem.style.width = '300px'; // Or fixed like '280px'
-
+        panel.elem.style.maxWidth = '300px';
+        panel.elem.style.width = '300px';
 
         this.modelSelect = new UI.TextEntry();
         this.modelSelect.ontext = (s: string) => {
             const newNum = Number.parseInt(s);
             if (!Number.isNaN(newNum)) {
-                this.destroyCurrentModelResources(this.context.device); 
+                this.destroyCurrentModelResources(this.context.device);
                 this.modelNum = newNum;
                 console.log(`Requested model change to: ${this.modelNum}`);
             }
         };
-
 
         const modelInputWrap = document.createElement('div');
         modelInputWrap.innerHTML = `<label>Model Number:</label>`;
@@ -90,13 +135,13 @@ panel.elem.style.width = '300px'; // Or fixed like '280px'
             const newNum = Number.parseInt(s);
             if (!Number.isNaN(newNum)) {
                 this.modelAnimNum = newNum;
-                this.anim = null; // Reset animation when anim number changes
+                this.anim = null;
                 this.generatedAmap = null;
             }
         }
         const animInputWrap = document.createElement('div');
         animInputWrap.innerHTML = `<label>Animation Number:</label>`;
-        animInputWrap.appendChild(this.animSelect.elem); // Fixed typo here
+        animInputWrap.appendChild(this.animSelect.elem);
         panel.contents.append(animInputWrap);
 
         const modelButtonContainer = document.createElement('div');
@@ -107,7 +152,7 @@ panel.elem.style.width = '300px'; // Or fixed like '280px'
         prevModelButton.textContent = 'Previous Valid Model';
         prevModelButton.onclick = async () => {
             prevModelButton.disabled = true;
-            await this.destroyCurrentModelResources(this.context.device); // Cleanup before loading
+            await this.destroyCurrentModelResources(this.context.device);
             await this.loadPreviousValidModel();
             prevModelButton.disabled = false;
         };
@@ -116,7 +161,7 @@ panel.elem.style.width = '300px'; // Or fixed like '280px'
         nextModelButton.textContent = 'Next Valid Model';
         nextModelButton.onclick = async () => {
             nextModelButton.disabled = true;
-            await this.destroyCurrentModelResources(this.context.device); // Cleanup before loading
+            await this.destroyCurrentModelResources(this.context.device);
             await this.loadNextValidModel();
             nextModelButton.disabled = false;
         };
@@ -124,29 +169,29 @@ panel.elem.style.width = '300px'; // Or fixed like '280px'
         modelButtonContainer.appendChild(prevModelButton);
         modelButtonContainer.appendChild(nextModelButton);
         panel.contents.append(modelButtonContainer);
-// Turntable toggle
-const spinBtn = document.createElement('button');
-spinBtn.textContent = 'Enable Turntable';
-spinBtn.onclick = () => {
-    this.turntableEnabled = !this.turntableEnabled;
-    spinBtn.textContent = this.turntableEnabled ? 'Disable Turntable' : 'Enable Turntable';
-};
-panel.contents.append(spinBtn);
 
+        // Turntable toggle
+        const spinBtn = document.createElement('button');
+        spinBtn.textContent = 'Enable Turntable';
+        spinBtn.onclick = () => {
+            this.turntableEnabled = !this.turntableEnabled;
+            spinBtn.textContent = this.turntableEnabled ? 'Disable Turntable' : 'Enable Turntable';
+        };
+        panel.contents.append(spinBtn);
 
-const speedWrap = document.createElement('div');
-const speedInput = document.createElement('input');
-speedInput.type = 'number';
-speedInput.step = '0.1';
-speedInput.value = this.turntableSpeed.toString();
-speedInput.style.width = '100px';
-speedWrap.innerHTML = `<label>Spin Speed (rad/s): </label>`;
-speedWrap.appendChild(speedInput);
-speedInput.onchange = () => {
-    const v = Number.parseFloat(speedInput.value);
-    if (!Number.isNaN(v)) this.turntableSpeed = v;
-};
-panel.contents.append(speedWrap);
+        const speedWrap = document.createElement('div');
+        const speedInput = document.createElement('input');
+        speedInput.type = 'number';
+        speedInput.step = '0.1';
+        speedInput.value = this.turntableSpeed.toString();
+        speedInput.style.width = '100px';
+        speedWrap.innerHTML = `<label>Spin Speed (rad/s): </label>`;
+        speedWrap.appendChild(speedInput);
+        speedInput.onchange = () => {
+            const v = Number.parseFloat(speedInput.value);
+            if (!Number.isNaN(v)) this.turntableSpeed = v;
+        };
+        panel.contents.append(speedWrap);
 
         const animButtonContainer = document.createElement('div');
         animButtonContainer.style.display = 'flex';
@@ -172,38 +217,30 @@ panel.contents.append(speedWrap);
         animButtonContainer.appendChild(nextAnimButton);
         panel.contents.append(animButtonContainer);
 
- 
         const bonesSelect = new UI.Checkbox("Display bones", false);
         bonesSelect.onchanged = () => {
             this.displayBones = bonesSelect.checked;
         };
         panel.contents.append(bonesSelect.elem);
 
-        const tPoseCheckbox = new UI.Checkbox("Force T-Pose (Stop Animation)", false); // Starts unchecked
+        const tPoseCheckbox = new UI.Checkbox("Force T-Pose (Stop Animation)", false);
         tPoseCheckbox.onchanged = () => {
-            const viewerAnimController = this.animController.animController as any; // Type assertion here
+            const viewerAnimController = this.animController.animController as any;
             if (tPoseCheckbox.checked) {
                 viewerAnimController.playbackEnabled = false;
-                viewerAnimController.currentTimeInFrames = 0; // Reset time to 0 for T-pose
-                if (this.modelInst) {
-                    this.modelInst.resetPose(); // Explicitly reset model skeleton to T-pose
-                }
-                this.anim = null; // Clear active animation to ensure it re-fetches if unchecked
-                this.modelAnimNum = 0; // Reset animation number for UI display
+                viewerAnimController.currentTimeInFrames = 0;
+                if (this.modelInst) this.modelInst.resetPose();
+                this.anim = null;
+                this.modelAnimNum = 0;
                 if (this.animSelect?.elem instanceof HTMLInputElement) {
                     this.animSelect.elem.value = this.modelAnimNum.toString();
                 }
-                console.log("Animation stopped and model reset to T-pose.");
             } else {
-                // If unchecked, re-enable animation playback.
-                // The next update cycle will pick up and apply the animation for the current modelAnimNum.
-                viewerAnimController.playbackEnabled = true; // Type assertion here
-                console.log("Animation playback re-enabled.");
+                viewerAnimController.playbackEnabled = true;
             }
         };
-        panel.contents.insertBefore(tPoseCheckbox.elem, bonesSelect.elem); // Place it before bonesSelect
+        panel.contents.insertBefore(tPoseCheckbox.elem, bonesSelect.elem);
 
-        
         const useGlobalAnimSelect = new UI.Checkbox("Use global animation number", false);
         useGlobalAnimSelect.onchanged = () => {
             this.useGlobalAnimNum = useGlobalAnimSelect.checked;
@@ -213,183 +250,141 @@ panel.contents.append(speedWrap);
         const autogenAmapSelect = new UI.Checkbox("Autogenerate AMAP", false);
         autogenAmapSelect.onchanged = () => {
             this.autogenAmap = autogenAmapSelect.checked;
-            this.generatedAmap = null; // Reset generated AMAP when setting changes
+            this.generatedAmap = null;
         };
         panel.contents.append(autogenAmapSelect.elem);
 
-        // Removed: Wireframe Mode Toggle for now
-        // const wireframeToggle = new UI.Checkbox("Wireframe Mode", this.showWireframe);
-        // wireframeToggle.onchanged = () => {
-        //     this.showWireframe = wireframeToggle.checked;
-        // };
-        // panel.contents.append(wireframeToggle.elem);
-
-
-        return [panel]; // Added return statement
+        return [panel];
     }
 
-    // New method for resource cleanup
-    private async destroyCurrentModelResources(device: GfxDevice) {
-        console.log("Destroying and re-initializing resources...");
-        // Destroy the current MaterialFactory's cache and any GFX resources it holds
-        if (this.materialFactory) {
-            this.materialFactory.destroy(device);
-        }
-        // Re-create a new, clean MaterialFactory with a fresh GfxRenderCache
-        this.materialFactory = new MaterialFactory(device);
-        this.materialFactory.initialize(); // Re-initialize common textures/factories
+private async destroyCurrentModelResources(device: GfxDevice) {
+    console.log("Resetting current model state...");
 
-        // IMPORTANT: Do NOT re-create texFetcher and modelFetcher here.
-        // They are long-lived resources for the scene and should only be created once in createScene.
-        // Re-creating them here can lead to redundant fetching and texture issues.
+    // Invalidate async loads
+    this.modelLoadGeneration++;
 
-        // Reset all model-related state to force a complete reload
-        this.modelInst = undefined; // Force reload of ModelInstance
-        this.anim = null;           // Reset current animation
-        this.modanim = null;        // Reset modanim data
-        this.amap = null;           // Reset amap data
-        this.generatedAmap = null;  // Reset generated amap
-        this.hasInitializedCamera = false; // Reset camera initialization flag for new model
-        //console.log("Model-specific resources reset successfully.");
-    }
+    // IMPORTANT:
+    // Do NOT recreate materialFactory here.
+    // DPModelFetcher holds a reference to the original one, and recreating it here
+    // makes subsequent models use a stale/destroyed factory.
+    this.modelInst = undefined;
+    this.anim = null;
+    this.modanim = null;
+    this.amap = null;
+    this.generatedAmap = null;
+    this.hasInitializedCamera = false;
+
+    // DP normalize reset
+    this.dpResetNormalizeState();
+}
 
     public downloadModel() {
         if (this.modelInst !== null && this.modelInst !== undefined) {
-downloadBufferSlice(`model_${this.modelNum}${this.modelInst.model.version === ModelVersion.Beta ? '_beta' : ''}.bin`, ArrayBufferSlice.fromView(this.modelInst.model.modelData));
-        }
-    }
-
-    public setAmapNum(num: number | null) {
-        if (num === null) {
-            this.amap = null;
-        } else {
-            this.amap = this.amapColl.getAmap(num);
-            if (this.amap) {
-                console.log(`Amap ${num} has ${this.amap.byteLength} entries`);
-            } else {
-                console.warn(`Amap ${num} not found in collection.`);
-            }
+            downloadBufferSlice(
+                `model_${this.modelNum}${this.modelInst.model.version === ModelVersion.Beta ? '_beta' : ''}.bin`,
+                ArrayBufferSlice.fromView(this.modelInst.model.modelData)
+            );
         }
     }
 
     private getGlobalAnimNum(modelAnimNum: number): number | undefined {
-        if (!this.modanim) {
-       //     console.warn("modanim is not loaded for getGlobalAnimNum. Returning undefined.");
-            return undefined;
-        }
-        if (modelAnimNum * 2 >= this.modanim.byteLength) {
-            console.warn(`modelAnimNum ${modelAnimNum} is out of bounds for modanim (byteLength: ${this.modanim.byteLength}). Returning undefined.`);
-            return undefined;
-        }
+        if (!this.modanim) return undefined;
+        if (modelAnimNum * 2 >= this.modanim.byteLength) return undefined;
         return readUint16(this.modanim, 0, modelAnimNum);
     }
 
     private getAmapForModelAnim(modelAnimNum: number): DataView | null {
-        const printAmap = (amap: DataView) => {
-            let s = '';
-            for (let i = 0; i < amap.byteLength; i++) {
-                s += `${amap.getInt8(i)},`;
-            }
-            console.log(`Amap: ${s}`);
-        };
-
         if (this.autogenAmap) {
             if (this.generatedAmap === null) {
                 let generatedAmap = [0];
-
                 let curCluster = [0];
                 while (curCluster.length > 0) {
                     const prevCluster = curCluster;
                     curCluster = [];
 
-                    if (!this.modelInst || !this.modelInst.model || !this.modelInst.model.joints) {
-                        console.error("Cannot autogenAmap: modelInst or its joints are not available. Returning null.");
-                        return null;
-                    }
+                    if (!this.modelInst || !this.modelInst.model || !this.modelInst.model.joints) return null;
 
                     for (let i = 0; i < prevCluster.length; i++) {
                         for (let j = 0; j < this.modelInst.model.joints.length; j++) {
                             const joint = this.modelInst.model.joints[j];
-                            if (joint.parent === prevCluster[i]) {
-                                curCluster.push(j);
-                            }
+                            if (joint.parent === prevCluster[i]) curCluster.push(j);
                         }
                     }
-
-                    for (let i = 0; i < curCluster.length; i++) {
-                        generatedAmap.push(curCluster[i]);
-                    }
+                    for (let i = 0; i < curCluster.length; i++) generatedAmap.push(curCluster[i]);
                 }
-
                 this.generatedAmap = new DataView(new Int8Array(generatedAmap).buffer);
-                printAmap(this.generatedAmap);
             }
-
             return this.generatedAmap;
         } else {
-            if (!this.amap || !this.modelInst || !this.modelInst.model || !this.modelInst.model.joints) {
-                console.warn("Amap data or model joints not available for getAmapForModelAnim (autogenAmap is false). Returning null.");
-                return null;
-            }
-
-            const stride = (((this.modelInst.model.joints.length + 8) / 8)|0) * 8;
-            if (modelAnimNum * stride >= this.amap.byteLength) {
-                console.warn(`modelAnimNum ${modelAnimNum} * stride ${stride} is out of bounds for amap (byteLength: ${this.amap.byteLength}). Returning null.`);
-                return null;
-            }
-
-            const amap = dataSubarray(this.amap, modelAnimNum * stride, stride);
-
-            if (this.generatedAmap === null) {
-                this.generatedAmap = new DataView(new Int8Array(1).buffer);
-                printAmap(amap);
-            }
-
-            return amap;
+            if (!this.amap || !this.modelInst || !this.modelInst.model || !this.modelInst.model.joints) return null;
+            const stride = (((this.modelInst.model.joints.length + 8) / 8) | 0) * 8;
+            if (modelAnimNum * stride >= this.amap.byteLength) return null;
+            return dataSubarray(this.amap, modelAnimNum * stride, stride);
         }
     }
 
-protected override update(viewerInput: Viewer.ViewerRenderInput) {
-    super.update(viewerInput);
-    this.materialFactory.update(this.animController);
+    protected override update(viewerInput: Viewer.ViewerRenderInput) {
+        super.update(viewerInput);
+        this.materialFactory.update(this.animController);
 
-    // --- Turntable advance ---
-    if (this.turntableEnabled) {
-        this.turntableAngle += viewerInput.deltaTime * this.turntableSpeed;
-        // keep angle bounded
-        if (this.turntableAngle > Math.PI * 2) this.turntableAngle -= Math.PI * 2;
+        if (this.turntableEnabled) {
+            this.turntableAngle += viewerInput.deltaTime * this.turntableSpeed;
+            if (this.turntableAngle > Math.PI * 2) this.turntableAngle -= Math.PI * 2;
+        }
     }
 
-
-    }
-
-protected override addWorldRenderInsts(device: GfxDevice, renderInstManager: GfxRenderInstManager, renderLists: SFARenderLists, sceneCtx: SceneRenderContext) {
+    protected override addWorldRenderInsts(device: GfxDevice, renderInstManager: GfxRenderInstManager, renderLists: SFARenderLists, sceneCtx: SceneRenderContext) {
+        // --- initial / async load ---
         if (this.modelInst === undefined) {
             try {
-                this.modelAnimNum = 0;
-                this.modanim = this.modanimColl.getModanim(this.modelNum);
-                this.amap = this.amapColl.getAmap(this.modelNum);
+                const requestedModelNum = this.modelNum;
+                const loadGeneration = this.modelLoadGeneration;
 
-                const potentialModelInstance = this.modelFetcher.createModelInstance(this.modelNum);
+                this.modelAnimNum = 0;
+                this.modanim = this.modanimColl.getModanim(requestedModelNum);
+                this.amap = this.amapColl.getAmap(requestedModelNum);
+
+                const potentialModelInstance = this.modelFetcher.createModelInstance(requestedModelNum);
 
                 if (potentialModelInstance instanceof Promise) {
                     potentialModelInstance.then(instance => {
+                        // Ignore stale async completions.
+                        if (loadGeneration !== this.modelLoadGeneration) return;
+                        if (requestedModelNum !== this.modelNum) return;
+
                         this.modelInst = instance;
                         if (this.modelInst) {
                             (this.modelInst as any).modanim = this.modanim;
                             (this.modelInst as any).amap = this.amap;
                         }
+
+                        // DP normalize: reset + compute immediately when async load resolves
+                        this.dpResetNormalizeState();
+                        this.dpComputeNormalizeFromCurrentModel();
+                        this.hasInitializedCamera = false;
                     }).catch(e => {
-                        console.error(`Asynchronous model loading failed for ${this.modelNum}:`, e);
+                        if (loadGeneration !== this.modelLoadGeneration) return;
+                        if (requestedModelNum !== this.modelNum) return;
+
+                        console.error(`Asynchronous model loading failed for ${requestedModelNum}:`, e);
                         this.modelInst = null;
                     });
                     return;
                 } else {
+                    // Ignore stale sync completions too.
+                    if (loadGeneration !== this.modelLoadGeneration) return;
+                    if (requestedModelNum !== this.modelNum) return;
+
                     this.modelInst = potentialModelInstance;
                     if (this.modelInst) {
                         (this.modelInst as any).modanim = this.modanim;
                         (this.modelInst as any).amap = this.amap;
                     }
+
+                    // DP normalize: reset + compute immediately on sync load
+                    this.dpResetNormalizeState();
+                    this.dpComputeNormalizeFromCurrentModel();
+                    this.hasInitializedCamera = false;
                 }
             } catch (e) {
                 console.error(`Failed to load model ${this.modelNum} due to synchronous exception:`, e);
@@ -398,42 +393,51 @@ protected override addWorldRenderInsts(device: GfxDevice, renderInstManager: Gfx
             return;
         }
 
-        if (this.modelInst === null || this.modelInst === undefined) {
-            return;
+        if (this.modelInst === null || this.modelInst === undefined) return;
+
+        // DP normalize: if not ready yet, keep trying until bbox exists
+        if (this.modelVersion === ModelVersion.DinosaurPlanet && this.dpNormalize && !this.dpNormReady) {
+            this.dpComputeNormalizeFromCurrentModel();
         }
 
-        // --- FIXED CAMERA BOUNDING BOX LOGIC ---
+        // --- Camera init ---
         if (!this.hasInitializedCamera) {
-            const bbox = (this.modelInst.model as any).bbox; 
-            if (bbox) {
-                // Safely calculate center using discrete min/max properties instead of arrays
-                const center = vec3.fromValues(
-                    (bbox.minX + bbox.maxX) * 0.5,
-                    (bbox.minY + bbox.maxY) * 0.5,
-                    (bbox.minZ + bbox.maxZ) * 0.5
-                );
+            const camera = sceneCtx.viewerInput.camera;
+            (camera as any).pitch = Math.PI / 8;
+            (camera as any).yaw = Math.PI * 0.25;
 
-                const maxDim = Math.max(
-                    bbox.maxX - bbox.minX,
-                    bbox.maxY - bbox.minY,
-                    bbox.maxZ - bbox.minZ
-                );
-                
+            if (this.modelVersion === ModelVersion.DinosaurPlanet && this.dpNormalize) {
+                (camera as any).target = vec3.fromValues(0, 0, 0);
+
                 const fovFactor = 0.5 * (1 / Math.tan(sceneCtx.viewerInput.camera.fovY / 2));
-                let zoomDistance = maxDim * fovFactor;
-                // Failsafe in case geometry has zero size
-                if (zoomDistance === 0 || Number.isNaN(zoomDistance)) zoomDistance = 1000; 
-
-                const camera = sceneCtx.viewerInput.camera;
-                (camera as any).pitch = Math.PI / 8;
-                (camera as any).yaw = Math.PI * 0.25;
-                (camera as any).target = center;
+                const zoomDistance = this.dpTargetMaxDim * fovFactor;
                 (camera as any).zoom = zoomDistance * 1.5;
+            } else {
+                const bbox = (this.modelInst.model as any).bbox;
+                if (bbox) {
+                    const center = vec3.fromValues(
+                        (bbox.minX + bbox.maxX) * 0.5,
+                        (bbox.minY + bbox.maxY) * 0.5,
+                        (bbox.minZ + bbox.maxZ) * 0.5
+                    );
+                    const maxDim = Math.max(
+                        bbox.maxX - bbox.minX,
+                        bbox.maxY - bbox.minY,
+                        bbox.maxZ - bbox.minZ
+                    );
+                    const fovFactor = 0.5 * (1 / Math.tan(sceneCtx.viewerInput.camera.fovY / 2));
+                    let zoomDistance = maxDim * fovFactor;
+                    if (zoomDistance === 0 || Number.isNaN(zoomDistance)) zoomDistance = 1000;
 
-                this.hasInitializedCamera = true;
+                    (camera as any).target = center;
+                    (camera as any).zoom = zoomDistance * 1.5;
+                }
             }
+
+            this.hasInitializedCamera = true;
         }
 
+        // --- animation ---
         const animate = (this.animController.animController as any).playbackEnabled;
         const canAnimate = animate && !!this.modelInst?.model?.joints && this.modelInst.model.joints.length > 0;
 
@@ -444,17 +448,12 @@ protected override addWorldRenderInsts(device: GfxDevice, renderInstManager: Gfx
             if (this.anim === null) {
                 try {
                     let globalAnimNum: number | undefined;
-                    if (this.useGlobalAnimNum) {
-                        globalAnimNum = this.modelAnimNum;
-                    } else {
-                        globalAnimNum = this.getGlobalAnimNum(this.modelAnimNum);
-                    }
+                    if (this.useGlobalAnimNum) globalAnimNum = this.modelAnimNum;
+                    else globalAnimNum = this.getGlobalAnimNum(this.modelAnimNum);
 
                     if (globalAnimNum !== undefined) {
                         this.anim = this.animColl.getAnim(globalAnimNum);
-                        if (!this.anim?.keyframes?.[0]?.poses) {
-                            this.anim = null;
-                        }
+                        if (!this.anim?.keyframes?.[0]?.poses) this.anim = null;
                     } else {
                         this.anim = null;
                     }
@@ -478,6 +477,7 @@ protected override addWorldRenderInsts(device: GfxDevice, renderInstManager: Gfx
             }
         }
 
+        // --- render ---
         const template = renderInstManager.pushTemplateRenderInst();
         fillSceneParamsDataOnTemplate(template, sceneCtx.viewerInput);
 
@@ -487,8 +487,8 @@ protected override addWorldRenderInsts(device: GfxDevice, renderInstManager: Gfx
             ambienceIdx: 0,
             showMeshes: true,
             outdoorAmbientColor: White,
-            setupLights: (lights: Light[], typeMask: number) => { 
-                const expectedMaxLights = 8; 
+            setupLights: (lights: Light[], typeMask: number) => {
+                const expectedMaxLights = 8;
                 for (let i = 0; i < expectedMaxLights; i++) {
                     if (!lights[i]) lights[i] = new Light();
                     const currentLight = lights[i];
@@ -496,71 +496,67 @@ protected override addWorldRenderInsts(device: GfxDevice, renderInstManager: Gfx
                     if (!currentLight.Position) currentLight.Position = vec3.create();
                     if (!currentLight.Direction) currentLight.Direction = vec3.create();
 
-                    currentLight.Color = colorNewCopy(White); 
+                    currentLight.Color = colorNewCopy(White);
                     vec3.set(currentLight.Position, 0, 0, 0);
                     vec3.set(currentLight.Direction, 0, 0, 0);
-                    lightSetDistAttn(currentLight, 0, 0, 0); 
-                    lightSetSpot(currentLight, 0, 0);        
+                    lightSetDistAttn(currentLight, 0, 0, 0);
+                    lightSetSpot(currentLight, 0, 0);
                 }
 
                 const ambientLight = lights[0];
-                ambientLight.Color.r *= 0.5; 
+                ambientLight.Color.r *= 0.5;
                 ambientLight.Color.g *= 0.5;
                 ambientLight.Color.b *= 0.5;
-                ambientLight.Color.a = 1.0; 
+                ambientLight.Color.a = 1.0;
 
                 const dirLight = lights[1];
                 dirLight.Color.r = 1.0;
                 dirLight.Color.g = 1.0;
                 dirLight.Color.b = 1.0;
-                dirLight.Color.a = 1.0; 
+                dirLight.Color.a = 1.0;
                 vec3.set(dirLight.Direction, 0.5, -1.0, 0.5);
                 vec3.normalize(dirLight.Direction, dirLight.Direction);
 
                 for (let i = 2; i < expectedMaxLights; i++) {
-                    lights[i].Color.a = 0.0; 
+                    lights[i].Color.a = 0.0;
                 }
             },
-            mapLights: undefined, 
+            mapLights: undefined,
             cullByAabb: false,
         };
 
-        // --- FIXED TURNTABLE BOUNDING BOX LOGIC ---
         const mtx = mat4.create();
 
-        if (this.turntableEnabled) {
-            const center = vec3.create();
-            const bbox = (this.modelInst?.model as any)?.bbox;
-            if (bbox) {
-                // Use explicit properties instead of arrays
-                center[0] = (bbox.minX + bbox.maxX) * 0.5;
-                center[1] = (bbox.minY + bbox.maxY) * 0.5;
-                center[2] = (bbox.minZ + bbox.maxZ) * 0.5;
-            }
+        // DP exhibit: normalize to origin + constant size, rotate around origin
+        if (this.modelVersion === ModelVersion.DinosaurPlanet && this.dpNormalize) {
+            const angle = this.turntableEnabled ? this.turntableAngle : 0.0;
 
-            const toOrigin = mat4.create();
-            const backToCenter = mat4.create();
-            const rotY = mat4.create();
+            mat4.fromYRotation(mtx, angle);
+            mat4.scale(mtx, mtx, [this.dpNormScale, this.dpNormScale, this.dpNormScale]);
 
-            const negCenter = vec3.fromValues(-center[0], -center[1], -center[2]);
-            mat4.fromTranslation(toOrigin, negCenter);
-            mat4.fromTranslation(backToCenter, center);
-            mat4.fromYRotation(rotY, this.turntableAngle);
-
-            mat4.mul(mtx, rotY, toOrigin);
-            mat4.mul(mtx, backToCenter, mtx);
-        }
-        
-        const modelShapes = (this.modelInst as any).modelShapes;
-        if (modelShapes && typeof modelShapes.fillMaterialParams === 'function') {
-            modelShapes.fillMaterialParams();
-        }
-
-        if (modelShapes?.shapes) {
-            for (const shapeInstances of modelShapes.shapes) {
-                for (const shapeInst of shapeInstances) {
-                    (shapeInst as any).visible = true;
+            vec3.set(this.dpTmpNegCenter, -this.dpNormCenter[0], -this.dpNormCenter[1], -this.dpNormCenter[2]);
+            mat4.translate(mtx, mtx, this.dpTmpNegCenter);
+        } else {
+            if (this.turntableEnabled) {
+                const bbox = (this.modelInst?.model as any)?.bbox;
+                const center = vec3.create();
+                if (bbox) {
+                    center[0] = (bbox.minX + bbox.maxX) * 0.5;
+                    center[1] = (bbox.minY + bbox.maxY) * 0.5;
+                    center[2] = (bbox.minZ + bbox.maxZ) * 0.5;
                 }
+
+                const toOrigin = mat4.create();
+                const backToCenter = mat4.create();
+                const rotY = mat4.create();
+
+                const negCenter = vec3.fromValues(-center[0], -center[1], -center[2]);
+                mat4.fromTranslation(toOrigin, negCenter);
+                mat4.fromTranslation(backToCenter, center);
+                mat4.fromYRotation(rotY, this.turntableAngle);
+
+                mat4.mul(mtx, rotY, toOrigin);
+                mat4.mul(mtx, backToCenter, mtx);
             }
         }
 
@@ -570,6 +566,7 @@ protected override addWorldRenderInsts(device: GfxDevice, renderInstManager: Gfx
 
         renderInstManager.popTemplateRenderInst();
 
+        // bones overlay
         if (this.displayBones) {
             if (this.modelInst && this.modelInst.model && this.modelInst.skeletonInst) {
                 const ctx = getDebugOverlayCanvas2D();
@@ -593,213 +590,156 @@ protected override addWorldRenderInsts(device: GfxDevice, renderInstManager: Gfx
             }
         }
     }
-    
-    // Cleanup method for when the entire scene is destroyed (e.g. switching to a different scene desc)
+
     public override destroy(device: GfxDevice): void {
-        super.destroy(device); // Call base class destroy
-        if (this.materialFactory) {
-            this.materialFactory.destroy(device);
-        }
-        // Additional cleanup if needed for other persistent resources not managed by materialFactory
-        // Note: The comprehensive resource destruction is handled in destroyCurrentModelResources,
-        // which is called when changing models within the exhibit.
+        super.destroy(device);
+        if (this.materialFactory) this.materialFactory.destroy(device);
     }
 
-    private async loadNextValidModel(): Promise<void> {
-        const maxTries = 500;
-        const startingModel = this.modelNum;
-        let candidate = this.modelNum;
+private async loadNextValidModel(): Promise<void> {
+    const maxTries = 500;
+    const startingModel = this.modelNum;
+    const loadGeneration = this.modelLoadGeneration;
+    let candidate = this.modelNum;
 
-        for (let tries = 1; tries <= maxTries; tries++) {
-            candidate++;
-            if (candidate > 0xFFFF)
-                candidate = 1;
+    for (let tries = 1; tries <= maxTries; tries++) {
+        if (loadGeneration !== this.modelLoadGeneration) return;
 
-            if (candidate === startingModel) {
-                break;
+        candidate++;
+        if (candidate > 0xFFFF) candidate = 1;
+        if (candidate === startingModel) break;
+
+        try {
+            const inst = this.modelFetcher.createModelInstance(candidate);
+            const resolvedInst = inst instanceof Promise ? await inst : inst;
+
+            if (loadGeneration !== this.modelLoadGeneration) return;
+
+            if (!resolvedInst || !(resolvedInst as any).modelShapes?.shapes?.length) {
+                this.modelInst = null;
+                continue;
             }
 
-            try {
-                const inst = this.modelFetcher.createModelInstance(candidate);
-                const resolvedInst = inst instanceof Promise ? await inst : inst;
+            this.modelNum = candidate;
+            this.modelAnimNum = 0;
 
-                if (!resolvedInst || !(resolvedInst as any).modelShapes?.shapes?.length) {
-                    this.modelInst = null;
-                    continue;
-                }
+            this.anim = null;
+            this.generatedAmap = null;
+            this.modanim = this.modanimColl.getModanim(this.modelNum);
+            this.amap = this.amapColl.getAmap(this.modelNum);
 
-                // If a valid model is found, update the state and UI
-                this.modelNum = candidate;
-                this.modelAnimNum = 0; // Reset animation when model changes
-
-                this.anim = null;
-                this.generatedAmap = null;
-                this.modanim = this.modanimColl.getModanim(this.modelNum);
-                this.amap = this.amapColl.getAmap(this.modelNum);
-
-      this.modelInst = resolvedInst;
-                if (this.modelInst) {
-                    // modanim is read directly by ModelExhibitRenderer, so we attach it here
-                    (this.modelInst as any).modanim = this.modanim; 
-                    // AMAP must be passed to the model instance properly!
-                    if (this.amap) this.modelInst.setAmap(this.amap);
-                }
-                if (this.modelSelect?.elem instanceof HTMLInputElement)
-                    this.modelSelect.elem.value = this.modelNum.toString();
-
-                if (this.animSelect?.elem instanceof HTMLInputElement)
-                    this.animSelect.elem.value = this.modelAnimNum.toString();
-
-                // If the T-pose checkbox is currently checked, ensure animation remains stopped
-                // by explicitly setting playbackEnabled to false.
-                const tPoseCheckboxElem = document.querySelector<HTMLInputElement>('input[type="checkbox"][title="Force T-Pose (Stop Animation)"]');
-                if (tPoseCheckboxElem && tPoseCheckboxElem.checked) {
-                    (this.animController.animController as any).playbackEnabled = false;
-                    (this.animController.animController as any).currentTimeInFrames = 0;
-                    if (this.modelInst) {
-                        this.modelInst.resetPose();
-                    }
-                    this.anim = null; // Ensure animation is cleared for the new model in T-pose
-                } else {
-                    // If T-pose checkbox is unchecked, ensure animation is enabled for the new model
-                    (this.animController.animController as any).playbackEnabled = true;
-                }
-
-
-                console.log(`Successfully loaded model: ${this.modelNum}`); // Log when model is successfully loaded
-                return; // Found and loaded a valid model
-            } catch (e) {
-                console.warn(`Model ${candidate} threw error during validation:`, e);
-                this.modelInst = null; // Mark as failed
+            this.modelInst = resolvedInst;
+            if (this.modelInst) {
+                (this.modelInst as any).modanim = this.modanim;
+                if (this.amap) this.modelInst.setAmap(this.amap);
             }
+
+            // IMPORTANT: ensure DP normalize resets on every model swap (even if caller forgot)
+            this.dpResetNormalizeState();
+            this.dpComputeNormalizeFromCurrentModel();
+            this.hasInitializedCamera = false;
+
+            if (this.modelSelect?.elem instanceof HTMLInputElement)
+                this.modelSelect.elem.value = this.modelNum.toString();
+            if (this.animSelect?.elem instanceof HTMLInputElement)
+                this.animSelect.elem.value = this.modelAnimNum.toString();
+
+            console.log(`Successfully loaded model: ${this.modelNum}`);
+            return;
+        } catch (e) {
+            if (loadGeneration !== this.modelLoadGeneration) return;
+            console.warn(`Model ${candidate} threw error during validation:`, e);
+            this.modelInst = null;
         }
-        console.warn(`No valid models found after ${maxTries} tries.`);
     }
+    console.warn(`No valid models found after ${maxTries} tries.`);
+}
 
-    private async loadPreviousValidModel(): Promise<void> {
-        const maxTries = 500;
-        const startingModel = this.modelNum;
-        let candidate = this.modelNum;
+private async loadPreviousValidModel(): Promise<void> {
+    const maxTries = 500;
+    const startingModel = this.modelNum;
+    const loadGeneration = this.modelLoadGeneration;
+    let candidate = this.modelNum;
 
-        for (let tries = 1; tries <= maxTries; tries++) {
-            candidate--;
-            if (candidate <= 0) candidate = 0xFFFF;
+    for (let tries = 1; tries <= maxTries; tries++) {
+        if (loadGeneration !== this.modelLoadGeneration) return;
 
-            if (candidate === startingModel) {
-                console.warn(`Wrapped back to starting model ${startingModel}. No valid models found.`);
-                break;
+        candidate--;
+        if (candidate <= 0) candidate = 0xFFFF;
+        if (candidate === startingModel) break;
+
+        try {
+            const inst = this.modelFetcher.createModelInstance(candidate);
+            const resolvedInst = inst instanceof Promise ? await inst : inst;
+
+            if (loadGeneration !== this.modelLoadGeneration) return;
+
+            if (!resolvedInst || !(resolvedInst as any).modelShapes?.shapes?.length) {
+                this.modelInst = null;
+                continue;
             }
 
-            try {
-                const inst = this.modelFetcher.createModelInstance(candidate);
-                const resolvedInst = inst instanceof Promise ? await inst : inst;
+            this.modelNum = candidate;
+            this.modelAnimNum = 0;
 
-                if (!resolvedInst || !(resolvedInst as any).modelShapes?.shapes?.length) {
-                    this.modelInst = null;
-                    continue;
-                }
+            this.anim = null;
+            this.generatedAmap = null;
+            this.modanim = this.modanimColl.getModanim(this.modelNum);
+            this.amap = this.amapColl.getAmap(this.modelNum);
 
-                // If a valid model is found, update the state and UI
-                this.modelNum = candidate;
-                this.modelAnimNum = 0; // Reset animation when model changes
-
-                this.anim = null;
-                this.generatedAmap = null;
-                this.modanim = this.modanimColl.getModanim(this.modelNum);
-                this.amap = this.amapColl.getAmap(this.modelNum);
-
-this.modelInst = resolvedInst;
-                if (this.modelInst) {
-                    // modanim is read directly by ModelExhibitRenderer, so we attach it here
-                    (this.modelInst as any).modanim = this.modanim; 
-                    // AMAP must be passed to the model instance properly!
-                    if (this.amap) this.modelInst.setAmap(this.amap);
-                }
-                if (this.modelSelect?.elem instanceof HTMLInputElement)
-                    this.modelSelect.elem.value = this.modelNum.toString();
-
-                if (this.animSelect?.elem instanceof HTMLInputElement)
-                    this.animSelect.elem.value = this.modelAnimNum.toString();
-
-                // If the T-pose checkbox is currently checked, ensure animation remains stopped
-                const tPoseCheckboxElem = document.querySelector<HTMLInputElement>('input[type="checkbox"][title="Force T-Pose (Stop Animation)"]');
-                if (tPoseCheckboxElem && tPoseCheckboxElem.checked) {
-                    (this.animController.animController as any).playbackEnabled = false;
-                    (this.animController.animController as any).currentTimeInFrames = 0;
-                    if (this.modelInst) {
-                        this.modelInst.resetPose();
-                    }
-                    this.anim = null; // Ensure animation is cleared for the new model in T-pose
-                } else {
-                    // If T-pose checkbox is unchecked, ensure animation is enabled for the new model
-                    (this.animController.animController as any).playbackEnabled = true;
-                }
-
-                console.log(`Successfully loaded model: ${this.modelNum}`); // Log when model is successfully loaded
-                return; // Found and loaded a valid model
-            } catch (e) {
-                console.warn(`Model ${candidate} threw error during validation:`, e);
+            this.modelInst = resolvedInst;
+            if (this.modelInst) {
+                (this.modelInst as any).modanim = this.modanim;
+                if (this.amap) this.modelInst.setAmap(this.amap);
             }
+
+            // IMPORTANT: ensure DP normalize resets on every model swap
+            this.dpResetNormalizeState();
+            this.dpComputeNormalizeFromCurrentModel();
+            this.hasInitializedCamera = false;
+
+            if (this.modelSelect?.elem instanceof HTMLInputElement)
+                this.modelSelect.elem.value = this.modelNum.toString();
+            if (this.animSelect?.elem instanceof HTMLInputElement)
+                this.animSelect.elem.value = this.modelAnimNum.toString();
+
+            console.log(`Successfully loaded model: ${this.modelNum}`);
+            return;
+        } catch (e) {
+            if (loadGeneration !== this.modelLoadGeneration) return;
+            console.warn(`Model ${candidate} threw error during validation:`, e);
         }
-        console.warn(`No valid models found after ${maxTries} tries.`);
     }
+    console.warn(`No valid models found after ${maxTries} tries.`);
+}
 
     private async loadNextValidAnim(): Promise<void> {
         const maxTries = 500;
         const startingAnimNum = this.modelAnimNum;
         let candidateAnimNum = this.modelAnimNum;
-        
-        console.log(`Searching for next valid animation starting from: ${startingAnimNum}`);
 
         for (let tries = 1; tries <= maxTries; tries++) {
             candidateAnimNum++;
-            // Wrap around if needed, adjust max anim number as per SFA game data
-            if (candidateAnimNum > 1000) // Arbitrary large number, adjust if a max is known
-                candidateAnimNum = 0;
-
-            if (candidateAnimNum === startingAnimNum && tries > 1) { // Avoid infinite loop if no anims
-                console.warn(`Wrapped back to starting animation ${startingAnimNum}. No other valid animations found.`);
-                break;
-            }
+            if (candidateAnimNum > 1000) candidateAnimNum = 0;
+            if (candidateAnimNum === startingAnimNum && tries > 1) break;
 
             try {
                 let globalAnimNumToFetch: number | undefined = candidateAnimNum;
-                if (!this.useGlobalAnimNum) {
-                    globalAnimNumToFetch = this.getGlobalAnimNum(candidateAnimNum);
-                }
+                if (!this.useGlobalAnimNum) globalAnimNumToFetch = this.getGlobalAnimNum(candidateAnimNum);
 
                 if (globalAnimNumToFetch !== undefined) {
                     const potentialAnim = this.animColl.getAnim(globalAnimNumToFetch);
-
-                    if (potentialAnim && potentialAnim.keyframes && potentialAnim.keyframes.length > 0 && potentialAnim.keyframes[0] && potentialAnim.keyframes[0].poses) {
+                    if (potentialAnim && potentialAnim.keyframes?.[0]?.poses) {
                         this.modelAnimNum = candidateAnimNum;
                         this.anim = potentialAnim;
-                        this.generatedAmap = null; // Invalidate generated AMAP to force re-evaluation if needed
-                        if (this.animSelect?.elem instanceof HTMLInputElement) {
+                        this.generatedAmap = null;
+                        if (this.animSelect?.elem instanceof HTMLInputElement)
                             this.animSelect.elem.value = this.modelAnimNum.toString();
-                        }
-                        // If T-pose checkbox is checked, ensure animation remains stopped even after loading new anim
-                        const tPoseCheckboxElem = document.querySelector<HTMLInputElement>('input[type="checkbox"][title="Force T-Pose (Stop Animation)"]');
-                        if (tPoseCheckboxElem && tPoseCheckboxElem.checked) {
-                            (this.animController.animController as any).playbackEnabled = false;
-                            (this.animController.animController as any).currentTimeInFrames = 0;
-                            if (this.modelInst) {
-                                this.modelInst.resetPose();
-                            }
-                        } else {
-                             // If T-pose checkbox is unchecked, ensure animation is enabled for the new anim
-                            (this.animController.animController as any).playbackEnabled = true;
-                        }
-
-                        console.log(`Successfully loaded animation: ${this.modelAnimNum} (Global: ${globalAnimNumToFetch})`);
-                        return; // Found and loaded a valid animation
+                        return;
                     }
                 }
-            } catch (e) {
-                console.warn(`Animation ${candidateAnimNum} threw error during validation:`, e);
-            }
+            } catch (e) { }
         }
-        console.warn(`No valid animations found after ${maxTries} tries.`);
     }
 
     private async loadPreviousValidAnim(): Promise<void> {
@@ -807,159 +747,78 @@ this.modelInst = resolvedInst;
         const startingAnimNum = this.modelAnimNum;
         let candidateAnimNum = this.modelAnimNum;
 
-        console.log(`Searching for previous valid animation starting from: ${startingAnimNum}`);
-
         for (let tries = 1; tries <= maxTries; tries++) {
             candidateAnimNum--;
-            if (candidateAnimNum < 0)
-                candidateAnimNum = 1000; // Arbitrary large number for wrap-around max
-
-            if (candidateAnimNum === startingAnimNum && tries > 1) { // Avoid infinite loop if no anims
-                console.warn(`Wrapped back to starting animation ${startingAnimNum}. No other valid animations found.`);
-                break;
-            }
+            if (candidateAnimNum < 0) candidateAnimNum = 1000;
+            if (candidateAnimNum === startingAnimNum && tries > 1) break;
 
             try {
                 let globalAnimNumToFetch: number | undefined = candidateAnimNum;
-                if (!this.useGlobalAnimNum) {
-                    globalAnimNumToFetch = this.getGlobalAnimNum(candidateAnimNum);
-                }
+                if (!this.useGlobalAnimNum) globalAnimNumToFetch = this.getGlobalAnimNum(candidateAnimNum);
 
                 if (globalAnimNumToFetch !== undefined) {
                     const potentialAnim = this.animColl.getAnim(globalAnimNumToFetch);
-
-                    if (potentialAnim && potentialAnim.keyframes && potentialAnim.keyframes.length > 0 && potentialAnim.keyframes[0] && potentialAnim.keyframes[0].poses) {
+                    if (potentialAnim && potentialAnim.keyframes?.[0]?.poses) {
                         this.modelAnimNum = candidateAnimNum;
                         this.anim = potentialAnim;
-                        this.generatedAmap = null; // Invalidate generated AMAP to force re-evaluation if needed
-                        if (this.animSelect?.elem instanceof HTMLInputElement) {
+                        this.generatedAmap = null;
+                        if (this.animSelect?.elem instanceof HTMLInputElement)
                             this.animSelect.elem.value = this.modelAnimNum.toString();
-                        }
-                        // If T-pose checkbox is checked, ensure animation remains stopped even after loading new anim
-                        const tPoseCheckboxElem = document.querySelector<HTMLInputElement>('input[type="checkbox"][title="Force T-Pose (Stop Animation)"]');
-                        if (tPoseCheckboxElem && tPoseCheckboxElem.checked) {
-                            (this.animController.animController as any).playbackEnabled = false;
-                            (this.animController.animController as any).currentTimeInFrames = 0;
-                            if (this.modelInst) {
-                                this.modelInst.resetPose();
-                            }
-                        } else {
-                            // If T-pose checkbox is unchecked, ensure animation is enabled for the new anim
-                            (this.animController.animController as any).playbackEnabled = true;
-                        }
-                        console.log(`Successfully loaded animation: ${this.modelAnimNum} (Global: ${globalAnimNumToFetch})`);
-                        return; // Found and loaded a valid animation
+                        return;
                     }
                 }
-            } catch (e) {
-                console.warn(`Animation ${candidateAnimNum} threw error during validation:`, e);
-            }
+            } catch (e) { }
         }
-        console.warn(`No valid animations found after ${maxTries} tries.`);
     }
 }
 
-
-
 export class SFAModelExhibitSceneDesc implements Viewer.SceneDesc {
-    constructor(public id: string, public name: string, private modelVersion: ModelVersion, private gameInfo: GameInfo = SFA_GAME_INFO) {
-    }
+    constructor(public id: string, public name: string, private modelVersion: ModelVersion, private gameInfo: GameInfo = SFA_GAME_INFO) { }
 
     public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
         const materialFactory = new MaterialFactory(device);
         materialFactory.initialize();
 
-const animController = new SFAAnimationController();
-const modanimColl = await ModanimCollection.create(this.gameInfo, context.dataFetcher);
-const amapColl = await AmapCollection.create(this.gameInfo, context.dataFetcher);
+        const animController = new SFAAnimationController();
+        const modanimColl = await ModanimCollection.create(this.gameInfo, context.dataFetcher);
+        const amapColl = await AmapCollection.create(this.gameInfo, context.dataFetcher);
 
-const isBeta = this.modelVersion === ModelVersion.Beta;
-const isDemo = this.modelVersion === ModelVersion.Demo
-const selectedSubdirs = isBeta
-    ? ['swapcircle']
-    : isDemo
-      ? [
-       
-          'Copy of swaphol',
-          'insidegal',
-          'linklevel',
+        const isBeta = this.modelVersion === ModelVersion.Beta;
+        const isDemo = (this.modelVersion as any) === (ModelVersion as any).Demo;
 
-        ]
-      : [
-        
-          'animtest',
-          'arwing',
-          'arwingcity',
-          'arwingcloud',
-          'arwingdarkice',
-          'arwingdragon',
-          'arwingtoplanet',
-          'bossdrakor',
-          'bossgaldon',
-          'bosstrex',
-          'capeclaw',
-          'clouddungeon',
-          'cloudrace',
-          'crfort',
-          'darkicemines',
-          'darkicemines2',
-          'dbshrine',
-          'desert',
-          'dfptop',
-          'dfshrine',
-          'dragrock',
-          'dragrockbot',
-          'ecshrine',
-          'gamefront',
-          'gpshrine',
-          'greatfox',
-          'icemountain',
-          'lightfoot',
-          'linka',
-          'linkb',
-          'linkc',
-          'linkd',
-          'linke',
-          'linkf',
-          'linkg',
-          'linkh',
-          'linki',
-          'linkj',
-          'magiccave',
-          'mazecave',
-          'mmpass',
-          'mmshrine',
-          'nwastes',
-          'nwshrine',
-          'shipbattle',
-          'shop',
-          'swaphol',
-          'swapholbot',
-          'volcano',
-          'wallcity',
-          'warlock',
-          'worldmap',
-        ];
+        const selectedSubdirs = isBeta
+            ? ['swapcircle']
+            : isDemo
+                ? ['Copy of swaphol', 'insidegal', 'linklevel']
+                : [
+                    'animtest', 'arwing', 'arwingcity', 'arwingcloud', 'arwingdarkice', 'arwingdragon', 'arwingtoplanet',
+                    'bossdrakor', 'bossgaldon', 'bosstrex', 'capeclaw', 'clouddungeon', 'cloudrace', 'crfort',
+                    'darkicemines', 'darkicemines2', 'dbshrine', 'desert', 'dfptop', 'dfshrine', 'dragrock', 'dragrockbot',
+                    'ecshrine', 'gamefront', 'gpshrine', 'greatfox', 'icemountain', 'lightfoot',
+                    'linka', 'linkb', 'linkc', 'linkd', 'linke', 'linkf', 'linkg', 'linkh', 'linki', 'linkj',
+                    'magiccave', 'mazecave', 'mmpass', 'mmshrine', 'nwastes', 'nwshrine', 'shipbattle', 'shop',
+                    'swaphol', 'swapholbot', 'volcano', 'wallcity', 'warlock', 'worldmap',
+                ];
 
-    
-    const texFetcher = await SFATextureFetcher.create(this.gameInfo, context.dataFetcher, this.modelVersion === ModelVersion.Beta);
-await texFetcher.loadSubdirs(selectedSubdirs, context.dataFetcher);
+        const texFetcher = await SFATextureFetcher.create(this.gameInfo, context.dataFetcher, this.modelVersion === ModelVersion.Beta);
+        await texFetcher.loadSubdirs(selectedSubdirs, context.dataFetcher);
 
-const modelFetcher = await ModelFetcher.create(this.gameInfo, Promise.resolve(texFetcher), materialFactory, animController, this.modelVersion);
-await modelFetcher.loadSubdirs(selectedSubdirs, context.dataFetcher);
+        const modelFetcher = await ModelFetcher.create(this.gameInfo, Promise.resolve(texFetcher), materialFactory, animController, this.modelVersion);
+        await modelFetcher.loadSubdirs(selectedSubdirs, context.dataFetcher);
 
-const animColl = await AnimCollection.create(this.gameInfo, context.dataFetcher, selectedSubdirs);
+        const animColl = await AnimCollection.create(this.gameInfo, context.dataFetcher, selectedSubdirs);
 
-return new ModelExhibitRenderer(context, animController, materialFactory, texFetcher, modelFetcher, animColl, amapColl, modanimColl, this.gameInfo, this.modelVersion);
+        return new ModelExhibitRenderer(context, animController, materialFactory, texFetcher, modelFetcher, animColl, amapColl, modanimColl, this.gameInfo, this.modelVersion);
     }
 }
+
 export class DPModelFetcher {
     public constructor(
         private gameInfo: GameInfo,
         private dataFetcher: DataFetcher,
         private texFetcher: TextureFetcher,
         private materialFactory: MaterialFactory
-    ) {}
+    ) { }
 
     public static async create(gameInfo: GameInfo, dataFetcher: DataFetcher, texFetcher: TextureFetcher, materialFactory: MaterialFactory): Promise<DPModelFetcher> {
         return new DPModelFetcher(gameInfo, dataFetcher, texFetcher, materialFactory);
@@ -967,17 +826,13 @@ export class DPModelFetcher {
 
     public async createModelInstance(modelNum: number): Promise<ModelInstance | null> {
         const url = `${this.gameInfo.pathBase}/uncompressed_models/${modelNum}.bin`;
-        
+
         try {
-            const buffer = await this.dataFetcher.fetchData(url, { allow404: true }); 
+            const buffer = await this.dataFetcher.fetchData(url, { allow404: true });
             if (buffer.byteLength === 0) return null;
 
             const dv = buffer.createDataView();
-            
-            // This is the secret! DP Character models are just GameCube Beta models.
-            // By passing ModelVersion.Beta, it uses the standard, working SFA parser.
             const model = loadModel(dv, this.texFetcher, this.materialFactory, ModelVersion.DinosaurPlanet);
-            
             return new ModelInstance(model);
         } catch (e: any) {
             console.error(`[DPModelFetcher] Failed to parse model ${modelNum}:`, e);
@@ -987,16 +842,14 @@ export class DPModelFetcher {
 }
 
 export class DPModelExhibitSceneDesc implements Viewer.SceneDesc {
-    constructor(public id: string, public name: string, private gameInfo: GameInfo = DP_GAME_INFO) {
-    }
+    constructor(public id: string, public name: string, private gameInfo: GameInfo = DP_GAME_INFO) { }
 
     public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
         const materialFactory = new MaterialFactory(device);
         materialFactory.initialize();
 
         const animController = new SFAAnimationController();
-        
-        // THE FIX: Load the REAL Dinosaur Planet animation collections!
+
         const modanimColl = await ModanimCollection.create(this.gameInfo, context.dataFetcher);
         const amapColl = await AmapCollection.create(this.gameInfo, context.dataFetcher);
         const animColl = await AnimCollection.create(this.gameInfo, context.dataFetcher, ['']);
@@ -1008,15 +861,15 @@ export class DPModelExhibitSceneDesc implements Viewer.SceneDesc {
         const modelFetcher = await DPModelFetcher.create(this.gameInfo, context.dataFetcher, texFetcher, materialFactory);
 
         return new ModelExhibitRenderer(
-            context, 
-            animController, 
-            materialFactory, 
-            texFetcher, 
-            modelFetcher as any, 
-            animColl,       // Pass real Anim collection
-            amapColl,       // Pass real Amap collection
-            modanimColl,    // Pass real Modanim collection
-            this.gameInfo, 
+            context,
+            animController,
+            materialFactory,
+            texFetcher,
+            modelFetcher as any,
+            animColl,
+            amapColl,
+            modanimColl,
+            this.gameInfo,
             ModelVersion.DinosaurPlanet
         );
     }

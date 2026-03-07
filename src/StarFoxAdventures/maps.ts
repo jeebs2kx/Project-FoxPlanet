@@ -468,7 +468,7 @@ const DEV_TYPE_IDS = new Set<number>([
      0x0130, 0x0133, 0x0160, 0x019B, 0x01A0, 0x01B3, 0x01F1, 0x0222, 0x022C, 0x024F,
      0x0263, 0x0265, 0x027E, 0x02C3, 0x02E3, 0x02F0, 0x032F, 0x0331, 0x0349, 0x0354, 0x035E,
      0x0377, 0x0384, 0x0386, 0x039E, 0x03B6, 0x03F0, 0x0432, 0x0437, 0x047A, 0x04A8,
-     0x04BD, 0x04C0, 0x04C6, 0x04E7, 0x054F, 0x0572,  0x058D, 0x059A, 0x054E, 0x55D,
+     0x04BD, 0x04C0, 0x04C6, 0x04E7, 0x054F, 0x0572,  0x058D, 0x059A, 0x054E, 0x55D, 0x01F3,
 ]);
 
 const DEV_MODEL_IDS = new Set<number>([
@@ -746,8 +746,7 @@ export class MapInstance {
             this.blockInfoTable.push(row);
         }
 
-// --- Dinosaur Planet Object Spawner ---
-// --- Dinosaur Planet Object Spawner ---
+        // --- Dinosaur Planet Object Spawner ---
         if (this.mapOpts?.objectManager && this.info.getObjectsData) {
             const objData = this.info.getObjectsData();
             if (objData) {
@@ -767,51 +766,124 @@ export class MapInstance {
                     try {
                         const objInst = this.mapOpts.objectManager.createObjectInstance(objParams.getUint16(0), objParams, [0, 0, 0], false);
                         
-const typeNum = objParams.getUint16(0);
-(objInst as any)._dpTypeNum = typeNum;
-const trueX = objParams.getFloat32(0x08);
-const trueY = objParams.getFloat32(0x0C);
-const trueZ = objParams.getFloat32(0x10);
+                        const typeNum = objParams.getUint16(0);
+                        (objInst as any)._dpTypeNum = typeNum;
+                        const trueX = objParams.getFloat32(0x08);
+                        const trueY = objParams.getFloat32(0x0C);
+                        const trueZ = objParams.getFloat32(0x10);
 
-// position (keep your working origin fix)
-objInst.position[0] = trueX + (ox * 640) - globalOffsetX;
-objInst.position[1] = trueY;
-objInst.position[2] = trueZ + (oz * 640) - globalOffsetZ;
+                        // position (keep your working origin fix)
+                        objInst.position[0] = trueX + (ox * 640) - globalOffsetX;
+                        objInst.position[1] = trueY;
+                        objInst.position[2] = trueZ + (oz * 640) - globalOffsetZ;
 
+                        // --- DP ROTATION FIX ---
+                        // Standard objects use +0x06. Extended objects store custom param layouts.
 // --- DP ROTATION FIX ---
-// Most objects use +0x06, but “tube-style” 36-byte records store yaw at +0x18 (your CD01 / A300 / 4202 case).
-let yawU = objParams.getUint16(0x06);
+                        // Standard objects use +0x06. Extended objects store custom param layouts.
+                        // This often overrides the default yaw at 0x06 to store Scale instead.
+                        let yawU = objParams.getUint16(0x06);
 
-if (objParams.byteLength >= 0x1A) {
-    const flags = objParams.getUint16(0x04);
-    const altYaw = objParams.getUint16(0x18);
+                        if (objParams.byteLength >= 0x1A) {
+                            const flags = objParams.getUint16(0x04);
+                            const altYaw18 = objParams.getUint16(0x18);
+                            const altYaw1A = objParams.byteLength >= 0x1C ? objParams.getUint16(0x1A) : 0;
+                            const altYaw1C = objParams.byteLength >= 0x1E ? objParams.getUint16(0x1C) : 0;
+                            const altYaw28 = objParams.byteLength >= 0x14 ? objParams.getUint16(0x12) : 0;
 
-    // hard-fix DR_tube + a safe heuristic for other “extended” records
-    if (typeNum === 0x0450 || (((flags & 0x1000) !== 0) && altYaw !== 0 && altYaw !== 0xFFFF && yawU < 0x1000)) {
-        yawU = altYaw;
-    }
-}
+                            // Explicit list of object types known to store Yaw at 0x28 (Enemies)
+                            const TYPES_YAW_28 = new Set([
+                             
+                                0x0251,
+                                0x0281,
+                                0x007E,
+                                0x04D9,
+                                0x0011, // ClubSharpClaw
+                            ]);
 
-objInst.yaw = (yawU === 0xFFFF) ? 0 : (yawU / 0x10000) * (Math.PI * 2);
+                            // Explicit list of object types known to store Yaw at 0x1C
+                            const TYPES_YAW_1C = new Set([
+                               
+                                0x01D3, // ProjectileSwitc
+                            ]);
 
-// --- DP SCALE FIX ---
-// Pull the scale from OBJECTS.bin-derived object type and store it on the instance for rendering.
-const ot = this.mapOpts.objectManager.getObjectType(typeNum, false);
+                            // Explicit list of object types known to store Yaw at 0x1A (Often Characters/NPCs)
+                            const TYPES_YAW_1A = new Set([
+                             
+                                0x01CC, // SHswapstone
+                                0x0439, // CChightop
+                            ]);
 
-// base scale from OBJECTS.bin + optional per-object multiplier
-const baseS = (ot as any).scale ?? 1.0;
-const mult  = dpGetScaleMultiplier(typeNum, ot);
-const s     = dpClampScale(baseS * mult);
+                            // Explicit list of object types known to store Yaw at 0x18 (Often Scenery/Props)
+                            const TYPES_YAW_18 = new Set([
+                          
+                                0x04F9,
+                                0x0501,
+                                0x04De,
+                                0x042e,
+                                0x0450, // DR_tube
+                                0x0497, // DFP_Statue1
+                                0x0178, // WL_WallTorch
+                                0x04F8, // DR_LightLampYel
+                                0x0513, // DR_LightLamp
+                                0x046D, // DR_ExplodeDoor
+                                0x0472, // DR_Cage
+                                0x0489, 0x048A, // DR_HighDoor
+                                0x046B, // DR_Vines
+                                0x04B0, // DRProjectileSwi
+                                0x0181, // DIM2FlameBurst
+                                0x0349, // DBlgtbeam
+                                0x0485, // DR_Bell
+                                0x0426, // DR_IonCannon
+                                0x0160, // WallAnimator
+                                0x04A8, // TexFrameAnimator
+                                0x04E9, // DRSmallExplodeW
+                                0x0435, // DRBlastedWall
+                                0x0436, // DRExplodeWall
+                                0x0486, // DR_Rock
+                                0x0475, // DR_PressurePad
+                            ]);
 
-(objInst as any)._dpScale = s;
+                            if (TYPES_YAW_28.has(typeNum)) {
+                                yawU = altYaw28;
+                            } else if (TYPES_YAW_1C.has(typeNum)) {
+                                yawU = altYaw1C;
+                            } else if (TYPES_YAW_1A.has(typeNum)) {
+                                yawU = altYaw1A;
+                            } else if (TYPES_YAW_18.has(typeNum)) {
+                                yawU = altYaw18;
+                            } else {
+                                // HEURISTIC CATCH-ALL:
+                                // Detect if the map editor hijacked 0x06 to store paired bytes like Scale.
+                                // e.g., 0x6432 (100, 50), 0x5A50 (90, 80), or matching bytes like 0x3F3F (63, 63)
+                                const hi = yawU >> 8;
+                                const lo = yawU & 0xFF;
+                                
+                                const isDummyYaw = (hi === lo && hi !== 0) || 
+                                                   (hi === 0x64 || hi === 0x5A || hi === 0x2A) ||
+                                                   (yawU === 0x06CD || yawU === 0x0632);
+                                
+                                // If we detect dummy scale data, safely assume true Yaw is pushed to 0x18
+                                if (isDummyYaw || ((flags & 0x1000) !== 0 && altYaw18 !== 0 && altYaw18 !== 0xFFFF && yawU < 0x1000)) {
+                                    yawU = altYaw18;
+                                }
+                            }
+                        }
 
-// Optional: log when an override actually triggers (helps you find the right factor)
-// if (mult !== 1.0) {
-//     console.log(`[DP scale override] type=0x${typeNum.toString(16)} name="${String((ot as any).name ?? '')}" model0=0x${(((ot as any).modelNums?.[0] ?? 0) | 0).toString(16)} base=${baseS} mult=${mult} => ${s}`);
-// }
+                        objInst.yaw = (yawU === 0xFFFF) ? 0 : (yawU / 0x10000) * (Math.PI * 2);
+                        // --- DP SCALE FIX ---
+                        // Pull the scale from OBJECTS.bin-derived object type and store it on the instance for rendering.
+                        const ot = this.mapOpts.objectManager.getObjectType(typeNum, false);
 
-objInst.mount();
-this.objects.push(objInst);
+                        // base scale from OBJECTS.bin + optional per-object multiplier
+                        const baseS = (ot as any).scale ?? 1.0;
+                        const mult  = dpGetScaleMultiplier(typeNum, ot);
+                        const s     = dpClampScale(baseS * mult);
+
+                        (objInst as any)._dpScale = s;
+
+                        objInst.mount();
+                        this.objects.push(objInst);
                         
                     } catch (e) { }
                     offset += size;
@@ -851,7 +923,7 @@ this.objects.push(objInst);
         return block === undefined ? null : block;
     }
 
-public addRenderInsts(
+    public addRenderInsts(
         device: GfxDevice,
         renderInstManager: GfxRenderInstManager,
         renderLists: SFARenderLists,
@@ -871,42 +943,44 @@ public addRenderInsts(
             b.block.addRenderInsts(device, renderInstManager, modelCtx, renderLists, scratchMtx0);
         }
 
-for (let obj of this.objects) {
-    const ot = (obj as any).objType;
-    const typeNum = (obj as any)._dpTypeNum as number | undefined;
+        const showAllObjects = (modelCtx as any).showAllObjects !== false;
+        if (showAllObjects) {
+            for (let obj of this.objects) {
+                const ot = (obj as any).objType;
+                const typeNum = (obj as any)._dpTypeNum as number | undefined;
 
-    const n = String(ot?.name ?? ot?.objName ?? '').toLowerCase();
+                const n = String(ot?.name ?? ot?.objName ?? '').toLowerCase();
 
-    const isDev =
-        !!ot?.isDevObject ||
-        (typeNum !== undefined && DP_DEV_TYPE_NUMS.has(typeNum)) ||
-        DP_DEV_NAME_KEYWORDS.some((k) => n.includes(k));
+                const isDev =
+                    !!ot?.isDevObject ||
+                    (typeNum !== undefined && DP_DEV_TYPE_NUMS.has(typeNum)) ||
+                    DP_DEV_NAME_KEYWORDS.some((k) => n.includes(k));
 
-    if (isDev && !(modelCtx as any).showDevObjects)
-        continue;
+                if (isDev && !(modelCtx as any).showDevObjects)
+                    continue;
 
-    const mi = (obj as any).modelInst as ModelInstance | undefined;
-    if (!mi) {
-        obj.addRenderInsts(device, renderInstManager, renderLists, modelCtx as any);
-        continue;
-    }
+                const mi = (obj as any).modelInst as ModelInstance | undefined;
+                if (!mi) {
+                    obj.addRenderInsts(device, renderInstManager, renderLists, modelCtx as any);
+                    continue;
+                }
 
-    const s = (obj as any)._dpScale ?? 1.0;
+                const s = (obj as any)._dpScale ?? 1.0;
 
-    mat4.fromTranslation(scratchObjMtx0, obj.position);
-    mat4.rotateY(scratchObjMtx0, scratchObjMtx0, obj.yaw);
-    if (s !== 1.0) mat4.scale(scratchObjMtx0, scratchObjMtx0, [s, s, s]);
+                mat4.fromTranslation(scratchObjMtx0, obj.position);
+                mat4.rotateY(scratchObjMtx0, scratchObjMtx0, obj.yaw);
+                if (s !== 1.0) mat4.scale(scratchObjMtx0, scratchObjMtx0, [s, s, s]);
 
-    // apply map->world (important if you ever translate DP maps later)
-    mat4.mul(scratchObjMtx0, this.matrix, scratchObjMtx0);
+                mat4.mul(scratchObjMtx0, this.matrix, scratchObjMtx0);
 
-    mi.addRenderInsts(device, renderInstManager, modelCtx as any, renderLists, scratchObjMtx0);
-}
+                mi.addRenderInsts(device, renderInstManager, modelCtx as any, renderLists, scratchObjMtx0);
+            }
+        }
 
         modelCtx.cullByAabb = prevCull;
     }
 
-public update(viewerInput: Viewer.ViewerRenderInput) {
+    public update(viewerInput: Viewer.ViewerRenderInput) {
         // Removed the object update loop to disable animations
     }
 
@@ -988,6 +1062,7 @@ if (key.startsWith('early1_') || key.startsWith('dup_')) {
 
 class MapSceneRenderer extends SFARenderer {
     public showDevObjects = false;
+    public showAllObjects = true;
     public mapNum: string | number = -1;
 public textureHolder: UI.TextureListHolder = { viewerTextures: [], onnewtextures: null };
     private blockFetcherFactory?: () => Promise<BlockFetcher>;
@@ -1240,8 +1315,9 @@ const modelCtx = {
             showMeshes: true,
             outdoorAmbientColor: scratchColor0,
             setupLights: () => {},
-            animController: this.animController, 
-            showDevObjects: this.showDevObjects,
+    animController: this.animController,
+    showDevObjects: this.showDevObjects,
+    showAllObjects: this.showAllObjects,
         };
 
         // Pass it as 'any' to stop the compiler from complaining
@@ -1257,6 +1333,62 @@ public override destroy(device: GfxDevice) {
     this.map.destroy(device);
 }
 }
+
+
+function ensureDPObjectsUI(
+  onChange: (enabled: boolean) => void | Promise<void>,
+  initial?: boolean
+): void {
+  type ToggleState = {
+    wrap: HTMLDivElement;
+    cb: HTMLInputElement;
+    handler: ((e: Event) => void) | null;
+    last?: boolean;
+  };
+
+  let state = (window as any).__dpObjectsToggle as ToggleState | undefined;
+
+  if (!state) {
+    const wrap = document.createElement('div');
+    wrap.style.position = 'fixed';
+    wrap.style.top = '2px';// below Dev objects toggle
+    wrap.style.right = '2px';
+    wrap.style.zIndex = '10000';
+    wrap.style.padding = '2px 4px';
+    wrap.style.background = 'rgba(0,0,0,0.5)';
+    wrap.style.color = '#fff';
+    wrap.style.font = '12px sans-serif';
+    wrap.style.borderRadius = '2px';
+
+    const label = document.createElement('label');
+    label.style.cursor = 'pointer';
+
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.style.marginRight = '2px';
+
+    label.appendChild(cb);
+    label.appendChild(document.createTextNode('Objects'));
+    wrap.appendChild(label);
+    document.body.appendChild(wrap);
+
+    state = { wrap, cb, handler: null, last: true };
+    (window as any).__dpObjectsToggle = state;
+  }
+
+  if (state.handler) state.cb.removeEventListener('change', state.handler);
+
+  const desired = (typeof initial === 'boolean') ? initial : (state.last ?? true);
+  state.cb.checked = desired;
+
+  state.handler = async () => {
+    state!.last = state!.cb.checked;
+    await onChange(state!.cb.checked);
+  };
+
+  state.cb.addEventListener('change', state.handler);
+}
+
 function ensureDPDevObjectsUI(
   onChange: (enabled: boolean) => void | Promise<void>,
   initial?: boolean
@@ -1273,7 +1405,7 @@ function ensureDPDevObjectsUI(
   if (!state) {
     const wrap = document.createElement('div');
     wrap.style.position = 'fixed';
-    wrap.style.top = '24px'; // below texture toggle
+    wrap.style.top = '24px';// below texture toggle
     wrap.style.right = '2px';
     wrap.style.zIndex = '10000';
     wrap.style.padding = '2px 4px';
@@ -2446,17 +2578,22 @@ await mapRenderer.create(mapSceneInfo, gInfo, context.dataFetcher, blockFetcher,
     dpMapScene: true,
     
 });
-ensureTextureToggleUI(async (enabled: boolean) => {
-    texFetcher.setTexturesEnabled(enabled);
-    (materialFactory as any).texturesEnabled = enabled;
-    await mapRenderer.reloadForTextureToggle();
-}, texFetcher.getTexturesEnabled?.() ?? true);
+//ensureTextureToggleUI(async (enabled: boolean) => {
+    //texFetcher.setTexturesEnabled(enabled);
+    //(materialFactory as any).texturesEnabled = enabled;
+  //  await mapRenderer.reloadForTextureToggle();
+//}, texFetcher.getTexturesEnabled?.() ?? true);
 // Default OFF
 mapRenderer.showDevObjects = false;
 
 ensureDPDevObjectsUI(async (enabled: boolean) => {
     mapRenderer.showDevObjects = enabled;
 }, false);
+// DP master object toggle (default ON)
+mapRenderer.showAllObjects = true;
+ensureDPObjectsUI(async (enabled: boolean) => {
+    mapRenderer.showAllObjects = enabled;
+}, true);
         setTimeout(async () => {
             const mr = mapRenderer as any;
             if (mr.envSelect) {
