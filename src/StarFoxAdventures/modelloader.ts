@@ -1731,22 +1731,22 @@ model.createModelShapes = () => {
     shapes.shapes[2] = [];
 
     // STRICT DP water modes (same ones you were using, but now gated properly)
-    const DP_WATER_DRAW_MODES = new Set<number>([0x00, 0x05, 0x14, 0x15, 0x18, 0x19]);
+    const DP_WATER_DRAW_MODES = new Set<number>([0x00, 0x05, 0x14, 0x15, 0x18, 0x19,]);
 // Scroll only these DP textures (keeps beams/vines from scrolling).
 // Put your known water + waterfall texIds here.
 const DP_SCROLL_WATER_TEXIDS = new Set<number>([
-  3561,3569, 3570,2715, 2514,   3553,3563,   2248,1912,3604,2292, 1682
+  3561,3569, 3570,2715, 2514, 862,    3553,3563,   2248,1912,3604,2292, 1682
 ]);
 
 const DP_SCROLL_WATERFALL_TEXIDS = new Set<number>([
- 358,123 ,253,254,368,368,1127, 3560,     3563,3562,1941,2750,2048,270, 
+ 358,123 ,253,254,368,368,1127, 3560,510,    3563,3562,1941,2750,2048,270, 
 ]);
 
 // Optional: log once per texture that *would* have scrolled under the old heuristic
 const __dpScrollCandidateLogged = new Set<number>();
   for (const b of batches) {
             const isSoftFormat = (b.pixelFormat !== 1 && b.pixelFormat !== 7 && b.pixelFormat !== 8);
-            const isKnownCutoutTex = [119,164,349,351,355,544,356,2087,1101,1028,1122,1125,1050,1049,1051,1066,1075,1423].includes(b.materialId);
+            const isKnownCutoutTex = [3,6,31,61,119,164,289,349,351,354,355,544,356,2087,3195,1101,1028,1122,1125,1050,1049,1051,1066,1075,1423,1896,1897,1888,1889].includes(b.materialId);
 
             // Cutouts first (never water)
             const wantsCutout = !b.isOpaque && (isKnownCutoutTex || (b.drawMode & 0x80) !== 0);

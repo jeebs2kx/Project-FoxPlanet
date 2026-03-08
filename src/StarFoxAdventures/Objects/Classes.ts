@@ -205,7 +205,7 @@ export const SFA_CLASSES: {[num: number]: typeof SFAClass} = {
 
             const block = world.mapInstance.getBlockAtPosition(obj.posInMap[0], obj.posInMap[2]);
             if (block === null) {
-                console.warn(`Couldn't find block for texscroll object`);
+               // console.warn(`Couldn't find block for texscroll object`);
             } else {
                 const scrollableIndex = obj.objParams.getInt16(0x18);
                 const speedX = obj.objParams.getInt8(0x1e);

@@ -283,56 +283,7 @@ interface MapInstanceOptions {
     globalOffsetZ?: number;
     dpMapScene?: boolean; // true only from DPMapSceneDesc
 }
-function translateModelId(modelInd: DataView, rawId: number): number {
-    let index = rawId | 0; if (index < 0) index = -index;
-    if (modelInd && index * 2 + 2 <= modelInd.byteLength) {
-        const realId = modelInd.getUint16(index * 2);
-        return realId !== 0xFFFF ? realId : index;
-    }
-    return index;
-}
-function dpFindVariantIndex(objParams: DataView, models: number[]): number | null {
-    const n = models.length;
-    if (n <= 1) return null;
 
-
-
-    // B) Direct embedded model ID (MOST reliable) -- IGNORE < 0x0100 to avoid Krystal/flags/etc
-    for (let o = 0; o + 2 <= objParams.byteLength; o += 2) {
-        const v = objParams.getUint16(o);
-        if (v >= 0x0100) {
-            const idx = models.indexOf(v);
-            if (idx >= 0) return idx;
-        }
-    }
-    for (let o = 0; o + 4 <= objParams.byteLength; o += 4) {
-        const v = objParams.getUint32(o);
-        if (v >= 0x0100) {
-            const idx = models.indexOf(v);
-            if (idx >= 0) return idx;
-        }
-    }
-
-    // C) 0x7F00/0x7F01/... => low byte is variant index
-    for (let o = 0; o + 2 <= objParams.byteLength; o += 2) {
-        const v = objParams.getUint16(o);
-        if ((v & 0xFF00) === 0x7F00) {
-            const idx = (v & 0x00FF);
-            if (idx >= 0 && idx < n) return idx;
-        }
-    }
-
-    // D) 0x0100 / 0x0200 ... => high byte is variant index
-    for (let o = 0; o + 2 <= objParams.byteLength; o += 2) {
-        const v = objParams.getUint16(o);
-        if ((v & 0x00FF) === 0x0000) {
-            const idx = (v >>> 8);
-            if (idx > 0 && idx < n) return idx;
-        }
-    }
-
-    return null;
-}
 function buildRomToScnMap(objIdx: DataView): Map<number, number[]> {
     const romToScn = new Map<number, number[]>();
 
@@ -369,24 +320,72 @@ function dpExtractModelNums(objBin: DataView, startOffs: number, defSize: number
 
     const out: number[] = [];
 
-    // read u32 values after the FF run (these are usually model IDs, but sometimes include tiny junk like 0x0002)
+    // read u32 values after the FF run (these are usually model IDs)
     for (let o = ffEnd; o + 4 <= defSize; o += 4) {
         const v = objBin.getUint32(startOffs + o);
 
-        if (v === 0 || v === 0xFFFFFFFF) break;
+        if (v === 0 || v === 0xFFFFFFFF) continue; // Keep scanning instead of breaking!
         if (v >= 0x4000) break; // stop before pointers/garbage
 
         out.push(v | 0);
-        if (out.length >= 16) break;
+        if (out.length >= 32) break; // Increased from 16 to 32 to catch all variants
     }
 
- // de-dupe, preserving order
-const uniq: number[] = [];
-for (const v of out) if (!uniq.includes(v)) uniq.push(v);
+    // de-dupe, preserving order
+    const uniq: number[] = [];
+    for (const v of out) if (!uniq.includes(v)) uniq.push(v);
 
-return uniq;
+    return uniq;
 
 }
+const DP_WHITE_MUSHROOM_MODEL_ID = 0x00B3;
+type DPPositionVariantOverride = {
+    x: number;
+    y: number;
+    z: number;
+    eps?: number;
+    modelId: number;
+};
+
+const DP_POSITION_VARIANT_OVERRIDES: DPPositionVariantOverride[] = [
+    // CBeacon exact model IDs from your OBJECTS.bin dump
+    { x: -8850.365, y: -793.250, z: -6652.035, modelId: 0x03B1 }, // sun
+    { x: -7150.133, y: -793.250, z: -8068.040, modelId: 0x03B2 }, // moon
+
+    // White mushrooms only
+    { x: -7321.163, y:  -718.000, z: -3094.313, modelId: DP_WHITE_MUSHROOM_MODEL_ID },
+    { x: -6529.629, y:  -809.000, z: -2214.204, modelId: DP_WHITE_MUSHROOM_MODEL_ID },
+    { x: -6787.717, y:  -707.172, z: -2438.862, modelId: DP_WHITE_MUSHROOM_MODEL_ID },
+    { x: -7501.500, y:  -740.788, z: -2434.564, modelId: DP_WHITE_MUSHROOM_MODEL_ID },
+    { x: -7456.400, y:  -741.999, z: -2442.471, modelId: DP_WHITE_MUSHROOM_MODEL_ID },
+    { x: -7453.182, y:  -753.676, z: -2518.711, modelId: DP_WHITE_MUSHROOM_MODEL_ID },
+    { x: -7534.696, y:  -749.640, z: -2492.357, modelId: DP_WHITE_MUSHROOM_MODEL_ID },
+    { x: -8127.444, y: -1088.787, z: -2391.379, modelId: DP_WHITE_MUSHROOM_MODEL_ID },
+    { x: -7887.835, y: -1078.943, z: -1482.126, modelId: DP_WHITE_MUSHROOM_MODEL_ID },
+    { x: -7956.994, y: -1075.692, z: -1652.777, modelId: DP_WHITE_MUSHROOM_MODEL_ID },
+];
+
+function dpPosNear(a: number, b: number, eps: number = 2.0): boolean {
+    return Math.abs(a - b) <= eps;
+}
+
+function dpFindPositionVariantOverrideXYZ(x: number, y: number, z: number): DPPositionVariantOverride | null {
+    for (const o of DP_POSITION_VARIANT_OVERRIDES) {
+        const eps = o.eps ?? 2.0;
+        if (
+            dpPosNear(x, o.x, eps) &&
+            dpPosNear(y, o.y, eps) &&
+            dpPosNear(z, o.z, eps)
+        ) {
+            return o;
+        }
+    }
+
+    return null;
+}
+
+
+
 function dpExtractModelNumsByPtrCount(objBin: DataView, startOffs: number, defSize: number): number[] {
     // DP format:
     //  - model list pointer at +0x08 (u32)
@@ -469,6 +468,11 @@ const DEV_TYPE_IDS = new Set<number>([
      0x0263, 0x0265, 0x027E, 0x02C3, 0x02E3, 0x02F0, 0x032F, 0x0331, 0x0349, 0x0354, 0x035E,
      0x0377, 0x0384, 0x0386, 0x039E, 0x03B6, 0x03F0, 0x0432, 0x0437, 0x047A, 0x04A8,
      0x04BD, 0x04C0, 0x04C6, 0x04E7, 0x054F, 0x0572,  0x058D, 0x059A, 0x054E, 0x55D, 0x01F3,
+     0x0264, 0x0174, 0x017A, 0x0177, 0x0142,0x0435,0x0436, 0x04D2, 0x04E9, 0x0044, 0x046D, 0x0471,
+     0x0368, 0x02C3, 0x03E9, 0x0540,0x055A,0x055C, 0x045B,0x280, 0x00A3, 0x179,0x577, 0x578, 0x518,
+     0x336, 0x517, 0x048D, 0x0499, 0x01C7, 0x1CD,0x1CDF,0x1D8, 0x1D9, 0x05AC,0x36B,0x01CE,0x030,
+     0x03EE, 0x036F, 0x0402, 0x38B, 0x04D6,0x02E,0x079, 0x07A,0x07F,0x061,0x062,0x032,0x026C,
+     0x03C,0x000C,0x0258,0x0296,0x0A6,0x029,0x2AD,0x084, 
 ]);
 
 const DEV_MODEL_IDS = new Set<number>([
@@ -586,27 +590,13 @@ if (origCreate) {
         const ot = (this as any).getObjectType(typeNum, false);
         const models: number[] = (ot as any).modelNums ?? [];
 
-        // Nothing to pick from.
-        if (models.length <= 1)
-            return origCreate(typeNum, objParams, pos, mountNow);
 
-const pick = dpFindVariantIndex(objParams, models);
-if (pick !== null && pick > 0 && pick < models.length) {
-    const tmp = models[0];
-    models[0] = models[pick];
-    models[pick] = tmp;
-    try {
-        return origCreate(typeNum, objParams, pos, mountNow);
-    } finally {
-        models[pick] = models[0];
-        models[0] = tmp;
-    }
-}
+const rId = ((ot as any)._dpRomId ?? -1) & 0xFFFF;
 
-        // 2) Fallback: SCN_ID position among duplicates for same ROM_ID (sun/moon pads etc).
+        // 2) Fallback: SCN_ID position (Duplicates)
         const romId: number | undefined = (ot as any)._dpRomId;
         const romToScn: Map<number, number[]> | undefined = (this as any)._dpRomToScn;
-        if (romId !== undefined && romToScn) {
+        if (romId !== undefined && romToScn && models.length > 1) {
             const scnList = romToScn.get(romId);
             if (scnList) {
                 const idx = scnList.indexOf(typeNum);
@@ -616,6 +606,7 @@ if (pick !== null && pick > 0 && pick < models.length) {
                     models[idx] = tmp;
                     try {
                         return origCreate(typeNum, objParams, pos, mountNow);
+                    } catch(e) {
                     } finally {
                         models[idx] = models[0];
                         models[0] = tmp;
@@ -624,28 +615,23 @@ if (pick !== null && pick > 0 && pick < models.length) {
             }
         }
 
-try {
-    return origCreate(typeNum, objParams, pos, mountNow);
-} catch (e) {
-    const msg = String((e as any)?.message ?? e);
-    if (e instanceof RangeError || msg.includes('outside the bounds')) {
-        console.warn(`[DP obj] create failed type=0x${typeNum.toString(16)} size=0x${objParams.byteLength.toString(16)} -> stub`, e);
-
-        const mf = (this as any).world?.resColl?.modelFetcher;
-        const modelId = (models[0] ?? 0) | 0;
-        const modelInst = mf?.createModelInstance ? mf.createModelInstance(modelId) : undefined;
-
-        return {
-            objType: ot,
-            modelInst,
-            position: vec3.create(),
-            yaw: 0,
-            mount() {},
-            destroy() {},
-        } as any;
-    }
-    throw e;
-}    };
+        // 3) Standard Run
+        try {
+            return origCreate(typeNum, objParams, pos, mountNow);
+        } catch (e) {
+            const mf = (this as any).world?.resColl?.modelFetcher;
+            const modelId = (models[0] ?? 0) | 0;
+            const modelInst = mf?.createModelInstance ? mf.createModelInstance(modelId) : undefined;
+            return {
+                objType: ot,
+                modelInst,
+                position: vec3.create(),
+                yaw: 0,
+                mount() {},
+                destroy() {},
+            } as any;
+        }    
+    };
 }
 
 }
@@ -762,27 +748,49 @@ export class MapInstance {
                     const size = objData.getUint8(offset + 2) * 4;
                     if (size === 0) break;
 
-                    const objParams = dataSubarray(objData, offset, size);
+const objParams = dataSubarray(objData, offset, size);
                     try {
-                        const objInst = this.mapOpts.objectManager.createObjectInstance(objParams.getUint16(0), objParams, [0, 0, 0], false);
-                        
                         const typeNum = objParams.getUint16(0);
+                        const objInst = this.mapOpts.objectManager.createObjectInstance(typeNum, objParams, [0, 0, 0], false);
+                        
                         (objInst as any)._dpTypeNum = typeNum;
-                        const trueX = objParams.getFloat32(0x08);
-                        const trueY = objParams.getFloat32(0x0C);
-                        const trueZ = objParams.getFloat32(0x10);
+                        
+                        // FIX: Ensure parameters exist before reading X, Y, Z so short objects don't crash
+                        const trueX = objParams.byteLength >= 0x0C ? objParams.getFloat32(0x08) : 0;
+                        const trueY = objParams.byteLength >= 0x10 ? objParams.getFloat32(0x0C) : 0;
+                        const trueZ = objParams.byteLength >= 0x14 ? objParams.getFloat32(0x10) : 0;
+const otDbg = this.mapOpts.objectManager.getObjectType(typeNum, false);
+const rIdDbg = ((otDbg as any)._dpRomId ?? -1) & 0xFFFF;
+const nameDbg = String((otDbg as any).name ?? (otDbg as any).objName ?? '');
+const modelDbg = ((otDbg as any).modelNums ?? []).map((n: number) => `0x${n.toString(16)}`).join(', ');
+const dbgCount = ((window as any).__dpDbgCount ?? 0);
 
+if (dbgCount < 300) {
+    (window as any).__dpDbgCount = dbgCount + 1;
+
+    const u16_00 = objParams.byteLength >= 0x02 ? objParams.getUint16(0x00) : 0;
+    const u16_02 = objParams.byteLength >= 0x04 ? objParams.getUint16(0x02) : 0;
+    const u16_04 = objParams.byteLength >= 0x06 ? objParams.getUint16(0x04) : 0;
+    const u16_06 = objParams.byteLength >= 0x08 ? objParams.getUint16(0x06) : 0;
+    const u16_18 = objParams.byteLength >= 0x1A ? objParams.getUint16(0x18) : 0;
+    const u16_1A = objParams.byteLength >= 0x1C ? objParams.getUint16(0x1A) : 0;
+
+    console.warn(
+        `[DP OBJ] off=0x${offset.toString(16)} scn=0x${typeNum.toString(16)} rom=0x${rIdDbg.toString(16)} name=${nameDbg} raw=(${trueX.toFixed(3)}, ${trueY.toFixed(3)}, ${trueZ.toFixed(3)}) world=(${(trueX + ox * 640).toFixed(3)}, ${trueY.toFixed(3)}, ${(trueZ + oz * 640).toFixed(3)}) u00=0x${u16_00.toString(16)} u02=0x${u16_02.toString(16)} u04=0x${u16_04.toString(16)} u06=0x${u16_06.toString(16)} u18=0x${u16_18.toString(16)} u1A=0x${u16_1A.toString(16)} models=[${modelDbg}]`
+    );
+}
                         // position (keep your working origin fix)
                         objInst.position[0] = trueX + (ox * 640) - globalOffsetX;
                         objInst.position[1] = trueY;
                         objInst.position[2] = trueZ + (oz * 640) - globalOffsetZ;
+// position-based DP variant override MUST happen here,
+// after origin/global offsets have been applied.
+{
 
+}
                         // --- DP ROTATION FIX ---
-                        // Standard objects use +0x06. Extended objects store custom param layouts.
-// --- DP ROTATION FIX ---
-                        // Standard objects use +0x06. Extended objects store custom param layouts.
-                        // This often overrides the default yaw at 0x06 to store Scale instead.
-                        let yawU = objParams.getUint16(0x06);
+                        // FIX: Ensure parameter exists before reading yaw
+                        let yawU = objParams.byteLength >= 0x08 ? objParams.getUint16(0x06) : 0;
 
                         if (objParams.byteLength >= 0x1A) {
                             const flags = objParams.getUint16(0x04);
@@ -790,58 +798,21 @@ export class MapInstance {
                             const altYaw1A = objParams.byteLength >= 0x1C ? objParams.getUint16(0x1A) : 0;
                             const altYaw1C = objParams.byteLength >= 0x1E ? objParams.getUint16(0x1C) : 0;
                             const altYaw28 = objParams.byteLength >= 0x14 ? objParams.getUint16(0x12) : 0;
+                            const altYaw10 = objParams.byteLength >= 0x14 ? objParams.getUint16(0x10) : 0;
 
                             // Explicit list of object types known to store Yaw at 0x28 (Enemies)
-                            const TYPES_YAW_28 = new Set([
-                             
-                                0x0251,
-                                0x0281,
-                                0x007E,
-                                0x04D9,
-                                0x0011, // ClubSharpClaw
-                            ]);
-
-                            // Explicit list of object types known to store Yaw at 0x1C
-                            const TYPES_YAW_1C = new Set([
-                               
-                                0x01D3, // ProjectileSwitc
-                            ]);
-
-                            // Explicit list of object types known to store Yaw at 0x1A (Often Characters/NPCs)
-                            const TYPES_YAW_1A = new Set([
-                             
-                                0x01CC, // SHswapstone
-                                0x0439, // CChightop
-                            ]);
-
-                            // Explicit list of object types known to store Yaw at 0x18 (Often Scenery/Props)
+                            const TYPES_YAW_28 = new Set([0x0251, 0x03AF,0x0281, 0x007E, 0x04D9, 0x0011,0x0292, 0x0527,0x050C]);
+                            const TYPES_YAW_10 = new Set([0x0409,]);
+                            const TYPES_YAW_1C = new Set([0x01D3,0x0089, 0x057E,]);
+                            const TYPES_YAW_1A = new Set([0x01CC, 0x0439,0x00D0,0x050D,0x0520,0x051F,]);
                             const TYPES_YAW_18 = new Set([
-                          
-                                0x04F9,
-                                0x0501,
-                                0x04De,
-                                0x042e,
-                                0x0450, // DR_tube
-                                0x0497, // DFP_Statue1
-                                0x0178, // WL_WallTorch
-                                0x04F8, // DR_LightLampYel
-                                0x0513, // DR_LightLamp
-                                0x046D, // DR_ExplodeDoor
-                                0x0472, // DR_Cage
-                                0x0489, 0x048A, // DR_HighDoor
-                                0x046B, // DR_Vines
-                                0x04B0, // DRProjectileSwi
-                                0x0181, // DIM2FlameBurst
-                                0x0349, // DBlgtbeam
-                                0x0485, // DR_Bell
-                                0x0426, // DR_IonCannon
-                                0x0160, // WallAnimator
-                                0x04A8, // TexFrameAnimator
-                                0x04E9, // DRSmallExplodeW
-                                0x0435, // DRBlastedWall
-                                0x0436, // DRExplodeWall
-                                0x0486, // DR_Rock
-                                0x0475, // DR_PressurePad
+                                0x04F9, 0x0501, 0x04De, 0x042e, 0x0450, 0x0497, 0x0178, 
+                                0x04F8, 0x0513, 0x046D, 0x0472, 0x0489, 0x048A, 0x046B, 
+                                0x04B0, 0x0181, 0x0349, 0x0485, 0x0426, 0x0160, 0x04A8, 
+                                0x04E9, 0x0435, 0x0436, 0x0486, 0x0475, 0x0490, 0x042D,0x04E6,
+                                0x04E0, 0x04BF, 0x04B5, 0x0144, 0x0275,0x015D, 0x037A, 0x00E6,
+                                0x00B7, 0x0575, 0x00CE, 0x0051, 0x00A5, 0x0529, 0x0528, 0x050E,
+                                0x0515, 0x0131, 0x048C, 0x0487,
                             ]);
 
                             if (TYPES_YAW_28.has(typeNum)) {
@@ -852,18 +823,15 @@ export class MapInstance {
                                 yawU = altYaw1A;
                             } else if (TYPES_YAW_18.has(typeNum)) {
                                 yawU = altYaw18;
+                            } else if (TYPES_YAW_10.has(typeNum)) {
+                                yawU = altYaw10;
                             } else {
-                                // HEURISTIC CATCH-ALL:
-                                // Detect if the map editor hijacked 0x06 to store paired bytes like Scale.
-                                // e.g., 0x6432 (100, 50), 0x5A50 (90, 80), or matching bytes like 0x3F3F (63, 63)
                                 const hi = yawU >> 8;
                                 const lo = yawU & 0xFF;
-                                
                                 const isDummyYaw = (hi === lo && hi !== 0) || 
                                                    (hi === 0x64 || hi === 0x5A || hi === 0x2A) ||
                                                    (yawU === 0x06CD || yawU === 0x0632);
-                                
-                                // If we detect dummy scale data, safely assume true Yaw is pushed to 0x18
+                                                   
                                 if (isDummyYaw || ((flags & 0x1000) !== 0 && altYaw18 !== 0 && altYaw18 !== 0xFFFF && yawU < 0x1000)) {
                                     yawU = altYaw18;
                                 }
@@ -871,21 +839,111 @@ export class MapInstance {
                         }
 
                         objInst.yaw = (yawU === 0xFFFF) ? 0 : (yawU / 0x10000) * (Math.PI * 2);
+                        
                         // --- DP SCALE FIX ---
-                        // Pull the scale from OBJECTS.bin-derived object type and store it on the instance for rendering.
                         const ot = this.mapOpts.objectManager.getObjectType(typeNum, false);
-
-                        // base scale from OBJECTS.bin + optional per-object multiplier
                         const baseS = (ot as any).scale ?? 1.0;
                         const mult  = dpGetScaleMultiplier(typeNum, ot);
                         const s     = dpClampScale(baseS * mult);
 
-                        (objInst as any)._dpScale = s;
+(objInst as any)._dpScale = s;
 
-                        objInst.mount();
-                        this.objects.push(objInst);
+objInst.mount();
+{function dpNear(a: number, b: number, eps: number = 2.0): boolean {
+    return Math.abs(a - b) <= eps;
+}
+  {
+    const mf = (this.mapOpts.objectManager as any).world?.resColl?.modelFetcher;
+    const romId = ((ot as any)._dpRomId ?? -1) & 0xFFFF;
+
+if (mf?.createModelInstance) {
+    // Mushrooms: default BLUE
+    if (romId === 0x0238) {
+        const u1A = objParams.byteLength >= 0x1C ? objParams.getUint16(0x1A) : 0;
+
+        const WHITE_SHROOM_U1A = new Set<number>([
+            0x0464, 0x0462, 0x0463, 0x0460, 0x0013, 0x0461, 0x00F5, 0x015C, 0x0177, 0x00F4,
+        ]);
+
+        const modelId = WHITE_SHROOM_U1A.has(u1A) ? 0x00B3 : 0x00B2;
+        (objInst as any).modelInst = mf.createModelInstance(modelId);
+    }
+
+    if (romId === 0x0109) {
+        const u18 = objParams.byteLength >= 0x1A ? objParams.getUint16(0x18) : 0;
+        const modelId = (u18 === 0x7F01) ? 0x03B6 : 0x03B5;
+        (objInst as any).modelInst = mf.createModelInstance(modelId);
+    }
+
+    if (romId === 0x0111) {
+        const u1A = objParams.byteLength >= 0x1C ? objParams.getUint16(0x1A) : 0;
+        const modelId = (u1A === 0x0500) ? 0x03BC : 0x03BB;
+        (objInst as any).modelInst = mf.createModelInstance(modelId);
+    }
+
+    if (romId === 0x0108) {
+        const u18 = objParams.byteLength >= 0x1A ? objParams.getUint16(0x18) : 0;
+        const modelId = (u18 === 0x0000) ? 0x03B1 : 0x03B2;
+        (objInst as any).modelInst = mf.createModelInstance(modelId);
+    }
+
+if (romId === 0x0118) { // WCPushBlock
+    const u06 = objParams.byteLength >= 0x08 ? objParams.getUint16(0x06) : 0;
+    const modelId = (u06 === 0x0364) ? 0x03B7 : 0x03B8;
+    (objInst as any).modelInst = mf.createModelInstance(modelId);
+
+    }
+    if (romId === 0x011F) { // WCTempleDial
+    const u06 = objParams.byteLength >= 0x08 ? objParams.getUint16(0x06) : 0;
+    const modelId = (u06 === 0x0896) ? 0x03C6 : 0x03C7;
+
+    (objInst as any).modelInst = mf.createModelInstance(modelId);
+}
+if (romId === 0x0119) { // WCTile
+    const u06 = objParams.byteLength >= 0x08 ? objParams.getUint16(0x06) : 0;
+    const modelId = (u06 === 0x0364) ? 0x03BA : 0x03B9;
+    (objInst as any).modelInst = mf.createModelInstance(modelId);
+
+}
+if (romId === 0x0106) { // WCPressureSwitc
+    const u1C = objParams.byteLength >= 0x1E ? objParams.getUint16(0x1C) : 0;
+    const modelId = (u1C === 0x01) ? 0x03B4 : 0x03B3;
+    (objInst as any).modelInst = mf.createModelInstance(modelId);
+
+    console.warn(
+        `[WCPRESSURESWITC] u1C=0x${u1C.toString(16)} -> model 0x${modelId.toString(16)}`
+    );
+}
+}
+
+
+        
+    }
+}
+// force variant AFTER mount(), because mount() recreates the default model
+{
+    const posOverride = dpFindPositionVariantOverrideXYZ(
+        objInst.position[0],
+        objInst.position[1],
+        objInst.position[2],
+    );
+
+    if (posOverride) {
+        const mf = (this.mapOpts.objectManager as any).world?.resColl?.modelFetcher;
+        if (mf?.createModelInstance) {
+            (objInst as any).modelInst = mf.createModelInstance(posOverride.modelId);
+            console.log(
+                `[DP OVERRIDE] ${objInst.position[0].toFixed(3)}, ${objInst.position[1].toFixed(3)}, ${objInst.position[2].toFixed(3)} -> model 0x${posOverride.modelId.toString(16)}`
+            );
+        }
+    }
+}
+
+this.objects.push(objInst);
                         
-                    } catch (e) { }
+                    } catch (e) {
+                        console.error(`Failed to place DP object at offset ${offset}:`, e);
+                    }
                     offset += size;
                 }
             }
@@ -1517,6 +1575,7 @@ if (musicState.audio) {
 
         const animController = new SFAAnimationController();
         const materialFactory = new MaterialFactory(device);
+        (window as any).__dpDbgCount = 0;
         const mapSceneInfo = await loadMap(this.gameInfo, context.dataFetcher, this.mapNum);
 
         const mapRenderer = new MapSceneRenderer(context, animController, materialFactory);
@@ -2490,7 +2549,7 @@ export class DPMapSceneDesc implements Viewer.SceneDesc {
         const dpModelFetcher = new PreloadingDPModelFetcher(gInfo, context.dataFetcher, texFetcher, materialFactory);
         await dpModelFetcher.init();
 
-        const fakeWorld: any = {
+const fakeWorld: any = {
             renderCache: (materialFactory as any).cache ?? (materialFactory as any).getCache?.(),
             gameInfo: gInfo,
             worldLights: mapRenderer.worldLights,
@@ -2502,7 +2561,14 @@ export class DPMapSceneDesc implements Viewer.SceneDesc {
                 modanimCollection: { getModanim: () => null } as any,
             },
             animController: { animController: animController, enableFineSkinAnims: false },
-            objectMan: null 
+            objectMan: null,
+            
+            // FIX: This must be named 'mapInstance', not 'map'!
+            mapInstance: {
+                getBlockAtPosition: () => null,
+                getWaterElevation: () => 0,
+                getTerrainElevation: () => 0
+            }
         };
 
         const objectManager = await ObjectManager.create(fakeWorld as World, context.dataFetcher, false);
@@ -2519,9 +2585,24 @@ export class DPMapSceneDesc implements Viewer.SceneDesc {
         applyDPObjectManagerPatch(objectManager, objTab, objBin, objIdx, modelInd);
 
         // 2. PRELOAD MODELS
+// 2. PRELOAD MODELS (FORCED FOR MUSHROOMS)
         const objData = mapSceneInfo.getObjectsData?.();
         if (objData) {
             const requiredModels = new Set<number>();
+            
+            // --- SURGICAL PRELOAD ---
+requiredModels.add(335);
+requiredModels.add(336);
+requiredModels.add(0x03B1);
+requiredModels.add(0x03B2);
+requiredModels.add(0x03F3);
+requiredModels.add(0x00B2);
+requiredModels.add(0x00B3);
+requiredModels.add(0x03FC);
+requiredModels.add(0x03E4);
+requiredModels.add(0x03FE);
+requiredModels.add(0x03EB);
+            
             let offset = 0;
             while (offset < objData.byteLength) {
                 const size = objData.getUint8(offset + 2) * 4;
