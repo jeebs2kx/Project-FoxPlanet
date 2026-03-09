@@ -31,7 +31,6 @@ import { computeViewMatrix } from '../Camera.js';
 import { nArray } from '../util.js';
 import { transformVec3Mat4w0, transformVec3Mat4w1 } from '../MathHelpers.js';
 import { GfxRenderCache } from '../gfx/render/GfxRenderCache.js';
-// Ensure global music state exists
 if (!(window as any).musicState) {
     (window as any).musicState = {
         muted: false,
@@ -365,7 +364,7 @@ class WorldRenderer extends SFARenderer {
         layerPanel.contents.append(disableLights.elem);
         
         const renderHacksPanel = new UI.Panel();
-        renderHacksPanel.customHeaderBackgroundColor = UI.COOL_BLUE_COLOR;
+renderHacksPanel.customHeaderBackgroundColor = UI.COOL_BLUE_COLOR();
         renderHacksPanel.setTitle(UI.RENDER_HACKS_ICON, 'Render Hacks');
 
         const showDebugThumbnails = new UI.Checkbox('Show Debug Thumbnails', false);
@@ -413,8 +412,6 @@ class WorldRenderer extends SFARenderer {
         for (let i = 0; i < this.world.objectInstances.length; i++) {
             const obj = this.world.objectInstances[i];
 
-            // FIXME: Is it really true that objects are updated regardless of layer?
-            // This is required for TrigPlns to work.
             obj.update(updateCtx);
         }
     }
@@ -518,21 +515,42 @@ export class SFAWorldSceneDesc implements Viewer.SceneDesc {
             this.subdirs = [subdir_];
     }
 
-    public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+   public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
         console.log(`Creating scene for world ${this.name} (ID ${this.id}) ...`);
 
         const pathBase = this.gameInfo.pathBase;
         const dataFetcher = context.dataFetcher;
         const materialFactory = new MaterialFactory(device);
-        const world = await World.create(context, this.gameInfo, dataFetcher, this.subdirs, materialFactory);
+
+        const finalSubdirs = [...this.subdirs];
+        const checkAndAdd = (subdir: string) => {
+            if (!finalSubdirs.includes(subdir)) finalSubdirs.push(subdir);
+        };
+
+        for (const subdir of this.subdirs) {
+            if (subdir === 'clouddungeon') {
+                checkAndAdd('crfort');
+            } else if (subdir === 'desert') {
+                checkAndAdd('dfptop');
+                checkAndAdd('volcano');
+            } else if (subdir === 'linkb' || subdir === 'linkf') {
+                checkAndAdd('volcano');
+            } else if (subdir === 'shipbattle') {
+                checkAndAdd('swaphol');
+            } else if (subdir === 'swapholbot' || subdir === 'shop') {
+                checkAndAdd('swaphol');
+            }
+        }
+
+        const world = await World.create(context, this.gameInfo, dataFetcher, finalSubdirs, materialFactory);
 
         let mapInstance: MapInstance | null = null;
         if (this.mapNum !== null) {
             const mapSceneInfo = await loadMap(this.gameInfo, dataFetcher, this.mapNum);
-            mapInstance = new MapInstance(mapSceneInfo, world.blockFetcher, world);
+            
+            // FIX: Argument order (mapSceneInfo, blockFetcher, options, world)
+            mapInstance = new MapInstance(mapSceneInfo, world.blockFetcher, undefined, world);
             await mapInstance.reloadBlocks(dataFetcher);
-
-            // Translate map for SFA world coordinates
             const objectOrigin = vec3.fromValues(640 * mapSceneInfo.getOrigin()[0], 0, 640 * mapSceneInfo.getOrigin()[1]);
             const mapMatrix = mat4.create();
             const mapTrans = vec3.clone(objectOrigin);
@@ -540,11 +558,11 @@ export class SFAWorldSceneDesc implements Viewer.SceneDesc {
             mat4.fromTranslation(mapMatrix, mapTrans);
             mapInstance.setMatrix(mapMatrix);
 
-world.setMapInstance(mapInstance);
-world.mapNum = this.mapNum;
-(world as any).handleMusic();
-
-
+            world.setMapInstance(mapInstance);
+            world.mapNum = this.mapNum;
+            
+            // Fix: Triggers music and internal state logic
+            (world as any).handleMusic();
         }
 
         const romlistNames: string[] = Array.isArray(this.id_) ? this.id_ : [this.id_];
@@ -559,7 +577,6 @@ world.mapNum = this.mapNum;
     
             world.spawnObjectsFromRomlist(romlist, parentObj);
 
-            // XXX: In the Ship Battle scene, attach galleonship objects to the ship.
             if (name === 'frontend') {
                 parentObj = world.objectInstances[2];
                 console.log(`parentObj is ${parentObj.objType.name}`);
@@ -568,17 +585,14 @@ world.mapNum = this.mapNum;
         
         (window.main as any).lookupObject = (objType: number, skipObjindex: boolean = false) => {
             const obj = world.objectMan.getObjectType(objType, skipObjindex);
-            console.log(`Object ${objType}: ${obj.name} (type ${obj.typeNum} class ${obj.objClass})`);
+         //   console.log(`Object ${objType}: ${obj.name} (type ${obj.typeNum} class ${obj.objClass})`);
         };
-     
 
-// Console helper: list/load ALL textures from tables into the UI panel
-(window.main as any).showAllTextures = (useTex1: boolean = false) => {
-    // Cast so we can call the helper we added on SFATextureFetcher
-    const texFetcher = world.resColl.texFetcher as SFATextureFetcher;
-    const { attempted, shown } = texFetcher.loadAllFromTables(materialFactory.cache, useTex1);
-    console.log(`[ShowAllTextures] Bank=${useTex1 ? 'TEX1' : 'TEX0/TEXPRE'} attempted=${attempted} registered=${shown}`);
-};
+        (window.main as any).showAllTextures = (useTex1: boolean = false) => {
+            const texFetcher = world.resColl.texFetcher as SFATextureFetcher;
+            const { attempted, shown } = texFetcher.loadAllFromTables(materialFactory.cache, useTex1);
+          //  console.log(`[ShowAllTextures] Bank=${useTex1 ? 'TEX1' : 'TEX0/TEXPRE'} attempted=${attempted} registered=${shown}`);
+        };
 
         const renderer = new WorldRenderer(world, materialFactory);
         return renderer;
@@ -600,18 +614,43 @@ export class SFAMapSceneDesc implements Viewer.SceneDesc {
             this.subdirs = [subdir_];
     }
 
-    public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+   public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
         console.log(`Creating scene for world ${this.name} (ID ${this.id}) ...`);
 
         const pathBase = this.gameInfo.pathBase;
         const dataFetcher = context.dataFetcher;
         const materialFactory = new MaterialFactory(device);
-        const world = await World.create(context, this.gameInfo, dataFetcher, this.subdirs, materialFactory);
+
+        // --- NEW: Kiosk/Demo Texture Dependency Logic ---
+        const finalSubdirs = [...this.subdirs];
+        const checkAndAdd = (subdir: string) => {
+            if (!finalSubdirs.includes(subdir)) finalSubdirs.push(subdir);
+        };
+
+        for (const subdir of this.subdirs) {
+            if (subdir === 'clouddungeon') {
+                checkAndAdd('crfort');
+            } else if (subdir === 'desert') {
+                checkAndAdd('dfptop');
+                checkAndAdd('volcano');
+            } else if (subdir === 'linkb' || subdir === 'linkf') {
+                checkAndAdd('volcano');
+            } else if (subdir === 'shipbattle') {
+                checkAndAdd('swaphol');
+            } else if (subdir === 'swapholbot' || subdir === 'shop') {
+                checkAndAdd('swaphol');
+            }
+        }
+
+        // Initialize the world with the expanded dependency list
+        const world = await World.create(context, this.gameInfo, dataFetcher, finalSubdirs, materialFactory);
 
         let mapInstance: MapInstance | null = null;
         if (this.mapNum !== null) {
             const mapSceneInfo = await loadMap(this.gameInfo, dataFetcher, this.mapNum);
-            mapInstance = new MapInstance(mapSceneInfo, world.blockFetcher, world);
+            
+            // FIX: MapInstance now takes undefined as 3rd arg and world as 4th arg
+            mapInstance = new MapInstance(mapSceneInfo, world.blockFetcher, undefined, world);
             await mapInstance.reloadBlocks(dataFetcher);
 
             // Translate map for SFA world coordinates
@@ -622,11 +661,11 @@ export class SFAMapSceneDesc implements Viewer.SceneDesc {
             mat4.fromTranslation(mapMatrix, mapTrans);
             mapInstance.setMatrix(mapMatrix);
 
-world.setMapInstance(mapInstance);
-world.mapNum = this.mapNum;
-(world as any).handleMusic();
-
-
+            world.setMapInstance(mapInstance);
+            world.mapNum = this.mapNum;
+            
+            // Fix: Handle music/scene state for Kiosk maps
+            (world as any).handleMusic();
         }
 
         const romlistNames: string[] = Array.isArray(this.id_) ? this.id_ : [this.id_];
@@ -641,18 +680,21 @@ world.mapNum = this.mapNum;
     
             world.spawnObjectsFromRomlist(romlist, parentObj);
 
-            // XXX: In the Ship Battle scene, attach galleonship objects to the ship.
             if (name === 'frontend') {
                 parentObj = world.objectInstances[2];
-                console.log(`parentObj is ${parentObj.objType.name}`);
             }
         }
         
         (window.main as any).lookupObject = (objType: number, skipObjindex: boolean = false) => {
             const obj = world.objectMan.getObjectType(objType, skipObjindex);
-            console.log(`Object ${objType}: ${obj.name} (type ${obj.typeNum} class ${obj.objClass})`);
+          //  console.log(`Object ${objType}: ${obj.name} (type ${obj.typeNum} class ${obj.objClass})`);
         };
 
+        (window.main as any).showAllTextures = (useTex1: boolean = false) => {
+            const texFetcher = world.resColl.texFetcher as SFATextureFetcher;
+            const { attempted, shown } = texFetcher.loadAllFromTables(materialFactory.cache, useTex1);
+           // console.log(`[ShowAllTextures] Bank=${useTex1 ? 'TEX1' : 'TEX0/TEXPRE'} attempted=${attempted} registered=${shown}`);
+        };
 
         const renderer = new WorldRenderer(world, materialFactory);
         return renderer;
@@ -714,8 +756,7 @@ if (ARWING_IDS.has(mapId))
 
 
             const mapSceneInfo = await loadMap(this.gameInfo, dataFetcher, mapId);
-            const mapInstance = new MapInstance(mapSceneInfo, world.blockFetcher, world);
-            await mapInstance.reloadBlocks(dataFetcher);
+const mapInstance = new MapInstance(mapSceneInfo, world.blockFetcher, undefined, world);            await mapInstance.reloadBlocks(dataFetcher);
 
             const mapMatrix = mat4.create();
 const origin = mapSceneInfo.getOrigin();
@@ -728,8 +769,6 @@ mat4.fromTranslation(
         (y - origin[1]) * 640
     )
 );
-
-
             mapInstance.setMatrix(mapMatrix);
             mapInstances.push(mapInstance);
         }

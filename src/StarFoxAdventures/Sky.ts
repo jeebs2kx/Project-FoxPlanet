@@ -50,8 +50,6 @@ export class Sky {
         if (tex === null || tex === undefined)
             return;
 
-        // Call renderHelper.pushTemplateRenderInst (not renderInstManager.pushTemplateRenderInst)
-        // to obtain a local SceneParams buffer
         const template = renderHelper.pushTemplateRenderInst();
 
         // Setup to draw in clip space
@@ -68,16 +66,12 @@ export class Sky {
         materialParams.m_TextureMapping[0].lodBias = 0.0;
         mat4.identity(materialParams.u_TexMtx[0]);
 
-        // Extract pitch
         const cameraFwd = scratchVec0;
         getMatrixAxisZ(cameraFwd, sceneCtx.viewerInput.camera.worldMatrix);
         vec3.negate(cameraFwd, cameraFwd);
         const camPitch = vecPitch(cameraFwd);
         const camRoll = Math.PI / 2;
 
-        // FIXME: We should probably use a different technique since this one is poorly suited to VR.
-        // TODO: Implement precise time of day. The game blends textures on the CPU to produce
-        // an atmosphere texture for a given time of day.
         const fovRollFactor = 3.0 * (tex.height * 0.5 * sceneCtx.viewerInput.camera.fovY / Math.PI) * Math.sin(-camRoll);
         const pitchFactor = (0.5 * tex.height - 6.0) - (3.0 * tex.height * -camPitch / Math.PI);
         const t0 = (pitchFactor + fovRollFactor) / tex.height;
@@ -122,7 +116,7 @@ export class Sky {
             const objectCtx: ObjectRenderContext = {
                 sceneCtx,
                 showDevGeometry: false,
-                setupLights: () => {}, // Lights are not used when rendering skyscape objects (?)
+                setupLights: () => {}, 
             }
 
 const eyePos = scratchVec0;
@@ -131,7 +125,6 @@ const eyePos = scratchVec0;
             for (let i = 0; i < this.world.envfxMan.skyscape.objects.length; i++) {
                 const obj = this.world.envfxMan.skyscape.objects[i];
                 
-                // Set the object's position to the camera's position so it appears infinitely far away
                 if (typeof (obj as any).setPosition === 'function') {
                     (obj as any).setPosition(eyePos);
                 } 

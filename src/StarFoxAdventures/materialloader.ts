@@ -285,7 +285,6 @@ if (fields.isAncient) {
   shader.flags      = ShaderFlags.CullBackface;
   shader.attrFlags  = attr;
 
-  // Derive attr bits from layer usage if missing
   if (shader.layers[0]?.texId != null) shader.attrFlags |= ATTR_TEX0;
   if (shader.layers[1]?.texId != null) shader.attrFlags |= ATTR_TEX1;
   if ((shader.attrFlags & (ATTR_CLR | ATTR_TEX0 | ATTR_TEX1)) === 0)
@@ -306,7 +305,6 @@ if (fields.isAncient) {
   const tevPlain0 = (tmode0 === 0x00 || tmode0 === 0x01 || tmode0 === 0x02 || tmode0 === 0x03);
   const tevOkAny  = (tmode0 === 0x02 || tmode0 === 0x03) || (tmode1 === 0x02 || tmode1 === 0x03);
 
-  // Cutout detection (use layer 0’s texture for alpha-cut foliage)
   const isCutout0 =
       (texId0 != null && (
           KNOWN_CUTOUT_TEXIDS_BETA.has(texId0) ||
@@ -395,7 +393,7 @@ if (fields.isold) {
     const isLavaTexId = texId === 457 || texId === 584 || texId === 1061 || texId === 1062 || texId === 585;
     if (isLavaTexId) {
       shader.flags |= ShaderFlags.Lava;
-      shader.flags &= ~ShaderFlags.Water; // never both
+      shader.flags &= ~ShaderFlags.Water; 
     }
   }
 
@@ -406,7 +404,7 @@ if (fields.isEarly1) {
   const raw16 = data.getUint16(0x38);
   shader.isBeta    = true;
   shader.flags     = translateEarly1Flags(raw16);
-  shader.flags    &= ~ShaderFlags.DevGeometry;  // <-- ignore "dev" for Early-1
+  shader.flags    &= ~ShaderFlags.DevGeometry;  
   shader.attrFlags = data.getUint8(0x3A);
 
   if (shader.layers[0]?.texId != null) shader.attrFlags |= ATTR_TEX0;
@@ -488,4 +486,3 @@ if ((fields as any).isEarly3) {
 
   return shader;
 }
-// --- end replace ---

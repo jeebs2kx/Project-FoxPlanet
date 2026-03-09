@@ -119,7 +119,6 @@ export class AnimFile {
             return false;
         }
         
-        // FIX: Cleanly supports both SFA bitmasks (0x10000000) and DP raw offsets
         const val = this.tab.getUint32(num * 4);
         const nextVal = this.tab.getUint32((num + 1) * 4);
         
@@ -300,13 +299,11 @@ const scratchMtx = mat4.create();
 export function applyPosesToModel(poses: Keyframe, modelInst: ModelInstance, amap: DataView | null) {
     modelInst.resetPose();
 
-    // FIX: Iterate through ALL joints in the model, regardless of pose length!
     for (let i = 0; i < modelInst.model.joints.length; i++) {
         let poseNum = -1;
 
         if (amap && i < amap.byteLength) {
             const mapped = amap.getInt8(i);
-            // Verify the mapped pose actually exists in this compressed animation
             if (mapped >= 0 && mapped < poses.poses.length) {
                 poseNum = mapped;
             }

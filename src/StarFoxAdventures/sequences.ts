@@ -17,9 +17,9 @@ import { computeModelMatrixSRT } from '../MathHelpers.js';
 
 const BIN_TO_RAD = Math.PI / 32768.0;
 const EV_PLAY_ANIM = 0x02;
-const EV_SETOBJ = 0x03; // NEW: Seen in your logs
+const EV_SETOBJ = 0x03; 
 const EV_TIMING_SYNC = 0x01; 
-const EV_SUBEVENT = 0x0B; // Special split event
+const EV_SUBEVENT = 0x0B; 
 
 interface Keyframe {
     time: number;

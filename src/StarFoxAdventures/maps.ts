@@ -23,7 +23,6 @@ import { LightType, WorldLights } from './WorldLights.js';
 import { computeViewMatrix } from '../Camera.js';
 import { drawWorldSpacePoint, getDebugOverlayCanvas2D } from '../DebugJunk.js';
 
-// --- Music table ---
 const MAP_MUSIC: Record<string, string> = {
     2: 'dragrock.mp3',
     4: 'volcano.mp3',
@@ -111,9 +110,7 @@ if (!(window as any).musicState) {
     };
 }
 const DP_DEV_TYPE_NUMS = new Set<number>([
-  // Add DP object type numbers here once you identify them
-  // Example:
-  // 0x1234,
+
 ]);
 
 const DP_DEV_NAME_KEYWORDS = [
@@ -131,11 +128,7 @@ export interface BlockInfo {
     sub: number;
 }
 // ===================== DP SCALE OVERRIDES (DP ONLY) =====================
-// Multiply the OBJECTS.bin scale by these factors for specific objects.
-// Prefer MODEL-based overrides when the “wrong huge” case is actually a wrong model.
 const DP_SCALE_MULT_BY_TYPE: Record<number, number> = {
-    // typeNum (as read from MAPS object record)
-    // Example:
      0x03FA: 0.15, 0x0071: 0.05, 0x036A: 0.15, 0x008A: 0.10, 0x03A4: 0.50,
      0x0178: 0.10, 0x0524: 0.30, 0x0523: 0.30, 0x020D: 0.30, 0x0076: 0.10,
      0x0358: 0.30, 0x0488: 10,
@@ -143,8 +136,7 @@ const DP_SCALE_MULT_BY_TYPE: Record<number, number> = {
 
 const DP_SCALE_MULT_BY_MODEL: Record<number, number> = {
     // modelId (first model in objType.modelNums)
-    // WallTorch model from your hex dump looks like 0x0195:
-    0x0195: 0.25, // <-- tweak this (0.1, 0.2, 0.5 etc.)
+    0x0195: 0.25, 
 };
 
 function dpClampScale(s: number): number {
@@ -155,18 +147,15 @@ function dpClampScale(s: number): number {
 }
 
 function dpGetScaleMultiplier(typeNum: number, ot: any): number {
-    // 1) per-type override (strongest, easiest)
     const byType = DP_SCALE_MULT_BY_TYPE[typeNum & 0xFFFF];
     if (byType !== undefined) return byType;
 
-    // 2) per-model override (good when “huge” is really “wrong model”)
     const m0 = (ot?.modelNums?.[0] ?? -1) | 0;
     const byModel = DP_SCALE_MULT_BY_MODEL[m0];
     if (byModel !== undefined) return byModel;
 
     return 1.0;
 }
-// =================== end DP SCALE OVERRIDES (DP ONLY) ===================
 export interface MapInfo {
     mapsBin: DataView;
     locationNum: number;
@@ -215,7 +204,6 @@ function getMapInfo(mapsTab: DataView, mapsBin: DataView, locationNum: number): 
     };
 }
 
-// Block table is addressed by blockTable[y][x].
 function getBlockTable(mapInfo: MapInfo): (BlockInfo | null)[][] {
     const blockTable: (BlockInfo | null)[][] = [];
     for (let y = 0; y < mapInfo.blockRows; y++) {
@@ -278,10 +266,9 @@ interface MapInstanceOptions {
     worldOffsetZ?: number;
     apply135Rotation?: boolean;
 
-    // used by DP object placement only
     globalOffsetX?: number;
     globalOffsetZ?: number;
-    dpMapScene?: boolean; // true only from DPMapSceneDesc
+    dpMapScene?: boolean; 
 }
 
 function buildRomToScnMap(objIdx: DataView): Map<number, number[]> {
@@ -305,7 +292,6 @@ function buildRomToScnMap(objIdx: DataView): Map<number, number[]> {
 function dpExtractModelNums(objBin: DataView, startOffs: number, defSize: number): number[] {
     const defData = new Uint8Array(objBin.buffer, objBin.byteOffset + startOffs, defSize);
 
-    // find first run of >=4 0xFF bytes
     let ffEnd = -1;
     let run = 0;
     for (let i = 0; i < defSize; i++) {
@@ -320,18 +306,16 @@ function dpExtractModelNums(objBin: DataView, startOffs: number, defSize: number
 
     const out: number[] = [];
 
-    // read u32 values after the FF run (these are usually model IDs)
     for (let o = ffEnd; o + 4 <= defSize; o += 4) {
         const v = objBin.getUint32(startOffs + o);
 
-        if (v === 0 || v === 0xFFFFFFFF) continue; // Keep scanning instead of breaking!
-        if (v >= 0x4000) break; // stop before pointers/garbage
+        if (v === 0 || v === 0xFFFFFFFF) continue; 
+        if (v >= 0x4000) break; 
 
         out.push(v | 0);
-        if (out.length >= 32) break; // Increased from 16 to 32 to catch all variants
+        if (out.length >= 32) break; 
     }
 
-    // de-dupe, preserving order
     const uniq: number[] = [];
     for (const v of out) if (!uniq.includes(v)) uniq.push(v);
 
@@ -388,8 +372,6 @@ function dpFindPositionVariantOverrideXYZ(x: number, y: number, z: number): DPPo
 
 function dpExtractModelNumsByPtrCount(objBin: DataView, startOffs: number, defSize: number): number[] {
     // DP format:
-    //  - model list pointer at +0x08 (u32)
-    //  - model count at +0x54 (u8)  <-- NOT 0x55 like SFA
     if (defSize < 0x58) return [];
 
     const count = objBin.getUint8(startOffs + 0x54);
@@ -408,11 +390,9 @@ function dpExtractModelNumsByPtrCount(objBin: DataView, startOffs: number, defSi
         const v = objBin.getUint32(o);
         if (v === 0 || v === 0xFFFFFFFF) break;
 
-        // DP model IDs are small ints (typically < 0x4000)
         if (v < 0x4000) out.push(v | 0);
     }
 
-    // de-dupe, preserving order
     const uniq: number[] = [];
     for (const v of out) if (!uniq.includes(v)) uniq.push(v);
     return uniq;
@@ -420,7 +400,6 @@ function dpExtractModelNumsByPtrCount(objBin: DataView, startOffs: number, defSi
 function applyDPObjectManagerPatch(objectManager: ObjectManager, objTab: DataView, objBin: DataView, objIdx: DataView, modelInd: DataView | null) {
     const origGetObjectType = objectManager.getObjectType.bind(objectManager);
       const romToScn = buildRomToScnMap(objIdx);
-      // DP: OBJECTS.tab is an offset table terminated by 0xFFFFFFFF (then MIPS code).
 const dpMaxRomType = (() => {
     const count = (objTab.byteLength / 4) | 0;
     for (let i = 0; i < count; i++) {
@@ -432,20 +411,15 @@ const dpMaxRomType = (() => {
     (objectManager as any)._dpRomToScn = romToScn;
     objectManager.getObjectType = function (typeNum: number, skipObjindex: boolean = false) {
         
-        // 1. USE OBJINDEX: Translates Map Placements correctly
-// 1) DP: Translate SCN -> ROM via OBJINDEX, but NEVER allow walking past the OBJECTS.tab offset table.
-// 1) DP: Translate SCN -> ROM via OBJINDEX, but NEVER allow walking past the OBJECTS.tab offset table.
 let realType = typeNum;
 
 if (!skipObjindex) {
     if (typeNum * 2 + 2 <= objIdx.byteLength) {
         const translated = objIdx.getUint16(typeNum * 2);
 
-        // Only accept translated IDs that land inside the real ROM-type range.
         if (translated !== 0xFFFF && translated <= dpMaxRomType) {
             realType = translated;
         } else {
-            // If we can't translate and the id is out of range, force a harmless fallback.
             if (typeNum > dpMaxRomType)
                 realType = 0;
         }
@@ -459,7 +433,6 @@ if (!skipObjindex) {
         const objType = origGetObjectType(realType, true);
                 (objType as any)._dpRomId = realType;
         // --- DP DEV OBJECT TAGGING ---
-// Tag by raw map type (typeNum), translated type (realType), and/or model id(s).
 const DEV_TYPE_IDS = new Set<number>([
     0x004C, 0x00EC, 0x024F, 0x0157, 0x00D4, 0x01CA, 0x0006, 0x0008, 0x000D, 0x000E,0x000F,
     0x0014, 0x0015, 0x001E, 0x0026, 0x002C,0x0037, 0x003E, 0x003F, 0x0046,
@@ -476,17 +449,14 @@ const DEV_TYPE_IDS = new Set<number>([
 ]);
 
 const DEV_MODEL_IDS = new Set<number>([
-     // from your log (cube/arrow/etc)
-    // add more here...
+
 ]);
 
 const scnId = typeNum & 0xFFFF;
 
-// SCN IDs only (pre-OBJINDEX), avoids collisions like 0x004C
 if (DEV_TYPE_IDS.has(scnId))
     (objType as any).isDevObject = true;
 
-                // Tag dev by model IDs (ONLY AFTER modelNums is populated)
                 for (const m of objType.modelNums) {
                     if (DEV_MODEL_IDS.has(m | 0)) {
                         (objType as any).isDevObject = true;
@@ -497,19 +467,16 @@ if (DEV_TYPE_IDS.has(scnId))
             if (realType * 4 + 8 <= objTab.byteLength) {
 const startOffs = objTab.getUint32(realType * 4);
 
-// nextOffs can hit 0xFFFFFFFF (DP table terminator) or garbage
 let nextOffs = 0xFFFFFFFF;
 if ((realType + 1) * 4 + 4 <= objTab.byteLength)
     nextOffs = objTab.getUint32((realType + 1) * 4);
 
-// HOIST so later code (dpExtractModelNums) can see it
 let defSize = 0;
 
 // Validate start offset before any reads/slices
 if (startOffs === 0xFFFFFFFF || startOffs >= objBin.byteLength) {
     objType.scale = 1.0;
     objType.modelNums = [];
-    // DP: Object name strings live at +0x60 (NOT +0x91 like SFA).
 if (!(objType as any)._dpNameFixed) {
     let nm = '';
     const base = startOffs + 0x60;
@@ -525,7 +492,6 @@ if (!(objType as any)._dpNameFixed) {
     if (nm.length) {
         objType.name = nm;
 
-        // Auto-tag huge background helpers as dev objects so they don’t show unless toggled.
         const lo = nm.toLowerCase();
         if (lo.includes('background') || lo.includes('backgroun'))
             (objType as any).isDevObject = true;
@@ -533,22 +499,19 @@ if (!(objType as any)._dpNameFixed) {
 
     (objType as any)._dpNameFixed = true;
 }
-    nextOffs = startOffs; // keep footer logic harmless
+    nextOffs = startOffs; 
 } else {
-    // Clamp nextOffs if it's terminator/garbage/backwards
     if (nextOffs === 0xFFFFFFFF || nextOffs > objBin.byteLength || nextOffs < startOffs)
         nextOffs = objBin.byteLength;
 
     defSize = nextOffs - startOffs;
 
-    // DP scale at +0x04, clamp to stop “blown up huge” objects
     const rawScale = objBin.getFloat32(startOffs + 0x04);
     objType.scale = (Number.isFinite(rawScale) && rawScale > 0.0 && rawScale <= 10.0) ? rawScale : 1.0;
 
     objType.modelNums = [];
 }
                 
-                // 2. SILENCE SETUP ERRORS: Force class to 0 (Generic Scenery)
                 let dll_id = objBin.getUint16(startOffs + 0x58), objClass = dll_id;
                 if (dll_id >= 0x8000) objClass = (dll_id - 0x8000) + 209;
                 else if (dll_id >= 0x2000) objClass = (dll_id - 0x2000) + 186;
@@ -556,7 +519,6 @@ if (!(objType as any)._dpNameFixed) {
                 objType.objClass = objClass;
 
                 // 3. Extract ALL model IDs (supports duplicate/variant objects)
-// 3. Extract model IDs (DP: use ptr+count first; fallback to heuristic)
 objType.modelNums = [];
 
 let models = dpExtractModelNumsByPtrCount(objBin, startOffs, defSize);
@@ -566,7 +528,6 @@ if (models.length === 0)
 for (const m of models)
     objType.modelNums.push(m);
 
-                // Fallback: if extraction fails, do the old footer poke
                 if (objType.modelNums.length === 0) {
                     for (let i = 2; i <= 12; i += 2) {
                         const val = objBin.getUint16(nextOffs - i);
@@ -582,8 +543,6 @@ for (const m of models)
         return objType;
     };
 
-// ---- DP variant model picker (SCN_ID / param selects correct model variant) ----
-// ---- DP variant model picker (instance params 0x64xx + SCN_ID mapping) ----
 const origCreate = (objectManager as any).createObjectInstance?.bind(objectManager);
 if (origCreate) {
     (objectManager as any).createObjectInstance = function(typeNum: number, objParams: DataView, pos: any, mountNow: boolean) {
@@ -661,7 +620,7 @@ public constructor(private gameInfo: GameInfo, private dataFetcher: DataFetcher,
 
 private getRealModelId(rawIndex: number): number {
         let index = rawIndex | 0; if (index < 0) index = -index;
-        return index; // DO NOT USE MODELIND
+        return index; 
     
      
     }
@@ -685,15 +644,12 @@ public createModelInstance(rawIndex: number): ModelInstance {
         const realId = this.getRealModelId(rawIndex);
         const model = this.cache.get(realId);
         
-        // FIX: If model is missing (index 0), use the dummy model so 'inst' is NEVER undefined
         const inst = model ? new ModelInstance(model) : new ModelInstance(this.dummyModelInst.model);
         
-        // FIX: Force a blank amap onto the instance to stop the skeletal system from crashing
         if (!(inst as any).amap) {
             (inst as any).amap = new DataView(new ArrayBuffer(0));
         }
         
-        // Attach blank functions just in case the engine version tries to call them directly
         if (typeof (inst as any).setAmap !== 'function') (inst as any).setAmap = () => { };
         if (typeof (inst as any).getAmap !== 'function') (inst as any).getAmap = () => new DataView(new ArrayBuffer(64));
         
@@ -736,11 +692,9 @@ export class MapInstance {
         if (this.mapOpts?.objectManager && this.info.getObjectsData) {
             const objData = this.info.getObjectsData();
             if (objData) {
-                // 1. Get the Grid Offset we passed from DPMapSceneDesc
                 const globalOffsetX = (this.mapOpts as any).globalOffsetX || 0;
                 const globalOffsetZ = (this.mapOpts as any).globalOffsetZ || 0;
 
-                // 2. Get the Map's internal Origin (the 'ox/oz' from the header)
                 const [ox, oz] = this.info.getOrigin();
 
                 let offset = 0;
@@ -755,7 +709,6 @@ const objParams = dataSubarray(objData, offset, size);
                         
                         (objInst as any)._dpTypeNum = typeNum;
                         
-                        // FIX: Ensure parameters exist before reading X, Y, Z so short objects don't crash
                         const trueX = objParams.byteLength >= 0x0C ? objParams.getFloat32(0x08) : 0;
                         const trueY = objParams.byteLength >= 0x10 ? objParams.getFloat32(0x0C) : 0;
                         const trueZ = objParams.byteLength >= 0x14 ? objParams.getFloat32(0x10) : 0;
@@ -776,20 +729,22 @@ if (dbgCount < 300) {
     const u16_1A = objParams.byteLength >= 0x1C ? objParams.getUint16(0x1A) : 0;
 
     console.warn(
-        `[DP OBJ] off=0x${offset.toString(16)} scn=0x${typeNum.toString(16)} rom=0x${rIdDbg.toString(16)} name=${nameDbg} raw=(${trueX.toFixed(3)}, ${trueY.toFixed(3)}, ${trueZ.toFixed(3)}) world=(${(trueX + ox * 640).toFixed(3)}, ${trueY.toFixed(3)}, ${(trueZ + oz * 640).toFixed(3)}) u00=0x${u16_00.toString(16)} u02=0x${u16_02.toString(16)} u04=0x${u16_04.toString(16)} u06=0x${u16_06.toString(16)} u18=0x${u16_18.toString(16)} u1A=0x${u16_1A.toString(16)} models=[${modelDbg}]`
+       // `[DP OBJ] off=0x${offset.toString(16)} scn=0x${typeNum.toString(16)} rom=0x${rIdDbg.toString(16)} name=${nameDbg} raw=(${trueX.toFixed(3)}, ${trueY.toFixed(3)}, ${trueZ.toFixed(3)}) world=(${(trueX + ox * 640).toFixed(3)}, ${trueY.toFixed(3)}, ${(trueZ + oz * 640).toFixed(3)}) u00=0x${u16_00.toString(16)} u02=0x${u16_02.toString(16)} u04=0x${u16_04.toString(16)} u06=0x${u16_06.toString(16)} u18=0x${u16_18.toString(16)} u1A=0x${u16_1A.toString(16)} models=[${modelDbg}]`
     );
 }
-                        // position (keep your working origin fix)
                         objInst.position[0] = trueX + (ox * 640) - globalOffsetX;
                         objInst.position[1] = trueY;
                         objInst.position[2] = trueZ + (oz * 640) - globalOffsetZ;
-// position-based DP variant override MUST happen here,
-// after origin/global offsets have been applied.
+                        const otForDev = this.mapOpts.objectManager.getObjectType(typeNum, false);
+const devName = String(otForDev?.name ?? '').toLowerCase();
+                        (objInst as any)._isDevDP = 
+                            !!otForDev?.isDevObject || 
+                            (typeNum !== undefined && DP_DEV_TYPE_NUMS.has(typeNum)) || 
+                            DP_DEV_NAME_KEYWORDS.some((k) => devName.includes(k));
 {
 
 }
                         // --- DP ROTATION FIX ---
-                        // FIX: Ensure parameter exists before reading yaw
                         let yawU = objParams.byteLength >= 0x08 ? objParams.getUint16(0x06) : 0;
 
                         if (objParams.byteLength >= 0x1A) {
@@ -800,7 +755,6 @@ if (dbgCount < 300) {
                             const altYaw28 = objParams.byteLength >= 0x14 ? objParams.getUint16(0x12) : 0;
                             const altYaw10 = objParams.byteLength >= 0x14 ? objParams.getUint16(0x10) : 0;
 
-                            // Explicit list of object types known to store Yaw at 0x28 (Enemies)
                             const TYPES_YAW_28 = new Set([0x0251, 0x03AF,0x0281, 0x007E, 0x04D9, 0x0011,0x0292, 0x0527,0x050C]);
                             const TYPES_YAW_10 = new Set([0x0409,]);
                             const TYPES_YAW_1C = new Set([0x01D3,0x0089, 0x057E,]);
@@ -905,22 +859,13 @@ if (romId === 0x0119) { // WCTile
     (objInst as any).modelInst = mf.createModelInstance(modelId);
 
 }
-if (romId === 0x0106) { // WCPressureSwitc
-    const u1C = objParams.byteLength >= 0x1E ? objParams.getUint16(0x1C) : 0;
-    const modelId = (u1C === 0x01) ? 0x03B4 : 0x03B3;
-    (objInst as any).modelInst = mf.createModelInstance(modelId);
 
-    console.warn(
-        `[WCPRESSURESWITC] u1C=0x${u1C.toString(16)} -> model 0x${modelId.toString(16)}`
-    );
-}
 }
 
 
         
     }
 }
-// force variant AFTER mount(), because mount() recreates the default model
 {
     const posOverride = dpFindPositionVariantOverrideXYZ(
         objInst.position[0],
@@ -933,7 +878,7 @@ if (romId === 0x0106) { // WCPressureSwitc
         if (mf?.createModelInstance) {
             (objInst as any).modelInst = mf.createModelInstance(posOverride.modelId);
             console.log(
-                `[DP OVERRIDE] ${objInst.position[0].toFixed(3)}, ${objInst.position[1].toFixed(3)}, ${objInst.position[2].toFixed(3)} -> model 0x${posOverride.modelId.toString(16)}`
+              //  `[DP OVERRIDE] ${objInst.position[0].toFixed(3)}, ${objInst.position[1].toFixed(3)}, ${objInst.position[2].toFixed(3)} -> model 0x${posOverride.modelId.toString(16)}`
             );
         }
     }
@@ -942,7 +887,7 @@ if (romId === 0x0106) { // WCPressureSwitc
 this.objects.push(objInst);
                         
                     } catch (e) {
-                        console.error(`Failed to place DP object at offset ${offset}:`, e);
+                      //  console.error(`Failed to place DP object at offset ${offset}:`, e);
                     }
                     offset += size;
                 }
@@ -1003,18 +948,9 @@ this.objects.push(objInst);
 
         const showAllObjects = (modelCtx as any).showAllObjects !== false;
         if (showAllObjects) {
-            for (let obj of this.objects) {
-                const ot = (obj as any).objType;
-                const typeNum = (obj as any)._dpTypeNum as number | undefined;
-
-                const n = String(ot?.name ?? ot?.objName ?? '').toLowerCase();
-
-                const isDev =
-                    !!ot?.isDevObject ||
-                    (typeNum !== undefined && DP_DEV_TYPE_NUMS.has(typeNum)) ||
-                    DP_DEV_NAME_KEYWORDS.some((k) => n.includes(k));
-
-                if (isDev && !(modelCtx as any).showDevObjects)
+for (let obj of this.objects) {
+                // Use the pre-calculated flag to save CPU cycles
+                if ((obj as any)._isDevDP && !(modelCtx as any).showDevObjects)
                     continue;
 
                 const mi = (obj as any).modelInst as ModelInstance | undefined;
@@ -1039,7 +975,6 @@ this.objects.push(objInst);
     }
 
     public update(viewerInput: Viewer.ViewerRenderInput) {
-        // Removed the object update loop to disable animations
     }
 
     public async reloadBlocks(dataFetcher: DataFetcher) {
@@ -1071,7 +1006,6 @@ this.objects.push(objInst);
             for (let model of row)
                 model?.destroy(device);
         }
-        // NEW: Cleanup objects when map is destroyed
         for (let obj of this.objects) {
             obj.destroy(device);
         }
@@ -1234,7 +1168,6 @@ private rebuildSky(texFetcher: any, gameInfo: GameInfo): void {
     }
 
 public async create(info: MapSceneInfo, gameInfo: GameInfo, dataFetcher: DataFetcher, blockFetcher: BlockFetcher, mapOpts?: MapInstanceOptions): Promise<Viewer.SceneGfx> {        this.dataFetcher = dataFetcher; 
-        // FIX: Pass mapOpts here so the loop in MapInstance actually spawns objects
         this.map = new MapInstance(info, blockFetcher, mapOpts);
         await this.map.reloadBlocks(dataFetcher);
 
@@ -1302,7 +1235,6 @@ this.envSelect.onvalue = async (val) => {
   } catch (e) {
    // console.warn(`EnvFx load failed for index ${val}`, e);
   }
-  // ALWAYS rebuild sky even if envfx objects fail
   this.rebuildSky(this.currentTexFetcher, this.currentGameInfo);
 };
 envPanel.contents.append(this.envSelect.elem);
@@ -1378,8 +1310,6 @@ const modelCtx = {
     showAllObjects: this.showAllObjects,
         };
 
-        // Pass it as 'any' to stop the compiler from complaining
-        // Pass it as 'any' to stop the compiler from complaining
         this.map.addRenderInsts(device, renderInstManager, renderLists, modelCtx as any);
         renderInstManager.popTemplateRenderInst();
     }
@@ -2034,7 +1964,6 @@ mapRenderer.mapNum = `dup_${this.mapNum}`;
 
     texFetcher.setModelVersion(ModelVersion.dup);
     texFetcher.setCurrentModelID(this.mapNum);  
-// Get first real block mod from layout
 let firstMod: number | null = null;
 
 for (let row = 0; row < mapSceneInfo.getNumRows(); row++) {
@@ -2545,7 +2474,6 @@ export class DPMapSceneDesc implements Viewer.SceneDesc {
         const texFetcher = await SFATextureFetcher.create(gInfo, context.dataFetcher, false);
         texFetcher.setModelVersion(ModelVersion.DinosaurPlanet);
 
-        // 1. SETUP OBJECT MANAGER WITH ID PATCH
         const dpModelFetcher = new PreloadingDPModelFetcher(gInfo, context.dataFetcher, texFetcher, materialFactory);
         await dpModelFetcher.init();
 
@@ -2563,7 +2491,6 @@ const fakeWorld: any = {
             animController: { animController: animController, enableFineSkinAnims: false },
             objectMan: null,
             
-            // FIX: This must be named 'mapInstance', not 'map'!
             mapInstance: {
                 getBlockAtPosition: () => null,
                 getWaterElevation: () => 0,
@@ -2574,23 +2501,19 @@ const fakeWorld: any = {
         const objectManager = await ObjectManager.create(fakeWorld as World, context.dataFetcher, false);
         fakeWorld.objectMan = objectManager;
 
-        // FETCH TABLES FOR ID TRANSLATION
         const objTab = (await context.dataFetcher.fetchData(`${gInfo.pathBase}/OBJECTS.tab`)).createDataView();
         const objBin = (await context.dataFetcher.fetchData(`${gInfo.pathBase}/OBJECTS.bin`)).createDataView();
         const objIdx = (await context.dataFetcher.fetchData(`${gInfo.pathBase}/OBJINDEX.bin`)).createDataView();
         let modelInd: DataView | null = null; 
         try { modelInd = (await context.dataFetcher.fetchData(`${gInfo.pathBase}/MODELIND.bin`)).createDataView(); } catch(e) {}
         
-        // APPLY THE PATCH TO FIX WRONG MODELS
         applyDPObjectManagerPatch(objectManager, objTab, objBin, objIdx, modelInd);
 
-        // 2. PRELOAD MODELS
-// 2. PRELOAD MODELS (FORCED FOR MUSHROOMS)
+
         const objData = mapSceneInfo.getObjectsData?.();
         if (objData) {
             const requiredModels = new Set<number>();
             
-            // --- SURGICAL PRELOAD ---
 requiredModels.add(335);
 requiredModels.add(336);
 requiredModels.add(0x03B1);
@@ -2616,18 +2539,21 @@ requiredModels.add(0x03EB);
             await dpModelFetcher.preloadModels(Array.from(requiredModels));
         }
 
-        // KEEP YOUR TEXTURE FIXES
+  
         if (!texFetcher.textureHolder) texFetcher.textureHolder = { viewerTextures: [], onnewtextures: null };
         let pointSampler: any = null;
+        const shownTextures = new Set<any>(); 
         const origGetTexture = (texFetcher as any).getTexture.bind(texFetcher);
         (texFetcher as any).getTexture = function(cache: any, id: number, useTex1: boolean) {
             const res = origGetTexture(cache, id, useTex1);
             if (res && res.viewerTexture) {
                 const vt = res.viewerTexture;
-                if (!this.textureHolder.viewerTextures.includes(vt)) {
+                if (!shownTextures.has(vt)) {
+                    shownTextures.add(vt);
                     this.textureHolder.viewerTextures.push(vt);
                     if (this.textureHolder.onnewtextures) this.textureHolder.onnewtextures();
                 }
+
                 const cutoutTextures = [0];
                 if (cutoutTextures.includes(id)) {
                     if (!pointSampler) pointSampler = cache.device.createSampler({
@@ -2670,24 +2596,23 @@ mapRenderer.showDevObjects = false;
 ensureDPDevObjectsUI(async (enabled: boolean) => {
     mapRenderer.showDevObjects = enabled;
 }, false);
-// DP master object toggle (default ON)
 mapRenderer.showAllObjects = true;
 ensureDPObjectsUI(async (enabled: boolean) => {
     mapRenderer.showAllObjects = enabled;
 }, true);
-        setTimeout(async () => {
+setTimeout(async () => {
             const mr = mapRenderer as any;
-            if (mr.envSelect) {
+            if (mr.envSelect && mr.envfxMan) {
                 const sequence = isZeroEnvMap ? [0] : [95, 96, 97, 98, 99, 100];
                 for (const val of sequence) {
                     mr.envSelect.setValue(val);
-                    if (mr.envSelect.onvalue) await mr.envSelect.onvalue(val);
-                    await new Promise(resolve => setTimeout(resolve, 16)); 
+                    mr.envfxMan.loadEnvfx(val); 
+                    await new Promise(resolve => setTimeout(resolve, 32)); 
                 }
+                mr.rebuildSky(mr.currentTexFetcher, mr.currentGameInfo);
             }
-        }, 10);
+        }, 100);
 
-        // MAP STAYS AT LOCAL 0,0 (No 135-degree rotation hack needed for DP!)
         const matrix = mat4.create();
         mapRenderer.setMatrix(matrix);
 
@@ -2975,7 +2900,7 @@ export class CombinedOldIceMtSceneDesc implements Viewer.SceneDesc {
             try { 
                 return await context.dataFetcher.fetchData(`${this.gameInfo.pathBase}/${name}`); 
             } catch { 
-                console.warn(`Could not load ${name}. Rendering blank space.`);
+             //   console.warn(`Could not load ${name}. Rendering blank space.`);
                 return { createDataView: () => new DataView(new ArrayBuffer(0)) }; 
             }
         };
@@ -3028,7 +2953,6 @@ export class CombinedOldIceMtSceneDesc implements Viewer.SceneDesc {
         const texFetcher = await SFATextureFetcher.create(this.gameInfo, context.dataFetcher, false);
         texFetcher.setModelVersion(ModelVersion.DinosaurPlanet);
 
-        // --- FAKE WORLD INJECTION FOR ENVFX ---
         const fakeWorld: any = {
             renderCache: (materialFactory as any).cache ?? (materialFactory as any).getCache?.(),
             gameInfo: this.gameInfo,
@@ -3040,7 +2964,6 @@ export class CombinedOldIceMtSceneDesc implements Viewer.SceneDesc {
         try {
             mapRenderer.envfxMan = await EnvfxManager.create(fakeWorld as World, context.dataFetcher);
             fakeWorld.envfxMan = mapRenderer.envfxMan; 
-            // 95 is the Dinosaur Planet default index
             mapRenderer.envfxMan.loadEnvfx(95); 
         } catch (e) {
             console.warn("Failed to load ENVFXACT.bin for Combined Map", e);
@@ -3109,7 +3032,6 @@ export class YetiSceneDesc implements Viewer.SceneDesc {
  [null,null,null, null,B(0x01F9),B(0x01Fa), B(0x01Fb), B(0x01Fc), ], 
  [null,null,null, null,null,B(0x01Fd), B(0x01Fe),],
         ];
-        // ==========================================
 
         const numRows = LAYOUT.length;
         const numCols = LAYOUT[0].length;
@@ -3144,7 +3066,6 @@ export class YetiSceneDesc implements Viewer.SceneDesc {
             fakeWorld.envfxMan = mapRenderer.envfxMan; 
             mapRenderer.envfxMan.loadEnvfx(95); 
         } catch (e) { console.warn("Failed to load ENVFXACT.bin", e); }
-        // --------------------------------------
 
         const blockFetcher = await DPBlockFetcher.create(this.gameInfo, context.dataFetcher, materialFactory, Promise.resolve(texFetcher));
         await mapRenderer.create(mapSceneInfo, this.gameInfo, context.dataFetcher, blockFetcher);

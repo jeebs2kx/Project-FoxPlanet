@@ -8,7 +8,6 @@ import { computeViewMatrix } from '../Camera.js';
 import { ViewerRenderInput } from '../viewer.js';
 import { SFA_CLASSES } from './Objects/Classes.js';
 import { SFAClass } from './Objects/SFAClass.js';
-
 import { ModelInstance } from './models.js';
 import { dataSubarray, readVec3, mat4FromSRT, readUint32, readUint16 } from './util.js';
 import { Anim, Keyframe, applyAnimationToModel } from './animation.js';
@@ -22,22 +21,12 @@ const scratchVec0 = vec3.create();
 const scratchVec1 = vec3.create();
 const scratchMtx0 = mat4.create();
 const scratchMtx1 = mat4.create();
-// ===================== DP SAFE DATAVIEW =====================
-// Stops DP object classes from crashing the whole map when params are shorter than expected.
-// Returns 0 on OOB reads and logs once per tag.
-// ===================== DP PARAM FIXUP + SAFE DATAVIEW =====================
-// Goal:
-// - Never crash on short params
-// - Learn how big each (type,class) blob *needs* to be based on real OOB reads
-// - Pad next time to satisfy those reads (zero-filled)
-// - Limit log spam
-
-const __dp_paramNeed = new Map<string, number>();   // key -> required minimum byte length
-const __dp_oobWarned = new Set<string>();           // reuse for "log once" keys
+const __dp_paramNeed = new Map<string, number>();  
+const __dp_oobWarned = new Set<string>();         
 let __dp_padLogCount = 0;
-const __dp_PAD_LOG_LIMIT = 50;                      // after this, stop printing PAD lines
+const __dp_PAD_LOG_LIMIT = 50;                    
 let __dp_oobLogCount = 0;
-const __dp_OOB_LOG_LIMIT = 50;                      // after this, stop printing OOB lines
+const __dp_OOB_LOG_LIMIT = 50;                    
 
 function __dpAlign4(n: number): number { return (n + 3) & ~3; }
 
@@ -49,87 +38,29 @@ function __dpPadParams(dv: DataView, want: number, tag: string): DataView {
     new Uint8Array(buf).set(new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength));
     const out = new DataView(buf);
 
-    const k = `${tag}|PAD|0x${dv.byteLength.toString(16)}->0x${wantA.toString(16)}`;
-    if (!__dp_oobWarned.has(k) && __dp_padLogCount < __dp_PAD_LOG_LIMIT) {
-        __dp_oobWarned.add(k);
-        __dp_padLogCount++;
-        console.warn(`[DP_OBJ_PAD] ${tag} 0x${dv.byteLength.toString(16)} -> 0x${wantA.toString(16)}`);
-        if (__dp_padLogCount === __dp_PAD_LOG_LIMIT)
-            console.warn(`[DP_OBJ_PAD] (pad log limit hit: further PAD logs suppressed)`);
-    }
+   // const k = `${tag}|PAD|0x${dv.byteLength.toString(16)}->0x${wantA.toString(16)}`;
+ //   if (!__dp_oobWarned.has(k) && __dp_padLogCount < __dp_PAD_LOG_LIMIT) {
+  //      __dp_oobWarned.add(k);
+  //      __dp_padLogCount++;
+  //      console.warn(`[DP_OBJ_PAD] ${tag} 0x${dv.byteLength.toString(16)} -> 0x${wantA.toString(16)}`);
+  //      if (__dp_padLogCount === __dp_PAD_LOG_LIMIT)
+  //          console.warn(`[DP_OBJ_PAD] (pad log limit hit: further PAD logs suppressed)`);
+  //  }
 
     return out;
 }
 
-function __dpMakeSafeDataView(dv: DataView, tag: string): DataView {
-    const warn = (fn: string, offs: number, need: number) => {
-        // Learn required size for this object key.
-        const req = (offs | 0) + need;
-        const prev = __dp_paramNeed.get(tag) ?? 0;
-        if (req > prev) __dp_paramNeed.set(tag, req);
-
-        // Log-limited + log-once per unique site.
-        const k = `${tag}|${fn}|0x${(offs | 0).toString(16)}|need=${need}|len=0x${dv.byteLength.toString(16)}`;
-        if (__dp_oobWarned.has(k)) return;
-        __dp_oobWarned.add(k);
-
-        if (__dp_oobLogCount < __dp_OOB_LOG_LIMIT) {
-            __dp_oobLogCount++;
-            console.warn(`[DP_OBJ_OOB] ${tag} ${fn}(0x${(offs | 0).toString(16)}) need=${need} len=0x${dv.byteLength.toString(16)}`);
-            if (__dp_oobLogCount === __dp_OOB_LOG_LIMIT)
-                console.warn(`[DP_OBJ_OOB] (oob log limit hit: further OOB logs suppressed)`);
-        }
-    };
-
-    const wrap = (fnName: string, need: number, call: (...args: any[]) => any) => {
-        return (offs: number, ...rest: any[]) => {
-            if ((offs | 0) < 0 || ((offs | 0) + need) > dv.byteLength) {
-                warn(fnName, offs | 0, need);
-                return 0;
-            }
-            return call(offs, ...rest);
-        };
-    };
-
-    return new Proxy(dv as any, {
-        get(_target, prop: string) {
-            switch (prop) {
-                case 'getUint8':   return wrap('getUint8',   1, (o: number) => dv.getUint8(o));
-                case 'getInt8':    return wrap('getInt8',    1, (o: number) => dv.getInt8(o));
-                case 'getUint16':  return wrap('getUint16',  2, (o: number, le?: boolean) => dv.getUint16(o, le));
-                case 'getInt16':   return wrap('getInt16',   2, (o: number, le?: boolean) => dv.getInt16(o, le));
-                case 'getUint32':  return wrap('getUint32',  4, (o: number, le?: boolean) => dv.getUint32(o, le));
-                case 'getInt32':   return wrap('getInt32',   4, (o: number, le?: boolean) => dv.getInt32(o, le));
-                case 'getFloat32': return wrap('getFloat32', 4, (o: number, le?: boolean) => dv.getFloat32(o, le));
-                default:
-                    return (dv as any)[prop];
-            }
-        },
-    }) as any as DataView;
-}
-
-// Call this once per instance before ANY parsing / class constructors.
 function __dpNormalizeObjParams(typeNum: number, classNum: number, objParams: DataView): DataView {
     const tag = `type=${typeNum} class=${classNum}`;
+    let want = 0x40; 
 
-    // CommonObjectParams reads up to 0x14+4, so ensure at least 0x18 bytes.
-    let want = 0x18;
-
-    // If we’ve learned this (type,class) needs more, honor it.
     const learned = __dp_paramNeed.get(tag) ?? 0;
     if (learned > want) want = learned;
-
-    // Pad to required size (zero-filled), then wrap safe.
     const padded = __dpPadParams(objParams, want, tag);
-    return __dpMakeSafeDataView(padded, tag);
+        return padded; 
 }
-// =================== end DP PARAM FIXUP + SAFE DATAVIEW ===================
-// =================== end DP SAFE DATAVIEW ===================
 
-// ===================== DP PARAM PADDING =====================
-// DP map object params are often sliced a few bytes short. Pad by +4 (aligned) so classes can't OOB.
 function padObjectParams(dv: DataView, tag: string): DataView {
-    // Always give +4 bytes headroom, aligned to 4 bytes.
     const want = Math.max(
         CommonObjectParams_SIZE,
         (((dv.byteLength + 3) & ~3) + 4) >>> 0
@@ -143,14 +74,11 @@ function padObjectParams(dv: DataView, tag: string): DataView {
     dst.set(src);
 
 const k = `${tag}|${dv.byteLength.toString(16)}->${want.toString(16)}`;
-if (!__dp_oobWarned.has(k)) { // reuse the same Set to avoid new globals
+if (!__dp_oobWarned.has(k)) { 
     __dp_oobWarned.add(k);
     console.warn(`[DP_OBJ_PAD] ${tag} 0x${dv.byteLength.toString(16)} -> 0x${want.toString(16)}`);
 }    return new DataView(dst.buffer);
 }
-// =================== end DP PARAM PADDING ===================
-// An SFAClass holds common data and logic for one or more ObjectTypes.
-// An ObjectType serves as a template to spawn ObjectInstances.
 
 export interface ObjectUpdateContext {
     viewerInput: ViewerRenderInput;
@@ -188,7 +116,6 @@ export class ObjectType {
     public ambienceNum: number = 0;
 
     constructor(public typeNum: number, private data: DataView, private isEarlyObject: boolean) {
-        // FIXME: where are these fields for early objects?
         this.scale = this.data.getFloat32(0x4);
         if (!Number.isFinite(this.scale) || this.scale <= 0 || this.scale > 10.0)
     this.scale = 1.0;
@@ -217,7 +144,6 @@ export class ObjectType {
             // XXX: Object type "curve" is not marked as a dev object, but it should be treated as one.
             this.isDevObject = true;
         }
-
         this.adjustCullRadius = data.getUint8(0x73);
 
         this.ambienceNum = data.getUint8(0x8e);
@@ -238,9 +164,7 @@ const OBJECT_RENDER_LAYER = 31; // FIXME: For some spawn flags, 7 is used.
 
 export class ObjectInstance {
     public modelInst: ModelInstance | null = null;
-
     public parent: ObjectInstance | null = null;
-
     public commonObjectParams: CommonObjectParams;
     public position: vec3 = vec3.create();
     public yaw: number = 0;
@@ -251,17 +175,11 @@ export class ObjectInstance {
     private srtMatrixChild: mat4 = mat4.create();
     private srtDirty: boolean = true;
     public cullRadius: number = 10;
-
     private modelAnimNum: number | null = null;
     private anim: Anim | null = null;
     private modanim: DataView;
-
     private ambienceIdx: number = 0;
-
-    public animSpeed: number = 0.01; // Default to a sensible value.
-    // In the game, each object class is responsible for driving its own animations
-    // at the appropriate speed.
-
+    public animSpeed: number = 0.01;
     public internalClass?: SFAClass;
 
 constructor(public world: World, public objType: ObjectType, public objParams: DataView, public posInMap: vec3) {
@@ -269,8 +187,6 @@ constructor(public world: World, public objType: ObjectType, public objParams: D
 
     const objClass = this.objType.objClass;
     const typeNum = this.objType.typeNum;
-
-    // One source of truth for DP params: pad + safe-wrap + learned sizing.
     this.objParams = __dpNormalizeObjParams(typeNum, objClass, objParams);
 
     this.commonObjectParams = parseCommonObjectParams(this.objParams);
@@ -383,22 +299,15 @@ public unmount() {
  public setModelNum(num: number) {
         try {
             const modelNum = this.objType.modelNums[num];
-            
-            // Failsafe if the object type has no model assigned
-            if (modelNum === undefined) {
+                        if (modelNum === undefined) {
                 this.modelInst = null;
                 return;
             }
-
             const modelInst = this.world.resColl.modelFetcher.createModelInstance(modelNum);
             this.modelInst = modelInst;
-
-            // Safely attempt to fetch animation maps
-// Safely attempt to fetch animation maps only if the collections exist
             const amap = this.world.resColl.amapColl ? this.world.resColl.amapColl.getAmap(modelNum) : null;
             this.modanim = this.world.resColl.modanimColl ? this.world.resColl.modanimColl.getModanim(modelNum) : new DataView(new ArrayBuffer(0));
             
-            // Only set AMAP if we have a dummy/real object and the method exists
             if (amap && typeof modelInst.setAmap === 'function') {
                 modelInst.setAmap(amap);
             }
@@ -409,7 +318,6 @@ public unmount() {
             if (this.objType.adjustCullRadius !== 0)
                 this.cullRadius *= 10 * this.objType.adjustCullRadius / 255;
 
-            // Only trigger animation logic if all collections are actually present
             if (this.world.resColl.animColl && this.modanim && this.modanim.byteLength > 0 && amap && amap.byteLength > 0)
                 this.setModelAnimNum(0);
         } catch (e) {
@@ -436,7 +344,6 @@ public unmount() {
         else
             return ((this.commonObjectParams.layerValues[1] >>> (16 - layer)) & 1) === 0;
     }
-
     private curKeyframe: Keyframe | undefined = undefined;
 
 public update(updateCtx: ObjectUpdateContext) {
@@ -517,7 +424,6 @@ export class ObjectManager {
     }
 
 public getObjectType(typeNum: number, skipObjindex: boolean = false): ObjectType {
-        // Force the lookup for Map IDs (like 0x033F) to find the correct entry
         if (this.objindexBin && !skipObjindex) {
             typeNum = readUint16(this.objindexBin, 0, typeNum);
         }
@@ -538,10 +444,8 @@ public createObjectInstance(typeNum: number, objParams: DataView, posInMap: vec3
         const objInst = new ObjectInstance(this.world, objType, objParams, posInMap);
         return objInst;
     } catch (e) {
-        console.warn(`[OBJ_SPAWN_FAIL] type=${typeNum} class=${objType.objClass} name="${objType.name}" paramsLen=0x${objParams.byteLength.toString(16)}`);
+      //  console.warn(`[OBJ_SPAWN_FAIL] type=${typeNum} class=${objType.objClass} name="${objType.name}" paramsLen=0x${objParams.byteLength.toString(16)}`);
         console.error(e);
-
-        // Return a harmless dummy so the map keeps loading even if one object is bad.
         const dummy: any = {
             world: this.world,
             objType,

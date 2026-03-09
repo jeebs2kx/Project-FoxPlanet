@@ -49,7 +49,7 @@ export interface ModelRenderContext {
     sceneCtx: SceneRenderContext;
     showDevGeometry: boolean;
 showDevObjects?: boolean;
-    showMeshes: boolean; // <--- ADD THIS LINE
+    showMeshes: boolean; 
     ambienceIdx: number;
     outdoorAmbientColor: Color;
     object?: ObjectInstance;
@@ -68,7 +68,6 @@ const scratchVec0 = vec3.create();
 const scratchBox0 = new AABB();
 
 export class ModelShapes {
-    // There is a Shape array for each draw step (opaques, translucents 1, and translucents 2)
     public shapes: Shape[][] = [];
     public furs: Fur[] = [];
     public waters: Shape[] = [];
@@ -90,56 +89,50 @@ export class ModelShapes {
             this.waters[i].reloadVertices();
     }
 
-    // New method to force material updates and texture re-binding
     public forceMaterialUpdates(device: GfxDevice): void {
         console.log(`[DEBUG_MODELS] Calling forceMaterialUpdates for ModelShapes.`);
         
-        // Iterate through all main shapes
         for (let i = 0; i < this.shapes.length; i++) {
             const shapesArray = this.shapes[i];
             if (shapesArray) {
                 for (let j = 0; j < shapesArray.length; j++) {
                     const shape = shapesArray[j];
-                    // Assuming Shape has a 'material' property of type SFAMaterial
                     const material = (shape as any).material; // Cast to any if 'material' is private or not explicitly typed on Shape
                     if (material && typeof material.rebindTextures === 'function') {
-                        console.log(`[DEBUG_MODELS] Rebinding textures for main shape material.`);
+                     //   console.log(`[DEBUG_MODELS] Rebinding textures for main shape material.`);
                         material.rebindTextures(device);
                     } else if (material) {
-                         console.warn(`[DEBUG_MODELS] Material for main shape found, but rebindTextures method is missing.`);
+                       //  console.warn(`[DEBUG_MODELS] Material for main shape found, but rebindTextures method is missing.`);
                     }
                 }
             }
         }
 
-        // Iterate through fur shapes
         for (let i = 0; i < this.furs.length; i++) {
             const furShape = this.furs[i].shape;
-            const material = (furShape as any).material; // Assuming Fur.shape has a 'material' property
+            const material = (furShape as any).material; 
             if (material && typeof material.rebindTextures === 'function') {
-                console.log(`[DEBUG_MODELS] Rebinding textures for fur shape material.`);
+               // console.log(`[DEBUG_MODELS] Rebinding textures for fur shape material.`);
                 material.rebindTextures(device);
             } else if (material) {
-                console.warn(`[DEBUG_MODELS] Material for fur shape found, but rebindTextures method is missing.`);
+               // console.warn(`[DEBUG_MODELS] Material for fur shape found, but rebindTextures method is missing.`);
             }
         }
 
-        // Iterate through water shapes
         for (let i = 0; i < this.waters.length; i++) {
             const waterShape = this.waters[i];
-            const material = (waterShape as any).material; // Assuming Water.shape has a 'material' property
+            const material = (waterShape as any).material; 
             if (material && typeof material.rebindTextures === 'function') {
-                console.log(`[DEBUG_MODELS] Rebinding textures for water shape material.`);
+               // console.log(`[DEBUG_MODELS] Rebinding textures for water shape material.`);
                 material.rebindTextures(device);
             } else if (material) {
-                console.warn(`[DEBUG_MODELS] Material for water shape found, but rebindTextures method is missing.`);
+               // console.warn(`[DEBUG_MODELS] Material for water shape found, but rebindTextures method is missing.`);
             }
         }
     }
 
 
     public addRenderInsts(device: GfxDevice, renderInstManager: GfxRenderInstManager, modelCtx: ModelRenderContext, renderLists: SFARenderLists | null, matrix: mat4, matrixPalette: ReadonlyMat4[], overrideSortDepth?: number, overrideSortLayer?: number) {
-    // These lines should be at the top, outside any showMeshes check
     const lights = nArray(8, () => new GX_Material.Light());
     if (!this.model.isMapBlock && ((this.model.lightFlags & 0xc) === 0))
         modelCtx.setupLights(lights, LightType.POINT | LightType.DIRECTIONAL);
@@ -154,17 +147,15 @@ export class ModelShapes {
         }
     };
 
-    // THIS IS THE CORRECT AND ONLY LOOP FOR MAIN SHAPES
     if (modelCtx.showMeshes) {
-        for (let i = 0; i < 3; i++) { // Loop for main shapes (opaques, translucents 1, and translucents 2)
+        for (let i = 0; i < 3; i++) { 
             if (this.shapes[i] !== undefined) {
                 if (renderLists !== null)
                     renderInstManager.setCurrentRenderInstList(renderLists.world[i]);
                 for (let j = 0; j < this.shapes[i].length; j++) {
                     const shape = this.shapes[i][j];
-                    // This line remains as it handles dev geometry separately
                     if (shape.isDevGeometry && !modelCtx.showDevGeometry)
-                        continue; // Skip if it's dev geometry and showDevGeometry is false
+                        continue; 
 
                     mat4.copy(scratchMtx0, matrix);
                     mat4PostTranslate(scratchMtx0, this.model.modelTranslate);
@@ -180,13 +171,11 @@ export class ModelShapes {
                 }
             }
         }
-    } // End of showMeshes block for main shapes
+    } 
 
-    // Optional: Add checks for water and fur if they should also respect 'showMeshes'
-    // This is generally recommended as they are part of the visible model.
     if (renderLists !== null)
         renderInstManager.setCurrentRenderInstList(renderLists.waters);
-    if (modelCtx.showMeshes) { // Add this for waters
+    if (modelCtx.showMeshes) {
         for (let i = 0; i < this.waters.length; i++) {
             mat4.copy(scratchMtx0, matrix);
             mat4PostTranslate(scratchMtx0, this.model.modelTranslate);
@@ -196,7 +185,7 @@ export class ModelShapes {
 
     if (renderLists !== null)
         renderInstManager.setCurrentRenderInstList(renderLists.furs);
-    if (modelCtx.showMeshes) { // Add this for furs
+    if (modelCtx.showMeshes) { 
         for (let i = 0; i < this.furs.length; i++) {
             const fur = this.furs[i];
             for (let j = 0; j < fur.numLayers; j++) {
@@ -279,10 +268,9 @@ export class Model {
 
     public createInstanceShapes(): ModelShapes {
         if (this.hasFineSkinning) {
-            // Fine-skinned models must use per-instance shapes
+           
             return this.createModelShapes();
         } else {
-            // Models without fine skinning can use per-model shapes
             return this.sharedModelShapes!;
         }
     }
@@ -328,8 +316,6 @@ export class ModelInstance {
     }
 
 public getAmap(modelAnimNum: number): DataView {
-        // DP C Code: ALIGN8(model->jointCount - 1)
-        // #define ALIGN8(a)  (((u32) (a) & ~0x7) + 0x8)
         const a = Math.max(0, this.model.joints.length - 1);
         const stride = (a & ~0x7) + 0x8;
         
@@ -363,35 +349,24 @@ public getAmap(modelAnimNum: number): DataView {
     public addRenderInsts(device: GfxDevice, renderInstManager: GfxRenderInstManager, modelCtx: ModelRenderContext, renderLists: SFARenderLists | null, matrix: mat4, overrideSortDepth?: number, overrideSortLayer?: number) {
     this.updateSkinning();
 
-    // THIS IS THE CRITICAL ADDITION
-    if (modelCtx.showMeshes) { // Only call addRenderInsts for model shapes if showMeshes is true
+    if (modelCtx.showMeshes) { 
         this.modelShapes.addRenderInsts(device, renderInstManager, modelCtx, renderLists, matrix, this.matrixPalette, overrideSortDepth, overrideSortLayer);
     }
-    // If you have separate logic for drawing debug geometry/bones directly in ModelInstance,
-    // that would go outside this if block, likely gated by modelCtx.showDevGeometry.
 }
     
     private updateSkinning() {
         if (!this.skinningDirty)
             return;
 
-        // Compute matrices for rigid joints (no blending)
         for (let i = 0; i < this.model.joints.length; i++) {
             const joint = this.model.joints[i];
-
-            // For vertices with only one joint-influence, positions are stored in joint-local space
-            // as an optimization.
             mat4.copy(this.matrixPalette[joint.boneNum], this.skeletonInst!.getJointMatrix(joint.boneNum));
-
             // FIXME: Check beta models
         }
 
-        // Compute matrices for coarse blending
         for (let i = 0; i < this.model.coarseBlends.length; i++) {
             const blend = this.model.coarseBlends[i];
 
-            // For vertices with more than one joint-influence, positions are stored in model space.
-            // Therefore, inverse bind translations must be applied.
             mat4.translate(scratchMtx0, this.matrixPalette[blend.joint0], this.model.invBindTranslations[blend.joint0]);
             mat4.multiplyScalar(scratchMtx0, scratchMtx0, blend.influence0);
             mat4.translate(scratchMtx1, this.matrixPalette[blend.joint1], this.model.invBindTranslations[blend.joint1]);
@@ -410,9 +385,6 @@ public getAmap(modelAnimNum: number): DataView {
         const boneMtx0 = scratchMtx2;
         const boneMtx1 = scratchMtx3;
         const pos = scratchVec0;
-
-        // The original game performs fine skinning on the CPU.
-        // A more appropriate place for these calculations might be in a vertex shader.
         let quant = 1 << this.model.fineSkinPositionQuantizeScale;
         let dequant = 1 / quant;
         for (let i = 0; i < this.model.posFineSkins.length; i++) {
@@ -461,8 +433,6 @@ public getAmap(modelAnimNum: number): DataView {
                 mat4.translate(boneMtx1, boneMtx1, this.model.invBindTranslations[skin.bone1]);
             }
 
-            // FIXME: Handle NBT mode. I don't know whether any models use fine skinning and NBT,
-            // but the original game is able to handle such models.
             const src = this.model.originalNrmBuffer;
             const dst = this.modelShapes.nrmBuffer!;
             let bufferOffs = skin.bufferOffset;
@@ -474,18 +444,10 @@ public getAmap(modelAnimNum: number): DataView {
 
                 const weight0 = skin.weights.getUint8(weightOffs) / 128;
                 const weight1 = skin.weights.getUint8(weightOffs + 1) / 128;
-                // The output normal is not scaled to magnitude 1. This doesn't matter, since the GX
-                // allegedly rescales normals automatically.
+
                 mat4.multiplyScalar(scratchMtx0, boneMtx0, weight0);
                 mat4.multiplyScalarAndAdd(scratchMtx0, scratchMtx0, boneMtx1, weight1);
                 transformVec3Mat4w0(pos, scratchMtx0, pos);
-
-                // XXX: the following might be more accurate to the game?
-                // transformVec3Mat4w0(nrm0, boneMtx0, pos);
-                // transformVec3Mat4w0(nrm1, boneMtx1, pos);
-                // vec3.scale(pos, nrm0, weight0);
-                // vec3.scaleAndAdd(pos, pos, nrm1, weight1);
-
                 setInt8Clamped(dst, bufferOffs + 0, pos[0] * quant);
                 setInt8Clamped(dst, bufferOffs + 1, pos[1] * quant);
                 setInt8Clamped(dst, bufferOffs + 2, pos[2] * quant);
@@ -495,12 +457,10 @@ public getAmap(modelAnimNum: number): DataView {
             }
         }
 
-        // Rerun all display lists
         this.modelShapes.reloadVertices();
     }
 
     public destroy(device: GfxDevice) {
-        // Destroy our shapes only if they are not shared
         if (this.model.sharedModelShapes === null) {
             this.modelShapes.destroy(device);
         }
@@ -562,10 +522,10 @@ public getModel(num: number): Model {
             dv.getUint8(3),
         ];
         const magicStr = String.fromCharCode(...magicBytes);
-        console.log(`Model #${num} raw data magic: '${magicStr}'`);
+      //  console.log(`Model #${num} raw data magic: '${magicStr}'`);
 
         const modelData = loadRes(rawData);
-        console.log(`Model #${num} raw data length: ${rawData.byteLength}, decompressed length: ${modelData.byteLength}`);
+      //  console.log(`Model #${num} raw data length: ${rawData.byteLength}, decompressed length: ${modelData.byteLength}`);
 
         this.models[num] = loadModel(modelData.createDataView(), this.texFetcher, this.materialFactory, this.modelVersion);
     }
@@ -604,12 +564,10 @@ export class ModelFetcher {
     }
 
 public async loadSubdirs(subdirs: string[], dataFetcher: DataFetcher) {
-        // FIX: Explicitly type the array so TypeScript stops flagging 'never'
         const promises: Promise<void>[] = []; 
         for (let subdir of subdirs) {
-            // FIX: Attach a .catch to each promise so a 404 doesn't crash the whole map
             promises.push(this.loadSubdir(subdir, dataFetcher).catch(e => {
-                console.warn(`[DPSCENE] Subdir "${subdir}" not found or broken. Skipping.`);
+               // console.warn(`[DPSCENE] Subdir "${subdir}" not found or broken. Skipping.`);
             }));
         }
         await Promise.all(promises);

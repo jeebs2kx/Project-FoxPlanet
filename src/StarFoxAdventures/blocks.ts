@@ -62,7 +62,6 @@ if (!ms) {
     const c2 = ms.shapes[2]?.length ?? 0;
     const cw = ms.waters?.length ?? 0;
     const cf = ms.furs?.length ?? 0;
-   // console.warn(`[Swapcircle DEBUG] model num=${num} shapes: s0=${c0} s1=${c1} s2=${c2} water=${cw} fur=${cf}`);
 }
 
         }
@@ -78,7 +77,7 @@ if (!ms) {
 }
 
 function getModFileNum(mod: number): number {
-    if (mod < 5) { // This is strange, but it matches the original game.
+    if (mod < 5) { // 
         return mod;
     } else {
         return mod + 1;
@@ -653,7 +652,6 @@ export class DPBlockFetcher implements BlockFetcher {
         const texFetcher = await texFetcherPromise;
         const pathBase = gameInfo.pathBase; 
 
-        // We only need the track table to know which block indices to load
         const trkblk = await dataFetcher.fetchData(`${pathBase}/TRKBLK.bin`);
 
         const self = new DPBlockFetcher(materialFactory, texFetcher, pathBase);
@@ -672,7 +670,6 @@ export class DPBlockFetcher implements BlockFetcher {
             const buffer = await dataFetcher.fetchData(url);
             return loadModel(buffer.createDataView(), this.texFetcher, this.materialFactory, ModelVersion.DinosaurPlanet);
         } catch (e) {
-            // If file doesn't exist (404), it's just an empty map cell.
             return null;
         }
     }
@@ -721,7 +718,6 @@ export class AncientBlockFetcher implements BlockFetcher {
         const blockOffset = readUint32(this.blocksTab, 0, num);
         const blockData = this.blocksBin.slice(blockOffset).createDataView();
 
-        // Now uses real textures
         return loadModel(blockData, this.texFetcher, this.materialFactory, ModelVersion.AncientMap);
     }
 }

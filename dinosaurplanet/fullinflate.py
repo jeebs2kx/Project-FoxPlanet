@@ -13,7 +13,7 @@ with open(filename + ".bin", "rb") as f:
 
 for i in range(0, len(tab_data), 4):
     offset = struct.unpack(">I", tab_data[i:i+4])[0]
-    if offset == 0xFFFFFFFF or offset == 0: continue
+    if offset == 0xFFFFFFFF: continue
 
     next_offset = len(bin_data)
     for j in range(i + 4, len(tab_data), 4):

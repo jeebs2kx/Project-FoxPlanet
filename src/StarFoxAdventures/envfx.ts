@@ -140,36 +140,29 @@ self.envfxactBin = (await dataFetcher.fetchData(`${pathBase}/${envName}`)).creat
 } else if (fields.type === EnvfxType.Skyscape) {
     this.skyscape.objects = [];
     
-    // Updated with Dinosaur Planet Object IDs
-    const SKY_RING_TYPES = [0, 769, 616, 1377]; // Space Rings and Planets
-    const MOUNTAIN_TYPES = [0, 239, 0, 0, 0];   // Distant Mountains
-    const SKYSCAPE_TYPES = [0, 1017, 1018, 1389, 0]; // Discovery Falls, Moon Pass, Horizons
+    const SKY_RING_TYPES = [0, 769, 616, 1377]; 
+    const MOUNTAIN_TYPES = [0, 239, 0, 0, 0];   
+    const SKYSCAPE_TYPES = [0, 1017, 1018, 1389, 0]; 
 
     const skyscapeType = data.getUint8(0x5d);
     const skyRingType = data.getUint8(0x5b);
     const mountainType = data.getUint8(0x5a);
 
-// Safe spawn helper to prevent RangeErrors when objects don't exist
     const safeSpawn = (typeId: number) => {
         if (!typeId) return;
         try {
-// DP skyscape type IDs are already “real” IDs (not SCN indices), so skip OBJINDEX remap.
 const obj = this.world.objectMan.createObjectInstance(
     typeId,
     new DataView(new ArrayBuffer(0x80)),
     vec3.create(),
     /*skipObjindex=*/true
 );            if (obj) {
-                // Force the engine to never hide this object
                 obj.cullRadius = 999999; 
-                
-                // Override the scale (Play with this number! Try 1.0, 10.0, or 100.0)
-                obj.scale = 1.0; 
+                                obj.scale = 1.0; 
                 
                 this.skyscape.objects.push(obj);
             }
         } catch (e) {
-            // Silently ignore missing DP objects
         }
     };
 

@@ -192,8 +192,8 @@ const sceneDescs = [
 new SFAModelExhibitSceneDesc('modelexhibit', 'Model + Animation Viewer (Final)', ModelVersion.Final),
 new SFAModelExhibitSceneDesc('modelexhibit', 'Model + Animation Viewer (Kiosk)', ModelVersion.Final, SFADEMO_GAME_INFO),
 new SFAModelExhibitSceneDesc('betamodelexhibit', 'Early 2001 Model Viewer (in progress)', ModelVersion.Beta, SFADEMO_GAME_INFO),
-new SFAModelExhibitSceneDesc('demomodelexhibit', 'Mid 2001 Viewer (in progress)', ModelVersion.Demo, SFADEMO_GAME_INFO),
-
+new SFAModelExhibitSceneDesc('demomodelexhibit_mid', 'Mid 2001 Models (Swaphol/Linklevel)', ModelVersion.Demo, SFADEMO_GAME_INFO, ['Copy of swaphol', 'linklevel']),
+    new SFAModelExhibitSceneDesc('demomodelexhibit_gal', 'Mid/later 2001 Models (insidegal)', ModelVersion.Demo, SFADEMO_GAME_INFO, ['insidegal']),
 'Full World Maps (experimental)',
 new SFAFullFinalWorldSceneDesc('Full Final World'),
 new SFAFullFinalWorldSceneDesc('Full Kiosk World', SFADEMO_GAME_INFO),
@@ -422,7 +422,6 @@ new SFAWorldSceneDesc('dragbot', 'dragrockbot', 52, 'Kiosk: Dragon Rock Bot', SF
     new SFAWorldSceneDesc('gpshrine', 'gpshrine', 34, 'Krazoa Shrine (Test of Knowledge)'),
     new SFAWorldSceneDesc('dbshrine', 'dbshrine', 39, 'Krazoa Shrine (Test of Strength)'),
     new SFAWorldSceneDesc('nwshrine', 'nwshrine', 40, 'Krazoa Shrine (Scales Encounter)'),
-    // FIXME: which map is linka?
     new SFAWorldSceneDesc('linkb', 'linkb', 56, 'Ice Mountain Link 2'),
     new SFAWorldSceneDesc('linkc', 'linkc', 67, 'SnowHorn Wastes Link'),
     new SFAWorldSceneDesc('linkd', 'linkd', 68, 'DarkIce Mines Mineshaft'),

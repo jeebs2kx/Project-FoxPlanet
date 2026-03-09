@@ -13,7 +13,6 @@ import * as Viewer from '../viewer.js';
 import { TextureMapping } from '../TextureHolder.js';
 import { GfxRenderCache } from '../gfx/render/GfxRenderCache.js';
 
-// --- N64 BIN DECODER ---
 function decodeRareN64Texture(data: DataView): { width: number, height: number, cms: number, cmt: number, pixelFormat: number, pixels: Uint8Array } | null {
     const widthLo = data.getUint8(0x00);
     const heightLo = data.getUint8(0x01);
@@ -47,7 +46,7 @@ function decodeRareN64Texture(data: DataView): { width: number, height: number, 
     const width_bytes = Math.ceil((width * bpp) / 8);
     const deinterleaved = new Uint8Array(width_bytes * height);
 
-    if (pixelFormat === 0) { // RGBA32 uses a different odd-row swizzle: swap 8-byte halves inside each 16-byte chunk
+    if (pixelFormat === 0) { 
         const stride = 16;
         const half_stride = 8;
 
@@ -121,18 +120,15 @@ function decodeRareN64Texture(data: DataView): { width: number, height: number, 
         }
     }
 else if (pixelFormat === 1) { // RGBA16 (RGBA5551) - DP bins may be byte-swapped
-    // Heuristic: choose endianness that produces more opaque pixels (alpha bit = LSB).
     let aBE = 0, aLE = 0;
     const sampleCount = Math.min(pixelCount, 256);
 const fracBE = aBE / sampleCount;
 const fracLE = aLE / sampleCount;
 
-// Swapped garbage tends to look ~50% alpha=1. Real textures tend to be far from 0.5.
 const distBE = Math.abs(fracBE - 0.5);
 const distLE = Math.abs(fracLE - 0.5);
 
 const useLE = distLE > distBE;
-    // --- ADD THIS PART: choose RGB vs BGR ---
     function scoreSwapRB(swapRB: boolean): number {
         const sx = Math.max(1, (width / 16) | 0);
         const sy = Math.max(1, (height / 16) | 0);
@@ -172,7 +168,7 @@ const useLE = distLE > distBE;
 
     const scoreRGB = scoreSwapRB(false);
     const scoreBGR = scoreSwapRB(true);
-const swapRB = false; // FIX: N64 characters are standard RGB. Stop swapping Red and Blue!
+const swapRB = false; 
    // console.log(`[DP RGBA16] choose ${useLE ? "LE(swapped16)" : "BE"} + ${swapRB ? "BGR" : "RGB"} (scoreRGB=${scoreRGB} scoreBGR=${scoreBGR})`);
 
     // --- decode pixels ---
@@ -297,7 +293,7 @@ const swapRB = false; // FIX: N64 characters are standard RGB. Stop swapping Red
             rgba8[i * 4 + 3] = (p & 1) ? 255 : 0; 
         }
     } else {
-        return null; // Unknown format
+        return null;
     }
 
 return { width, height, cms, cmt, pixelFormat, pixels: rgba8 };
@@ -564,12 +560,10 @@ const DP_FORCE_MIRROR_S_TEXIDS = new Set<number>([
 ]);
 
 const DP_FORCE_MIRROR_T_TEXIDS = new Set<number>([
-  // put broken texId here if needed
 ]);
 export class SFATextureFetcher extends TextureFetcher {
     private texturesEnabled = true;
     private dpBinCache = new Map<number, SFATextureArray>();
-    // --- DP derived/tinted textures (per-facebatch variants) ---
 private dpDecoded = new Map<number, {
     width: number; height: number;
     pixelFormat: number;
@@ -582,7 +576,6 @@ private dpDerivedInfo = new Map<number, { baseId: number; r: number; g: number; 
 private dpDerivedKeyToId = new Map<string, number>();
 private dpNextDerivedId = -1;
 
-// Called by modelloader: get a "virtual" texId for (baseId + tint)
 public getDPTintedTexId(baseId: number, r: number, g: number, b: number): number {
     const key = `${baseId|0}_${r|0}_${g|0}_${b|0}`;
     const hit = this.dpDerivedKeyToId.get(key);
@@ -636,13 +629,13 @@ public getDPTintedTexId(baseId: number, r: number, g: number, b: number): number
 
             const decoded = decodeRareN64Texture(buf.createDataView());
             if (decoded && (texId === 2562 || texId === 2581 || texId === 2575 || texId === 2761 || texId === 2762)) {
-    console.warn(`[DP TEX DEBUG] texId=${texId} fmt=${decoded.pixelFormat} size=${decoded.width}x${decoded.height}`);
+   // console.warn(`[DP TEX DEBUG] texId=${texId} fmt=${decoded.pixelFormat} size=${decoded.width}x${decoded.height}`);
 }
 if (decoded) {
                 const device = cache.device;
  if (texId === 16 || texId === 17) {
                     for (let i = 0; i < decoded.pixels.length; i += 4) {
-                        decoded.pixels[i + 3] = 0; // Set Alpha to 0 (Invisible)
+                        decoded.pixels[i + 3] = 0; 
                     }
                 }               
                 const forceClampFace = DP_FACE_CLAMP_TEXIDS.has(texId);
@@ -652,7 +645,7 @@ if (decoded) {
                 let solidRight = 0;
                 let solidTop = 0;
                 let solidBottom = 0;
-                let invisibleCount = 0; // Tracks ONLY purely invisible space
+                let invisibleCount = 0; 
 
                 for (let y = 0; y < decoded.height; y++) {
                     for (let x = 0; x < decoded.width; x++) {
@@ -663,14 +656,12 @@ if (decoded) {
                         let a = decoded.pixels[i + 3];
 
                         // Krystal face-detail overlays from the GLB need their original alpha preserved.
-                        // Do NOT chroma-key / defringe / alpha-boost them.
+    
                         if (!preserveSoftAlpha) {
-                            // 1. Strict N64 "Blue Screen" Chroma-Key
                             if (b > 200 && r < 40 && g < 40) {
                                 a = 0;
                             }
 
-                            // 2. The Defringe Fix (Fixes blue halos on fences)
                             if (a === 0) {
                                 decoded.pixels[i + 0] = 0;
                                 decoded.pixels[i + 1] = 0;
@@ -680,14 +671,11 @@ if (decoded) {
                                 continue;
                             }
 
-                            // 3. Gentle Alpha Boost
-                            // Leaves faint pixels (<= 20) alone so light beams fade smoothly
                             if (a > 20 && a < 255) {
                                 a = Math.min(255, Math.floor(a * 1.2));
                                 decoded.pixels[i + 3] = a;
                             }
                         } else {
-                            // Keep original alpha exactly as decoded
                             decoded.pixels[i + 3] = a;
 
                             if (a === 0) {
@@ -696,7 +684,6 @@ if (decoded) {
                             }
                         }
 
-                        // 4. Record Solid Edge Connections
                         if (a > 50) {
                             if (x === 0) solidLeft++;
                             if (x === decoded.width - 1) solidRight++;
@@ -709,7 +696,6 @@ if (decoded) {
                 const gfxTexture = device.createTexture(makeTextureDescriptor2D(GfxFormat.U8_RGBA_NORM, decoded.width, decoded.height, 1));
                 device.uploadTextureData(gfxTexture, 0, [decoded.pixels]);
                 
-                // 5) N64 wrap modes (cms/cmt): 0=wrap, 1=mirror, 2=clamp, 3=mirror+clamp
                 const wrapFromN64 = (cm: number): GfxWrapMode => {
                     if (cm & 0x02) return GfxWrapMode.Clamp;
                     if (cm & 0x01) return GfxWrapMode.Mirror;
@@ -748,13 +734,11 @@ this.dpDecoded.set(texId, {
     cutoutLikely,
 });
 
-// Rebuild any derived/tinted textures that depend on this base texture.
 for (const [derivedId, info] of this.dpDerivedInfo) {
     if (info.baseId === texId)
         this.buildDPDerivedTexture(cache, derivedId);
 }
 
-                // IMPORTANT: DP BIN loader uploads ONLY base level (no mip chain), so DO NOT enable mip filtering / LOD.
                 const gfxSampler = cache.createSampler({
                     wrapS,
                     wrapT,
@@ -770,18 +754,15 @@ for (const [derivedId, info] of this.dpDerivedInfo) {
                     const fakeTex = cachedArray.textures[0];
                     fakeTex.updateTextureAndNotify(gfxTexture, decoded.width, decoded.height, gfxSampler);
                     
-                    // 1. Create the canvas for the UI
                     const canvas = document.createElement('canvas');
                     canvas.width = decoded.width;
                     canvas.height = decoded.height;
                     const ctx = canvas.getContext('2d')!;
 
-                    // 2. THE FIX: Satisfy ImageData constructor by creating a fresh Clamped array
                     const clampedData = new Uint8ClampedArray(decoded.pixels);
                     const imgData = new ImageData(clampedData, decoded.width, decoded.height);
                     ctx.putImageData(imgData, 0, 0);
 
-                    // 3. Register with the UI and attach the surface
                     if (!fakeTex.viewerTexture) {
                         fakeTex.viewerTexture = { 
                             name: `DP Texture #${texId}`, 
@@ -807,13 +788,11 @@ private buildDPDerivedTexture(cache: GfxRenderCache, derivedId: number) {
 
     const base = this.dpDecoded.get(info.baseId);
     if (!base) {
-        // Base not decoded yet → kick load; we'll rebuild when base finishes
         this.loadDPBinTexture(cache, info.baseId);
         return;
     }
 
-    // Only tint *intensity/alpha* formats AND only if it's likely a cutout.
-    // This prevents “random tinted walls/water” if something shares texId.
+ 
     const isIntensityFmt = (base.pixelFormat >= 2 && base.pixelFormat <= 6);
     const doTint = isIntensityFmt && base.cutoutLikely;
 
@@ -849,7 +828,6 @@ private buildDPDerivedTexture(cache: GfxRenderCache, derivedId: number) {
 }
     public getTextureArray(cache: GfxRenderCache, texId: number, useTex1: boolean): SFATextureArray | null {
         if (this.modelVersion === ModelVersion.DinosaurPlanet) {
-           // Derived/tinted DP virtual texIds are negative.
 if (texId < 0 && this.dpDerivedInfo.has(texId)) {
     if (this.dpBinCache.has(texId))
         return this.dpBinCache.get(texId)!;
@@ -990,7 +968,6 @@ if (texId < 0 && this.dpDerivedInfo.has(texId)) {
         let attempted = 0;
         let shown = 0;
 
-        // Iterate through all subdirs we have loaded
         for (const subdir in this.subdirTextureFiles) {
             const file = useTex1 ? this.subdirTextureFiles[subdir].tex1 : this.subdirTextureFiles[subdir].tex0;
             if (!file) continue;
@@ -998,7 +975,6 @@ if (texId < 0 && this.dpDerivedInfo.has(texId)) {
             const ids = file.listAllValidIds();
             for (const id of ids) {
                 attempted++;
-                // This triggers the decoder and pushes it to this.textureHolder
                 const texArray = file.getTextureArray(cache, id);
                 if (texArray) {
                     shown++;

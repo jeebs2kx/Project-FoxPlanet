@@ -61,8 +61,8 @@ interface DisplayListInfo {
   offset: number;
   size: number;
   aabb?: AABB;
-  specialBitAddress?: number; // Command bit address for fur/grass or water
-  sortLayer?: number; // Used in map blocks only
+  specialBitAddress?: number; 
+  sortLayer?: number; 
 }
 
 function parseDisplayListInfo(data: DataView): DisplayListInfo {
@@ -77,7 +77,7 @@ function parseDisplayListInfo(data: DataView): DisplayListInfo {
       data.getInt16(0xe) / 8,
       data.getInt16(0x10) / 8,
     ),
-    specialBitAddress: data.getUint16(0x14), // Points to fur and water shapes
+    specialBitAddress: data.getUint16(0x14), 
     sortLayer: data.getUint8(0x18), // Used in map blocks only
   }
 }
@@ -97,7 +97,7 @@ interface FineSkinningPiece {
   weightsBlockCount: number;
   numVertices: number;
   skinMeOffset: number;
-  skinSrcBlockCount: number; // A block is 32 bytes
+  skinSrcBlockCount: number; 
 }
 
 function parseFineSkinningConfig(data: DataView): FineSkinningConfig {
@@ -127,11 +127,6 @@ type BuildMaterialFunc = (
   isMapBlock: boolean,
 ) => SFAMaterial;
 
-// Generate vertex attribute tables.
-// The game initializes the VATs upon startup and uses them unchanged for nearly
-// everything.
-// The final version of the game has a minor difference in VAT 5 compared to beta
-// and older versions.
 function generateVat(old: boolean, nbt: boolean): GX_VtxAttrFmt[][] {
   const vat: GX_VtxAttrFmt[][] = nArray(8, () => []);
   for (let i = 0; i <= GX.Attr.MAX; i++) {
@@ -197,7 +192,7 @@ function generateVat(old: boolean, nbt: boolean): GX_VtxAttrFmt[][] {
 const VAT = generateVat(false, false);
 const VAT_NBT = generateVat(false, true);
 const OLD_VAT = generateVat(true, false);
-const OLD_VAT_NBT = generateVat(true, true); // ← add this
+const OLD_VAT_NBT = generateVat(true, true); 
 
 const FIELDS: any = {
   [ModelVersion.AncientMap]: {
@@ -324,7 +319,7 @@ const FIELDS: any = {
     dlInfoCount: 0xc9, //NEW
     dlInfoSize: 0x34,
     numListBits: 8,
-    bitsOffsets: [0xbc], // Whoa... (might be BC, then below C0)
+    bitsOffsets: [0xbc], 
     bitsByteCounts: [0xc0],
     oldVat: true,
     hasYTranslate: false,
@@ -352,11 +347,8 @@ const FIELDS: any = {
     dlInfoOffset: 0x68,
     dlInfoCount: 0x9f,
     dlInfoSize: 0x34,
-    // FIXME: Yet another format occurs in sfademo/frontend!
-    // numListBits: 6, // 6 is needed for mod12; 8 is needed for early crfort?!
     numListBits: 8, // ??? should be 6 according to decompilation of demo????
     bitsOffsets: [0x74], // Whoa...
-    // FIXME: There are three bitstreams, probably for opaque and transparent objects
     bitsByteCounts: [0x84],
     oldVat: true,
     hasYTranslate: false,
@@ -676,29 +668,6 @@ export function loadModel(
     return loadDinosaurPlanetModel(data, texFetcher, materialFactory);
   }
 // ===== Dinosaur Planet (N64-style) loader =====
-// Parses mod22.bin-like chunks: header + Vtx(16B) + tri(8B local 0..31) + batch table (0x18).
-
-function readU32BE(d: DataView, o: number) { return d.getUint32(o, false); }
-function readU16BE(d: DataView, o: number) { return d.getUint16(o, false); }
-function readS16BE(d: DataView, o: number) { return d.getInt16(o, false); }
-
-function rgba8ToRgba4_u16BE(r: number, g: number, b: number, a: number): number {
-  const R = (r >>> 4) & 0xF;
-  const G = (g >>> 4) & 0xF;
-  const B = (b >>> 4) & 0xF;
-  const A = (a >>> 4) & 0xF;
-  return (R << 12) | (G << 8) | (B << 4) | A;
-}
-
-type DPBatch = {
-  flags: number;
-  materialId: number;
-  vStart: number; vEnd: number;
-  tStart: number; tEnd: number;
-};
-
-type DPTri = { flip: boolean; i0: number; i1: number; i2: number };
-
 
 
 function loadDinosaurPlanetModel(
@@ -714,24 +683,16 @@ function loadDinosaurPlanetModel(
     const isCharacter = ptr0C > ptr00;
 
 if (isCharacter) {
-  // ==========================================
   // DINOSAUR PLANET CHARACTER PARSER
-  // Fixes:
-  //  - Safe handling of 0xDE/0xDF (no UI lockups)
-  //  - PATCH invalid facebatches (materialID=-1) to last valid material
-  //    so their triangles don't get skipped (fixes "missing bits")
-  // ==========================================
   model.isMapBlock = false;
 
 const DP_CHAR_DEBUG = true;
 const DP_LOG_ALL_FACEBATCH_TEXIDS = true;
 const DP_HIDE_TEXIDS_FOR_TEST = new Set<number>([]);
 const DP_NO_TINT_TEXIDS = new Set<number>([237, 2576]);
-  const DP_CHAR_EXEC_LIMIT = 200000;   // max executed commands total (across sub-DLs)
-  const DP_CHAR_STACK_LIMIT = 32;      // max nested calls
-  const DP_CHAR_LOG_LIMIT = 250;       // clamp noisy logs
-
-  // N64 geometry mode bit (F3DEX2)
+  const DP_CHAR_EXEC_LIMIT = 200000;   
+  const DP_CHAR_STACK_LIMIT = 32;      
+  const DP_CHAR_LOG_LIMIT = 250;      
   const G_LIGHTING = 0x00020000;
 
   const opCounts = new Uint32Array(256);
@@ -754,14 +715,13 @@ const DP_NO_TINT_TEXIDS = new Set<number>([237, 2576]);
   const faceBatchCount = Math.max(0, Math.min(faceBatchCountRaw, 512));
 
   if (DP_CHAR_DEBUG) {
-    console.warn(
-      `[DP_CHAR] matOff=0x${matOff.toString(16)} vtxOff=0x${vtxOff.toString(16)} faceOff=0x${faceOff.toString(16)} ` +
-      `dlOff=0x${dlOff.toString(16)} jointOff=0x${jointOff.toString(16)} dlLength=${dlLength} joints=${jointCount} ` +
-      `texCount=${textureCount} faceBatches=${faceBatchCount}`
-    );
+   // console.warn(
+    //  `[DP_CHAR] matOff=0x${matOff.toString(16)} vtxOff=0x${vtxOff.toString(16)} faceOff=0x${faceOff.toString(16)} ` +
+    //  `dlOff=0x${dlOff.toString(16)} jointOff=0x${jointOff.toString(16)} dlLength=${dlLength} joints=${jointCount} ` +
+   //   `texCount=${textureCount} faceBatches=${faceBatchCount}`
+   // );
   }
 
-  // --- helpers ---
   const rgb565ToRGBA8 = (c: number) => {
     const r5 = (c >>> 11) & 0x1F;
     const g6 = (c >>> 5)  & 0x3F;
@@ -773,11 +733,9 @@ const DP_NO_TINT_TEXIDS = new Set<number>([237, 2576]);
   };
   const hex8 = (x: number) => x.toString(16).padStart(2, '0');
 
-  // --- DP lighting helpers (when G_LIGHTING is ON, vtx[12..14] are normals) ---
   const toS8 = (u: number) => (u << 24) >> 24;
   const clamp255 = (v: number) => (v < 0 ? 0 : v > 255 ? 255 : v | 0);
 
-  // simple directional light (good-enough for DP)
   const Lx = 0.25, Ly = 0.85, Lz = 0.45;
   const Llen = Math.hypot(Lx, Ly, Lz) || 1;
   const L0 = Lx / Llen, L1 = Ly / Llen, L2 = Lz / Llen;
@@ -798,7 +756,6 @@ const DP_NO_TINT_TEXIDS = new Set<number>([237, 2576]);
     };
   }
 
-  // --- MATERIAL TABLE (8 bytes each) ---
   type DPMat = {
     texId: number;
     texW: number;
@@ -841,12 +798,10 @@ const DP_NO_TINT_TEXIDS = new Set<number>([237, 2576]);
 
     if (DP_CHAR_DEBUG) {
       console.warn(
-        `[DP_CHAR][MAT] matIdx=${i} texId=${texId} tex=${texW}x${texH} tint=(${tint.r},${tint.g},${tint.b},255) raw=[${rawBytes}]`
+      //  `[DP_CHAR][MAT] matIdx=${i} texId=${texId} tex=${texW}x${texH} tint=(${tint.r},${tint.g},${tint.b},255) raw=[${rawBytes}]`
       );
     }
   }
-
-  // --- SKELETON (optional) ---
   model.joints = [];
   model.skeleton = new Skeleton();
   model.invBindTranslations = nArray(jointCount, () => vec3.create());
@@ -892,7 +847,7 @@ const DP_NO_TINT_TEXIDS = new Set<number>([237, 2576]);
     renderFlags: number;
     tintR: number; tintG: number; tintB: number; tintA: number;
     tintEnabled: boolean;
-    _wasInvalidMat?: boolean; // debug
+    _wasInvalidMat?: boolean; 
     tris: { i0: number; i1: number; i2: number }[];
   }
 
@@ -925,11 +880,6 @@ const DP_NO_TINT_TEXIDS = new Set<number>([237, 2576]);
   }
 
   facebatches.sort((a, b) => a.dlStartCmd - b.dlStartCmd);
-
-  // ------------------------------
-  // FIX #1: Patch invalid facebatches (materialID=-1) to last known good
-  // This directly prevents "missing bits" caused by skipping fb.materialID<0.
-  // ------------------------------
   let patchedFB = 0;
   let lastGood: Facebatch | null = null;
 
@@ -964,26 +914,26 @@ const DP_NO_TINT_TEXIDS = new Set<number>([237, 2576]);
   }
 
   if (DP_CHAR_DEBUG && patchedFB > 0) {
-    console.warn(`[DP_CHAR][FB_PATCH] patched ${patchedFB} invalid facebatches (materialID=-1) to last-good material`);
+  //  console.warn(`[DP_CHAR][FB_PATCH] patched ${patchedFB} invalid facebatches (materialID=-1) to last-good material`);
     // show a few patched entries
     let shown = 0;
     for (let i = 0; i < facebatches.length && shown < 8; i++) {
       const fb = facebatches[i];
       if (fb._wasInvalidMat) {
-        console.warn(`  patched fb@cmd=${fb.dlStartCmd} -> texId=${fb.materialID} tex=${fb.texW}x${fb.texH} flags=0x${fb.renderFlags.toString(16)}`);
+      //  console.warn(`  patched fb@cmd=${fb.dlStartCmd} -> texId=${fb.materialID} tex=${fb.texW}x${fb.texH} flags=0x${fb.renderFlags.toString(16)}`);
         shown++;
       }
     }
   }
 
   if (DP_CHAR_DEBUG) {
-    console.warn(`[DP_CHAR] Facebatches (first 10):`);
+  //  console.warn(`[DP_CHAR] Facebatches (first 10):`);
     for (let i = 0; i < Math.min(10, facebatches.length); i++) {
       const fb = facebatches[i];
-      console.warn(
-        `  #${i} cmd=${fb.dlStartCmd} texId=${fb.materialID} tex=${fb.texW}x${fb.texH} ` +
-        `tint=(${fb.tintR},${fb.tintG},${fb.tintB},255) flags=0x${fb.renderFlags.toString(16)}`
-      );
+     // console.warn(
+      //  `  #${i} cmd=${fb.dlStartCmd} texId=${fb.materialID} tex=${fb.texW}x${fb.texH} ` +
+     //   `tint=(${fb.tintR},${fb.tintG},${fb.tintB},255) flags=0x${fb.renderFlags.toString(16)}`
+     // );
     }
   }
 
@@ -1039,13 +989,8 @@ const DP_NO_TINT_TEXIDS = new Set<number>([237, 2576]);
 function __dpIsPlausibleDL(off: number): boolean {
   off = off >>> 0;
 
-  // MUST be command-aligned
   if ((off & 7) !== 0) return false;
-
-  // CRITICAL: never treat anything before the main DL blob as a displaylist
-  // (prevents 0x80000002 -> 0x2)
   if (off < (dlOff >>> 0)) return false;
-
   if (off + 8 > (data.byteLength >>> 0)) return false;
 
   const op = data.getUint16(off);
@@ -1056,18 +1001,13 @@ function __dpResolveDLTarget(addr: number): number | null {
   addr = addr >>> 0;
 
   // --- DP index-form jumps ---
-  // Many DP lists use G_DL with w1 = small number meaning "command index into main DL".
-  // Also seen as 0x800000NN (KSEG0 + index).
   const isKseg = (addr & 0xFF000000) === 0x80000000;
   const idx = isKseg ? (addr & 0x00FFFFFF) : addr;
 
   if (idx !== 0 && idx < 0x1000) {
     const tgt = ((dlOff >>> 0) + (idx * 8)) >>> 0;
     if (__dpIsPlausibleDL(tgt)) return tgt;
-    // fall through (maybe it's not an index in this file)
   }
-
-  // --- segmented pointer form ---
   const seg = (addr >>> 24) & 0xFF;
   const off24 = addr & 0x00FFFFFF;
 
@@ -1079,7 +1019,6 @@ function __dpResolveDLTarget(addr: number): number | null {
     }
   }
 
-  // --- absolute pointer form ---
   if (__dpIsPlausibleDL(addr)) return addr;
 
   return null;
@@ -1165,7 +1104,6 @@ function __dpResolveDLTarget(addr: number): number | null {
       if (seg === 0x03) currentMtxIdx = (((w1 & 0x00FFFFFF) / 64) | 0);
 
     } else if (opcode === 0xDE) {
-      // Keep safe: these small addresses are NOT real DL pointers in your files
       const push = (w0 >>> 16) & 0xFF;
       const tgt = __dpResolveDLTarget(w1);
       if (tgt !== null) {
@@ -1195,7 +1133,6 @@ function __dpResolveDLTarget(addr: number): number | null {
         pc = ret;
         jumped = true;
       } else {
-        // End main list
         if (DP_CHAR_DEBUG && execCmdIdx + 1 < dlLength) {
    //       console.warn(`[DP_CHAR] EndDL at cmd=${execCmdIdx} (dlLength=${dlLength})`);
         }
@@ -1203,16 +1140,12 @@ function __dpResolveDLTarget(addr: number): number | null {
       }
 
     } else if (opcode === 0x01) {
-      // G_VTX
       sawAnyVtx = true;
-
       const num = (w0 >>> 12) & 0xFF;
       const v0_encoded = (w0 >>> 1) & 0x7F;
       const v0 = (v0_encoded - num) & 0x3F;
-
       const seg = (w1 >>> 24) & 0xFF;
       const off24 = (w1 & 0x00FFFFFF) >>> 0;
-
       let segBase = segmentBases[seg] >>> 0;
       if (segBase === 0 && seg !== 0x00) {
         segBase = vtxOff >>> 0;
@@ -1239,7 +1172,6 @@ function __dpResolveDLTarget(addr: number): number | null {
       for (let v = 0; v < num; v++) {
         const romIdx = baseVtxIndex + v;
         const cacheIdx = (v0 + v) & 0x3F;
-
         const fbFlags = currentFb ? (currentFb.renderFlags & 0xFF) : 0;
         const matKey  = currentFb ? (currentFb.materialID | 0) : -1;
         const texWKey = currentFb ? (currentFb.texW | 0) : 0;
@@ -1410,7 +1342,6 @@ if (lightingEnabled) {
 
   (model as any).bbox = new AABB(minX, minY, minZ, maxX, maxY, maxZ);
 
-  // --- GX setup ---
   const vcd: GX_VtxDesc[] = nArray(GX.Attr.MAX + 1, () => ({ type: GX.AttrType.NONE }));
   vcd[GX.Attr.POS].type = GX.AttrType.INDEX16;
   vcd[GX.Attr.CLR0].type = GX.AttrType.INDEX16;
@@ -1439,7 +1370,7 @@ if (lightingEnabled) {
     let patchedUsed = 0;
 
 for (const fb of facebatches) {
-  if (fb.tris.length === 0) continue; // <-- DO NOT skip on materialID anymore
+  if (fb.tris.length === 0) continue;
 
   if (!(model as any).__dpLoggedFaceTexs) (model as any).__dpLoggedFaceTexs = new Set<string>();
 
@@ -1448,13 +1379,13 @@ for (const fb of facebatches) {
     if (!(model as any).__dpLoggedFaceTexs.has(logKey)) {
       (model as any).__dpLoggedFaceTexs.add(logKey);
       console.warn(
-        `[DP FB DEBUG] texId=${fb.materialID} tex=${fb.texW}x${fb.texH} tint=(${fb.tintR},${fb.tintG},${fb.tintB},${fb.tintA}) flags=0x${fb.renderFlags.toString(16)}`
+      //  `[DP FB DEBUG] texId=${fb.materialID} tex=${fb.texW}x${fb.texH} tint=(${fb.tintR},${fb.tintG},${fb.tintB},${fb.tintA}) flags=0x${fb.renderFlags.toString(16)}`
       );
     }
   }
 
   if (DP_HIDE_TEXIDS_FOR_TEST.has(fb.materialID)) {
-    console.warn(`[DP TEST HIDE] skipping texId=${fb.materialID}`);
+   // console.warn(`[DP TEST HIDE] skipping texId=${fb.materialID}`);
     continue;
   }
 
@@ -1555,24 +1486,9 @@ for (const fb of facebatches) {
   model.sharedModelShapes = model.createModelShapes();
   return model;
 
-
-
-
-
-
-
-
     } else {
-        // ==========================================
         // DINOSAUR PLANET MAP BLOCK PARSER
-        // ==========================================
-       // ==========================================
-// DINOSAUR PLANET MAP BLOCK PARSER  (FIXED)
-// - DO NOT use SFA water material
-// - DO NOT push into modelShapes.waters (SFA path)
-// - MUCH stricter "water" detection
-// - Optional UV scroll for water / waterfall-ish translucent
-// ==========================================
+
 model.isMapBlock = true;
 
 const matOff = data.getUint32(0x00);
@@ -1730,10 +1646,8 @@ model.createModelShapes = () => {
     shapes.shapes[1] = [];
     shapes.shapes[2] = [];
 
-    // STRICT DP water modes (same ones you were using, but now gated properly)
     const DP_WATER_DRAW_MODES = new Set<number>([0x00, 0x05, 0x14, 0x15, 0x18, 0x19,]);
-// Scroll only these DP textures (keeps beams/vines from scrolling).
-// Put your known water + waterfall texIds here.
+
 const DP_SCROLL_WATER_TEXIDS = new Set<number>([
   3561,3569, 3570,2715, 2514, 862,    3553,3563,   2248,1912,3604,2292, 1682
 ]);
@@ -1742,105 +1656,82 @@ const DP_SCROLL_WATERFALL_TEXIDS = new Set<number>([
  358,123 ,253,254,368,368,1127, 3560,510,    3563,3562,1941,2750,2048,270, 
 ]);
 
-// Optional: log once per texture that *would* have scrolled under the old heuristic
 const __dpScrollCandidateLogged = new Set<number>();
-  for (const b of batches) {
+for (const b of batches) {
             const isSoftFormat = (b.pixelFormat !== 1 && b.pixelFormat !== 7 && b.pixelFormat !== 8);
             const isKnownCutoutTex = [3,6,31,61,119,164,289,349,351,354,355,544,356,2087,3195,1101,1028,1122,1125,1050,1049,1051,1066,1075,1423,1896,1897,1888,1889].includes(b.materialId);
 
-            // Cutouts first (never water)
-            const wantsCutout = !b.isOpaque && (isKnownCutoutTex || (b.drawMode & 0x80) !== 0);
-
-            // Terrain blend: 2-layer blend, NOT framebuffer transparency
-            const wantsTerrainBlend = (b.blendMaterialId !== -1) && ((b.drawMode & 0x40) !== 0);
-
-            // Water blend: has blend tex, soft format, semi-trans bit, and NOT terrain-blend
-            const wantsWaterBlend = (b.blendMaterialId !== -1) && isSoftFormat && !wantsTerrainBlend && ((b.drawMode & 0x04) !== 0);
-
-            // Standalone water surface: soft format + known water draw modes
-            const wantsWaterSurface = (b.blendMaterialId === -1) && isSoftFormat && DP_WATER_DRAW_MODES.has(b.drawMode);
-
-            b.isWater = !wantsCutout && (wantsWaterBlend || wantsWaterSurface);
-
-            // Only scroll if it's actual water OR texture is in an explicit allow-list.
-            const allowScroll =
-                b.isWater ||
-                DP_SCROLL_WATER_TEXIDS.has(b.materialId) ||
-                DP_SCROLL_WATER_TEXIDS.has(b.blendMaterialId) ||
-                DP_SCROLL_WATERFALL_TEXIDS.has(b.materialId) ||
-                DP_SCROLL_WATERFALL_TEXIDS.has(b.blendMaterialId);
-
-            b.scrollPxU = 0;
-            b.scrollPxV = allowScroll ? (b.isWater ? -1 : 2) : 0;
-
-            // Build shader layers
-            const layers: any[] = [];
-            let attrFlags = ShaderAttrFlags.CLR;
-
-            if (b.materialId !== -1) {
-                layers.push({ texId: b.materialId, tevMode: 0, enableScroll: 0 });
-                attrFlags |= (ShaderAttrFlags as any).TEX0;
-            }
-            if (b.blendMaterialId !== -1) {
-                layers.push({ texId: b.blendMaterialId, tevMode: wantsTerrainBlend ? 9 : 0, enableScroll: 0 });
-                attrFlags |= (ShaderAttrFlags as any).TEX1;
-            }
-
-            // Decide pass + flags
-            let shaderFlags = 0;
-            let targetList = 0;
-
-            const hasSemiTrans = (b.drawMode & 0x04) !== 0;
-            const hasTexBlend  = (b.drawMode & 0x40) !== 0;
-
-            const wantsTrueTrans = (!wantsCutout && (!b.isOpaque || hasSemiTrans || hasTexBlend || b.isWater));
-
-            if (wantsTrueTrans) {
-                shaderFlags |= 0x40000000; // your transparent bit
-                targetList = 1;
-            } else if (wantsCutout) {
-                shaderFlags |= ShaderFlags.AlphaCompare;
-                targetList = 0;
-            } else {
-                shaderFlags |= 0x10; // your opaque marker
-                targetList = 0;
-            }
-
-            shaderFlags |= ShaderFlags.Fog;
-
-            // --- THE SURGICAL BLEND FIX ---
-            // We set normalFlags to 0 by default, exactly like your original working code did.
-            // This guarantees the portals and walls will not vanish.
-            let normalFlags = 0 as NormalFlags; 
-
+            // 1. SCAN ALPHA (Data Gathering)
             let aMin = 255;
             for (let vi = b.vStart; vi < b.vEnd; vi++) {
                 const a = clrDV.getUint8(vi * 4 + 3);
                 if (a < aMin) aMin = a;
             }
-            
-            const isDecalBlend = (b.blendMaterialId === -1 && b.drawMode === 0x0b && aMin === 0);
 
-            // We ONLY change the normal flags if it is explicitly a dirt blend.
-            // Portals and walls will completely bypass this if statement.
-            if (isDecalBlend || hasTexBlend) {
-                shaderFlags |= 0x40000000; 
-                normalFlags = (NormalFlags.HasVertexColor | NormalFlags.HasVertexAlpha) as NormalFlags;
+            const isImposterWall = [1157, 1156, 1146, 1151, 1165, 1170, 1145, 1147, 1152, 1135, 1134].includes(b.materialId);
+            // Meshes that vanish head-on - Force them to stay Angle-Safe
+            const isPortal = [2048, 2514, 2510].includes(b.materialId);
+
+            const hasSemiTrans = (b.drawMode & 0x04) !== 0;
+            const hasTexBlend  = (b.drawMode & 0x40) !== 0;
+            const wantsCutout = !b.isOpaque && (isKnownCutoutTex || (b.drawMode & 0x80) !== 0);
+            const wantsWaterBlend = (b.blendMaterialId !== -1) && isSoftFormat && !hasTexBlend && hasSemiTrans;
+            const wantsWaterSurface = (b.blendMaterialId === -1) && isSoftFormat && DP_WATER_DRAW_MODES.has(b.drawMode);
+            b.isWater = !wantsCutout && (wantsWaterBlend || wantsWaterSurface);
+
+            let shaderFlags = 0;
+            let targetList = 0;
+
+            const wantsTrueTrans = (!wantsCutout && (!b.isOpaque || hasSemiTrans || hasTexBlend || b.isWater));
+            const isDecalBlend = !isImposterWall && (b.blendMaterialId === -1 && b.drawMode === 0x0b && aMin === 0);
+
+            if (wantsTrueTrans || isDecalBlend) {
+                shaderFlags |= 0x40000000;
+                targetList = 1;
+            } else if (wantsCutout) {
+                shaderFlags |= ShaderFlags.AlphaCompare;
+                targetList = 0;
+            } else {
+                shaderFlags |= 0x10;
+                targetList = 0;
             }
-            // -------------------------------
+            if (isImposterWall) {
+                shaderFlags = (shaderFlags & ~0x40000000) | 0x10;
+                targetList = 0;
+            }
 
-            // Add scroll slot
+            shaderFlags |= ShaderFlags.Fog;
+
+            // 4. VERTEX FLAG LOGIC (The Angle & Blend Fix)
+            let normalFlags = NormalFlags.HasVertexColor; // Keep walls/terrain visible
+
+            if (isPortal) {
+                // Portals get 0 to stop them vanishing from the front
+                normalFlags = 0 as NormalFlags; 
+            } else if (isDecalBlend || hasTexBlend) {
+                normalFlags |= NormalFlags.HasVertexAlpha;
+            }
+
+            const layers: any[] = [];
+            let attrFlags = ShaderAttrFlags.CLR;
+            if (b.materialId !== -1) {
+                layers.push({ texId: b.materialId, tevMode: 0, enableScroll: 0 });
+                attrFlags |= (ShaderAttrFlags as any).TEX0;
+            }
+            if (b.blendMaterialId !== -1) {
+                layers.push({ texId: b.blendMaterialId, tevMode: hasTexBlend ? 9 : 0, enableScroll: 0 });
+                attrFlags |= (ShaderAttrFlags as any).TEX1;
+            }
+
+            const allowScroll = b.isWater || DP_SCROLL_WATER_TEXIDS.has(b.materialId) || DP_SCROLL_WATERFALL_TEXIDS.has(b.materialId);
+            b.scrollPxU = 0;
+            b.scrollPxV = allowScroll ? (b.isWater ? -1 : 2) : 0;
+
             const addScroll = (layer: any, texW: number, texH: number) => {
                 if (!layer || (b.scrollPxU === 0 && b.scrollPxV === 0)) return;
-                const dxPerFrame = ((b.scrollPxU << 16) / Math.max(1, texW)) | 0;
-                const dyPerFrame = ((b.scrollPxV << 16) / Math.max(1, texH)) | 0;
-                const slot = (materialFactory as any).addScrollSlot?.(dxPerFrame, dyPerFrame);
-                if (slot !== undefined) {
-                    layer.enableScroll = 1;
-                    layer.scrollSlot = slot;
-                }
+                const slot = (materialFactory as any).addScrollSlot?.(((b.scrollPxU << 16) / Math.max(1, texW)) | 0, ((b.scrollPxV << 16) / Math.max(1, texH)) | 0);
+                if (slot !== undefined) { layer.enableScroll = 1; layer.scrollSlot = slot; }
             };
-
             if (layers.length > 0) addScroll(layers[0], b.texW, b.texH);
             if (layers.length > 1) addScroll(layers[1], b.blendTexW, b.blendTexH);
 
@@ -1854,15 +1745,13 @@ const __dpScrollCandidateLogged = new Set<number>();
 
             const material = materialFactory.buildMapMaterial(shader, texFetcher);
 
-            // UV/VBO Builder (Untouched Original)
             const tex0DV = new DataView(new ArrayBuffer(totalVerts * 4));
             const tex1DV = new DataView(new ArrayBuffer(totalVerts * 4));
             for (let ti = b.tStart; ti < b.tEnd; ti++) {
                 let { i0, i1, i2 } = tris[ti];
                 for (const idx of [b.vStart + i0, b.vStart + i1, b.vStart + i2]) {
                     const vo = vtxOff + idx * 16;
-                    const s = data.getInt16(vo + 8, false);
-                    const t = data.getInt16(vo + 10, false);
+                    const s = data.getInt16(vo + 8, false), t = data.getInt16(vo + 10, false);
                     tex0DV.setInt16(idx * 4 + 0, Math.round(s * (32.0 / b.texW)), false);
                     tex0DV.setInt16(idx * 4 + 2, Math.round(t * (32.0 / b.texH)), false);
                     tex1DV.setInt16(idx * 4 + 0, Math.round(s * (32.0 / b.blendTexW)), false);
@@ -1905,7 +1794,6 @@ model.sharedModelShapes = model.createModelShapes();
 return model;
     }
 }
-// ===== end DP loader =====
 
   const model = new Model(version);
   let fields = FIELDS[version];
@@ -1920,7 +1808,6 @@ return model;
 
   function logAllFields(data: DataView, fields: any) {
    // console.log('--- Detailed Dumping model fields ---');
-    // Do NOT attempt to read these from the file; they are immediate constants in the table.
     const IMMEDIATE_KEYS = new Set<string>([
       'numListBits','dlInfoSize','isMapBlock','isFinal','isBeta','oldVat',
       'hasNormals','hasBones','hasYTranslate','isfinal','shaderFields'
@@ -1966,8 +1853,6 @@ return model;
   }
 
   logAllFields(data, fields);
-
-  // ===== PROBE #1: shader table boundaries & stride =====
   const FILE_LEN = data.byteLength;
   const shaderOff = data.getUint32(fields.shaderOffset);
   const shaderCnt = data.getUint8(fields.shaderCount);
@@ -1977,13 +1862,11 @@ return model;
    // `[PROBE1] shaderOff=0x${shaderOff.toString(16)} shaderCnt=${shaderCnt} dlInfoOff=0x${dlInfoOff.toString(16)} bits0Off=0x${bits0Off.toString(16)} fileLen=0x${FILE_LEN.toString(16)}`
 //  );
 
-  // Candidate: shader table is contiguous up to the start of dlInfo.
   let shaderSpan = (dlInfoOff > shaderOff && shaderCnt) ? (dlInfoOff - shaderOff) : 0;
   let shaderStride = shaderCnt ? Math.floor(shaderSpan / shaderCnt) : 0;
   let shaderRema = shaderCnt ? (shaderSpan % shaderCnt) : 0;
  // console.warn(`[PROBE1] shaderStrideCandidate=${shaderStride} (0x${shaderStride.toString(16)}) remainder=${shaderRema}`);
 
-  // Quick peek at first two shader entries using that stride (just dump first 16 bytes of each).
   for (let i = 0; i < Math.min(shaderCnt, 2); i++) {
     const base = shaderOff + i * shaderStride;
     const row: string[] = [];
@@ -1993,14 +1876,11 @@ return model;
    // console.warn(`[PROBE1] shader[${i}] @0x${base.toString(16)}: ${row.join(' ')}`);
   }
 
-  // ===== PROBE #2: try dlInfo sizes and score plausibility =====
   const dlCnt = data.getUint8(fields.dlInfoCount);
   const dlBase = dlInfoOff;
-  // Known strides used across SFA builds to test:
   const dlStrideCandidates = [0x1C, 0x20, 0x24, 0x28, 0x30, 0x34, 0x38, 0x3C, 0x40];
 
   function readDl(off: number, stride: number) {
-    // Current Demo guess: offset @ +0x00 (u32 BE), size @ +0x04 (u16 BE).
     const o = data.getUint32(off, false);
     const s = data.getUint16(off + 0x04, false);
     return { o, s };
@@ -2025,7 +1905,6 @@ return model;
    // );
   }
 
-  // ===== PROBE #3: hex peek of dlInfo head =====
   if (dlBase && dlBase < FILE_LEN) {
     const dumpLen = Math.min(0x80, FILE_LEN - dlBase);
     let line = '';
@@ -2052,9 +1931,6 @@ return model;
     model.originalNrmBuffer = dataSubarray(data, nrmOffset, nrmCount * ((normalFlags & NormalFlags.NBT) ? 9 : 3));
   }
 
-  // --- Guard: some demo objects advertise fewer normals than are indexed ---
-  // If normals are present but the buffer is smaller than a 1:1 map with POS,
-  // pad by repeating the last normal so indices don’t run OOB in the VTX loader.
   if (fields.hasNormals && model.originalNrmBuffer.byteLength > 0) {
     const nrmStride = (normalFlags & NormalFlags.NBT) ? 9 : 3;
     const needed = (data.getUint16(fields.posCount) >>> 0) * nrmStride;
@@ -2134,7 +2010,6 @@ return model;
     model.hasBetaFineSkinning = model.hasFineSkinning && version === ModelVersion.Beta;
   }
 
-  // Pick base VAT and deep-clone so tweaks don’t leak across models
   const baseVat = (normalFlags & NormalFlags.NBT)
     ? (fields.oldVat ? OLD_VAT_NBT : VAT_NBT)
     : (fields.oldVat ? OLD_VAT : VAT);
@@ -2145,7 +2020,6 @@ return model;
     compCnt: fmt.compCnt,
   })));
 
-  // Old (Demo/Beta) **object** models that use NBT need POS 1/8 quantization to avoid “exploded” geometry.
   if (fields.oldVat && !fields.isMapBlock && (normalFlags & NormalFlags.NBT)) {
     for (const r of [5, 6, 7])
       vat[r][GX.Attr.POS].compShift = 3;
@@ -2177,7 +2051,6 @@ return model;
   }
   //console.log(`texids: ${texIds}`);
 
-  // Declare color offset and count first
   const clrOffset = data.getUint32(fields.clrOffset);
   const clrCount = data.getUint16(fields.clrCount);
   //console.log(`Loading ${clrCount} colors from 0x${clrOffset.toString(16)}`);
@@ -2235,7 +2108,7 @@ const texcoordBuffer = dataSubarray(data, texcoordOffset);
     const jointOffset = data.getUint32(fields.jointOffset);
     jointCount = data.getUint8(fields.jointCount);
    // console.log(`Loading ${jointCount} joints from offset 0x${jointOffset.toString(16)}`);
-    hasSkinning = jointCount > 0; // ← IMPORTANT: don’t enable skinning with 0 joints.
+    hasSkinning = jointCount > 0; 
 
     model.joints = [];
     if (jointCount > 0) {
@@ -2253,9 +2126,7 @@ const texcoordBuffer = dataSubarray(data, texcoordOffset);
       if (fields.weightOffset !== undefined) {
         const weightOffset = data.getUint32(fields.weightOffset);
         const weightCount = data.getUint8(fields.weightCount);
-        // Guard: many demo objects have weightCount set but the table is not present (offset 0).
-        // Also guard bounds to avoid reading random memory when values are junk.
-        const bytesNeeded = weightCount * 4; // each weight record is 4 bytes
+        const bytesNeeded = weightCount * 4;
         const inBounds = (weightOffset > 0) && (weightOffset + bytesNeeded) <= data.byteLength;
         if (weightCount > 0 && inBounds) {
          // console.log(`Loading ${weightCount} weights from offset 0x${weightOffset.toString(16)}`);
@@ -2294,9 +2165,6 @@ const texcoordBuffer = dataSubarray(data, texcoordOffset);
   }
 
   let texMtxCount = 0;
-  // Only formats that actually have this header field should read it.
-  // Demo/Beta don't define texMtxCount, and reading at undefined => 0x00
-  // would corrupt the VCD by adding tons of TEXMTXIDX DIRECT attrs.
   if (fields.hasBones && fields.texMtxCount !== undefined)
     texMtxCount = data.getUint8(fields.texMtxCount);
   //console.warn(`[TEXMTX] texMtxCount=${texMtxCount}`);
@@ -2352,14 +2220,11 @@ const texcoordBuffer = dataSubarray(data, texcoordOffset);
       const bytesAvail = fileLen - dlInfoOffset;
       const maxBySize = Math.floor(bytesAvail / stride);
       const effSlots = Math.max(0, Math.min(dlInfoCount, maxBySize));
-
-      // IMPORTANT: preserve indices — pre-size the array to dlInfoCount.
-      // Fill with empty sentinels first.
       for (let i = 0; i < dlInfoCount; i++)
         dlInfos[i] = { offset: 0, size: 0 } as DisplayListInfo;
 
       let consecutiveInvalid = 0;
-      const INVALID_RUN_STOP = 8; // table tail padding heuristic
+      const INVALID_RUN_STOP = 8; 
 
       for (let i = 0; i < effSlots; i++) {
         const rowOff = dlInfoOffset + i * stride;
@@ -2374,12 +2239,9 @@ const texcoordBuffer = dataSubarray(data, texcoordOffset);
           dlInfos[i] = info;
           consecutiveInvalid = 0;
         } else {
-          // keep the empty sentinel in place
           consecutiveInvalid++;
         }
-        // If we’ve walked into a big padded tail, stop early.
         if (consecutiveInvalid >= INVALID_RUN_STOP) {
-          // leave remaining slots as empty sentinels
           break;
         }
       }
@@ -2431,19 +2293,15 @@ const texcoordBuffer = dataSubarray(data, texcoordOffset);
       let texmtxNum = 0;
       if (shader.hasHemisphericProbe || shader.hasReflectiveProbe) {
         if (shader.hasNBTTexture) {
-          // Binormal matrix index
           vcd[GX.Attr.TEX0MTXIDX + texmtxNum].type = GX.AttrType.DIRECT;
           texmtxNum++;
-          // Tangent matrix index
           vcd[GX.Attr.TEX0MTXIDX + texmtxNum].type = GX.AttrType.DIRECT;
           texmtxNum++;
         }
-        // Normal matrix index
         vcd[GX.Attr.TEX0MTXIDX + texmtxNum].type = GX.AttrType.DIRECT;
         texmtxNum++;
       }
 
-      // Object-space texture matrices packed from the end (7..0)
       texmtxNum = 7;
       for (let i = 0; i < texMtxCount; i++) {
         vcd[GX.Attr.TEX0MTXIDX + texmtxNum].type = GX.AttrType.DIRECT;
@@ -2477,7 +2335,6 @@ const texcoordBuffer = dataSubarray(data, texcoordOffset);
       vcd[GX.Attr.CLR0].type = GX.AttrType.NONE;
     }
 
-    // TEX coords (one size bit applies to all present layers)
     if (shader.layers.length > 0) {
       const texCoordDesc = bits.get(1);
       for (let t = 0; t < 8; t++) {
@@ -2608,7 +2465,6 @@ const texcoordBuffer = dataSubarray(data, texcoordOffset);
     return out;
   };
 
-  // === VCD/DL STRIDE FORCE (robust) ===
   function isLikelyGXOpcode(b: number): boolean {
     // BP write (0x61), small CP/XF-ish (0x08/0x10/0x20/0x40), and GX draws 0x80..0x9F
     return b === 0x61 || b === 0x08 || b === 0x10 || b === 0x20 || b === 0x40 || (b >= 0x80 && b <= 0x9f);
@@ -2637,7 +2493,7 @@ const texcoordBuffer = dataSubarray(data, texcoordOffset);
   function guessTargetStride(data: DataView, dlOff: number, dlSize: number): number | null {
     if (dlSize < 4) return null;
     const prim = data.getUint8(dlOff);
-    if (!(prim >= 0x80 && prim <= 0x9f)) return null; // must start with a GX draw
+    if (!(prim >= 0x80 && prim <= 0x9f)) return null;
 
     const count = data.getUint16(dlOff + 1, false /* BE */);
     if (count === 0 || count > 0x4000) return null;
@@ -2694,12 +2550,10 @@ const texcoordBuffer = dataSubarray(data, texcoordOffset);
     if (cur < targetStride) {
       let need = targetStride - cur;
 
-      // Ensure PNMTXIDX is DIRECT first (adds 1)
       if (need > 0 && v[GX.Attr.PNMTXIDX]?.type !== GX.AttrType.DIRECT) {
         v[GX.Attr.PNMTXIDX] = { type: GX.AttrType.DIRECT };
         need--;
       }
-      // Then enable TEXnMTXIDX as DIRECT until we hit the target
       for (let i = 0; i < 8 && need > 0; i++) {
         const a = GX.Attr.TEX0MTXIDX + i;
         if ((v[a]?.type ?? GX.AttrType.NONE) !== GX.AttrType.DIRECT) {
@@ -2711,7 +2565,6 @@ const texcoordBuffer = dataSubarray(data, texcoordOffset);
     } else {
       let over = cur - targetStride;
 
-      // Drop TEXnMTXIDX first
       for (let i = 7; i >= 0 && over > 0; i--) {
         const a = GX.Attr.TEX0MTXIDX + i;
         if (v[a]?.type === GX.AttrType.DIRECT) {
@@ -2719,7 +2572,6 @@ const texcoordBuffer = dataSubarray(data, texcoordOffset);
           over--;
         }
       }
-      // Then drop PNMTXIDX if needed
       if (over > 0 && v[GX.Attr.PNMTXIDX]?.type === GX.AttrType.DIRECT) {
         v[GX.Attr.PNMTXIDX] = { type: GX.AttrType.NONE };
         over--;
@@ -2756,8 +2608,6 @@ const texcoordBuffer = dataSubarray(data, texcoordOffset);
     }
     return baseVcd;
   }
-  // === END VCD/DL STRIDE FORCE ===
-
   const runBitstream = (
     modelShapes: ModelShapes,
     bitsOffset: number,
@@ -2778,7 +2628,6 @@ const texcoordBuffer = dataSubarray(data, texcoordOffset);
     function dlHasAlphaCompare(dl: DataView): boolean {
       const bytes = new Uint8Array(dl.buffer, dl.byteOffset, dl.byteLength);
       for (let i = 0; i + 4 < bytes.length; i++) {
-        // GX BP write opcode=0x61; next byte is BP register (Alpha Compare is 0xF3).
         if (bytes[i] === 0x61 && bytes[i + 1] === 0xF3) return true;
       }
       return false;
@@ -2834,7 +2683,6 @@ if (usingDummyClr) {
           const displayList = dataSubarray(data, dlInfo.offset, dlInfo.size);
         //  console.warn(`[DL] #${listNum} offs=0x${dlInfo.offset.toString(16)} size=0x${dlInfo.size.toString(16)}`);
 
-          // --- DL sniff logs (first 10 DLs only) ---
           if (listNum < 10) {
             try {
               const base = dlInfo.offset >>> 0;
@@ -2857,7 +2705,6 @@ if (usingDummyClr) {
             //  console.warn(`[DL_STRIDE_GUESS] list=${listNum} error: ${e instanceof Error ? e.message : String(e)}`);
             }
 
-            // Dump first 16 bytes
             {
               const base = dlInfo.offset >>> 0;
               const lim = Math.min(base + 16, data.byteLength);
@@ -2865,8 +2712,6 @@ if (usingDummyClr) {
               for (let p = base; p < lim; p++) s += data.getUint8(p).toString(16).padStart(2, '0') + ' ';
             //  console.warn(`[DL_BYTES] list=${listNum} @0x${base.toString(16)} : ${s.trim()}`);
             }
-
-            // Find first plausible GX opcode within +0x40
             {
               const base = dlInfo.offset >>> 0;
               const maxFwd = Math.min(0x40, Math.max(0, data.byteLength - base));
@@ -2884,7 +2729,6 @@ if (usingDummyClr) {
               }
             }
           }
-          // --- end DL sniff logs ---
 
           if ((displayList.byteLength | 0) === 0) {
           //  console.warn('[GEOM] Empty display list -> nothing to render');
@@ -2933,7 +2777,6 @@ if (usingDummyClr) {
             return false;
           };
 
-          // Sanity: warn if VCD asks for buffers that don't exist
           if (vcd[GX.Attr.CLR0]?.type !== GX.AttrType.NONE && clrCount === 0)
           //  console.error('[ATTR] CLR0 requested but clrCount==0');
           if (vcd[GX.Attr.NRM]?.type !== GX.AttrType.NONE && !fields.hasNormals)
@@ -2960,7 +2803,6 @@ const tunedVcd = tuneVCDForDL(data, dlInfo.offset, dlInfo.size, vcd, fields, cur
           // ---- Normal geometry path ----
           const vtxArrays = getVtxArrays(posBuffer, nrmBuffer);
 
-          // Early-3: DL enables alpha-compare? clone material once.
           let materialForDL = curMaterial!;
           if ((fields.shaderFields as any).isEarly3 &&
               !(curShader.flags & ShaderFlags.AlphaCompare) &&
@@ -2973,7 +2815,6 @@ const tunedVcd = tuneVCDForDL(data, dlInfo.offset, dlInfo.size, vcd, fields, cur
 
 const tunedVcd = tuneVCDForDL(data, dlInfo.offset, dlInfo.size, vcd, fields, curShader);
 
-          // Guard tiny DLs (cnt*s beyond size)
           {
             try {
               const base = dlInfo.offset >>> 0;
@@ -3045,7 +2886,6 @@ const tunedVcd = tuneVCDForDL(data, dlInfo.offset, dlInfo.size, vcd, fields, cur
           } catch (err) {
             logGeomFail(err, 'PRIMARY');
 
-            // Retry Z: alternative vertex strides for THIS DL only.
             {
               const altSeq = scanStrideCandidates(data, dlInfo.offset, dlInfo.size);
               let recovered = false;
@@ -3200,7 +3040,6 @@ const tunedVcd = tuneVCDForDL(data, dlInfo.offset, dlInfo.size, vcd, fields, cur
         }
 
         case Opcode.SetMatrices: {
-          // Ignored for maps; relevant only for objects
           const numBones = bits.get(4);
           if (numBones > 10) throw Error('Too many PN matrices');
           for (let i = 0; i < numBones; i++)

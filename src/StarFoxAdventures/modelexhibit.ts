@@ -1,9 +1,3 @@
-// modelexhibit.ts (FULL) — DP exhibit: consistent center/scale FIRST TIME (fixes “giant until prev/next”)
-// Changes vs last version:
-//  - Added dpResetNormalizeState() + dpComputeNormalizeFromCurrentModel()
-//  - Called them immediately whenever modelInst changes (async + next/prev buttons)
-//  - addWorldRenderInsts also retries compute until bbox exists
-
 import { mat4, vec3 } from 'gl-matrix';
 import * as UI from '../ui.js';
 import * as Viewer from "../viewer.js";
@@ -48,10 +42,9 @@ class ModelExhibitRenderer extends SFARenderer {
 
     private hasInitializedCamera: boolean = false;
 private modelLoadGeneration = 0;
-    // --- DP exhibit normalization (DP only) ---
     private dpNormalize = true;
-    private dpTargetMaxDim = 1000; // tweak if you want bigger/smaller DP models globally
-
+    private dpTargetMaxDim = 1000; 
+private dpAnimsEnabled = false;
     private dpNormReady = false;
     private dpNormScale = 1.0;
     private dpNormCenter = vec3.create();
@@ -74,14 +67,12 @@ private modelLoadGeneration = 0;
         (this.animController.animController as any).playbackEnabled = true;
     }
 
-    // --- DP normalization helpers ---
     private dpResetNormalizeState(): void {
         this.dpNormReady = false;
         this.dpNormScale = 1.0;
         vec3.set(this.dpNormCenter, 0, 0, 0);
     }
 
-    // returns true if bbox was valid and we computed center/scale
     private dpComputeNormalizeFromCurrentModel(): boolean {
         if (this.modelVersion !== ModelVersion.DinosaurPlanet || !this.dpNormalize) return false;
         if (!this.modelInst) return false;
@@ -103,7 +94,6 @@ private modelLoadGeneration = 0;
 
         this.dpNormScale = this.dpTargetMaxDim / maxDim;
 
-        // Mark ready + force camera recalc for this model
         this.dpNormReady = true;
         this.hasInitializedCamera = false;
         return true;
@@ -169,8 +159,18 @@ private modelLoadGeneration = 0;
         modelButtonContainer.appendChild(prevModelButton);
         modelButtonContainer.appendChild(nextModelButton);
         panel.contents.append(modelButtonContainer);
-
-        // Turntable toggle
+        
+if (this.modelVersion === ModelVersion.DinosaurPlanet) {
+    const dpAnimToggle = new UI.Checkbox("Enable DP Animations", this.dpAnimsEnabled);
+    dpAnimToggle.onchanged = () => {
+        this.dpAnimsEnabled = dpAnimToggle.checked;
+        if (!this.dpAnimsEnabled && this.modelInst) {
+            this.modelInst.resetPose();
+            this.anim = null;
+        }
+    };
+    panel.contents.append(dpAnimToggle.elem);
+}
         const spinBtn = document.createElement('button');
         spinBtn.textContent = 'Enable Turntable';
         spinBtn.onclick = () => {
@@ -260,13 +260,7 @@ private modelLoadGeneration = 0;
 private async destroyCurrentModelResources(device: GfxDevice) {
     console.log("Resetting current model state...");
 
-    // Invalidate async loads
     this.modelLoadGeneration++;
-
-    // IMPORTANT:
-    // Do NOT recreate materialFactory here.
-    // DPModelFetcher holds a reference to the original one, and recreating it here
-    // makes subsequent models use a stale/destroyed factory.
     this.modelInst = undefined;
     this.anim = null;
     this.modanim = null;
@@ -274,7 +268,6 @@ private async destroyCurrentModelResources(device: GfxDevice) {
     this.generatedAmap = null;
     this.hasInitializedCamera = false;
 
-    // DP normalize reset
     this.dpResetNormalizeState();
 }
 
@@ -348,7 +341,6 @@ private async destroyCurrentModelResources(device: GfxDevice) {
 
                 if (potentialModelInstance instanceof Promise) {
                     potentialModelInstance.then(instance => {
-                        // Ignore stale async completions.
                         if (loadGeneration !== this.modelLoadGeneration) return;
                         if (requestedModelNum !== this.modelNum) return;
 
@@ -358,7 +350,6 @@ private async destroyCurrentModelResources(device: GfxDevice) {
                             (this.modelInst as any).amap = this.amap;
                         }
 
-                        // DP normalize: reset + compute immediately when async load resolves
                         this.dpResetNormalizeState();
                         this.dpComputeNormalizeFromCurrentModel();
                         this.hasInitializedCamera = false;
@@ -371,7 +362,6 @@ private async destroyCurrentModelResources(device: GfxDevice) {
                     });
                     return;
                 } else {
-                    // Ignore stale sync completions too.
                     if (loadGeneration !== this.modelLoadGeneration) return;
                     if (requestedModelNum !== this.modelNum) return;
 
@@ -381,7 +371,6 @@ private async destroyCurrentModelResources(device: GfxDevice) {
                         (this.modelInst as any).amap = this.amap;
                     }
 
-                    // DP normalize: reset + compute immediately on sync load
                     this.dpResetNormalizeState();
                     this.dpComputeNormalizeFromCurrentModel();
                     this.hasInitializedCamera = false;
@@ -395,12 +384,10 @@ private async destroyCurrentModelResources(device: GfxDevice) {
 
         if (this.modelInst === null || this.modelInst === undefined) return;
 
-        // DP normalize: if not ready yet, keep trying until bbox exists
         if (this.modelVersion === ModelVersion.DinosaurPlanet && this.dpNormalize && !this.dpNormReady) {
             this.dpComputeNormalizeFromCurrentModel();
         }
 
-        // --- Camera init ---
         if (!this.hasInitializedCamera) {
             const camera = sceneCtx.viewerInput.camera;
             (camera as any).pitch = Math.PI / 8;
@@ -437,9 +424,13 @@ private async destroyCurrentModelResources(device: GfxDevice) {
             this.hasInitializedCamera = true;
         }
 
-        // --- animation ---
+
         const animate = (this.animController.animController as any).playbackEnabled;
-        const canAnimate = animate && !!this.modelInst?.model?.joints && this.modelInst.model.joints.length > 0;
+        let canAnimate = animate && !!this.modelInst?.model?.joints && this.modelInst.model.joints.length > 0;
+
+        if (this.modelVersion === ModelVersion.DinosaurPlanet && !this.dpAnimsEnabled) {
+            canAnimate = false;
+        }
 
         if (!canAnimate) {
             if (this.anim !== null && this.modelInst) this.modelInst.resetPose();
@@ -477,7 +468,6 @@ private async destroyCurrentModelResources(device: GfxDevice) {
             }
         }
 
-        // --- render ---
         const template = renderInstManager.pushTemplateRenderInst();
         fillSceneParamsDataOnTemplate(template, sceneCtx.viewerInput);
 
@@ -527,7 +517,6 @@ private async destroyCurrentModelResources(device: GfxDevice) {
 
         const mtx = mat4.create();
 
-        // DP exhibit: normalize to origin + constant size, rotate around origin
         if (this.modelVersion === ModelVersion.DinosaurPlanet && this.dpNormalize) {
             const angle = this.turntableEnabled ? this.turntableAngle : 0.0;
 
@@ -634,7 +623,6 @@ private async loadNextValidModel(): Promise<void> {
                 if (this.amap) this.modelInst.setAmap(this.amap);
             }
 
-            // IMPORTANT: ensure DP normalize resets on every model swap (even if caller forgot)
             this.dpResetNormalizeState();
             this.dpComputeNormalizeFromCurrentModel();
             this.hasInitializedCamera = false;
@@ -693,7 +681,6 @@ private async loadPreviousValidModel(): Promise<void> {
                 if (this.amap) this.modelInst.setAmap(this.amap);
             }
 
-            // IMPORTANT: ensure DP normalize resets on every model swap
             this.dpResetNormalizeState();
             this.dpComputeNormalizeFromCurrentModel();
             this.hasInitializedCamera = false;
@@ -772,8 +759,15 @@ private async loadPreviousValidModel(): Promise<void> {
     }
 }
 
+
 export class SFAModelExhibitSceneDesc implements Viewer.SceneDesc {
-    constructor(public id: string, public name: string, private modelVersion: ModelVersion, private gameInfo: GameInfo = SFA_GAME_INFO) { }
+    constructor(
+        public id: string, 
+        public name: string, 
+        private modelVersion: ModelVersion, 
+        private gameInfo: GameInfo = SFA_GAME_INFO,
+        private subdirs?: string[] 
+    ) { }
 
     public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
         const materialFactory = new MaterialFactory(device);
@@ -786,7 +780,7 @@ export class SFAModelExhibitSceneDesc implements Viewer.SceneDesc {
         const isBeta = this.modelVersion === ModelVersion.Beta;
         const isDemo = (this.modelVersion as any) === (ModelVersion as any).Demo;
 
-        const selectedSubdirs = isBeta
+        const selectedSubdirs = this.subdirs ?? (isBeta
             ? ['swapcircle']
             : isDemo
                 ? ['Copy of swaphol', 'insidegal', 'linklevel']
@@ -798,7 +792,7 @@ export class SFAModelExhibitSceneDesc implements Viewer.SceneDesc {
                     'linka', 'linkb', 'linkc', 'linkd', 'linke', 'linkf', 'linkg', 'linkh', 'linki', 'linkj',
                     'magiccave', 'mazecave', 'mmpass', 'mmshrine', 'nwastes', 'nwshrine', 'shipbattle', 'shop',
                     'swaphol', 'swapholbot', 'volcano', 'wallcity', 'warlock', 'worldmap',
-                ];
+                ]);
 
         const texFetcher = await SFATextureFetcher.create(this.gameInfo, context.dataFetcher, this.modelVersion === ModelVersion.Beta);
         await texFetcher.loadSubdirs(selectedSubdirs, context.dataFetcher);

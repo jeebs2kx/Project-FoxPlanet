@@ -1,5 +1,3 @@
-// src/StarFoxAdventures/shapes.ts
-
 import { mat4, ReadonlyMat4, vec3 } from 'gl-matrix';
 import ArrayBufferSlice from '../ArrayBufferSlice.js';
 import { Camera, computeViewMatrix } from '../Camera.js';
@@ -20,7 +18,7 @@ import { setGXMaterialOnRenderInst } from './render.js';
 import { mat4SetTranslation } from './util.js';
 import { LightType } from './WorldLights.js';
 
-export interface ShapeRenderContext { // Added 'export'
+export interface ShapeRenderContext {
     modelCtx: ModelRenderContext;
     setupLights: (dst: GX_Material.Light[]) => void;
 }
@@ -95,7 +93,6 @@ const scratchMtx0 = mat4.create();
 const scratchMtx1 = mat4.create();
 const scratchVec0 = vec3.create();
 
-// The vertices and polygons of a shape.
 export class ShapeGeometry {
     private vtxLoader: VtxLoader;
     public loadedVertexData: LoadedVertexData;
@@ -124,7 +121,6 @@ export class ShapeGeometry {
         this.verticesDirty = true;
     }
 
-    // The bounding box is represented in model space.
     public setBoundingBox(aabb: AABB) {
         this.aabb = aabb.clone();
     }
@@ -220,7 +216,6 @@ export class ShapeMaterial {
     public constructor(private material: SFAMaterial) {
     }
 
-    // Caution: Material is referenced, not copied.
     public setMaterial(material: SFAMaterial) {
         this.material = material;
     }
@@ -277,8 +272,7 @@ export class ShapeMaterial {
 
 const scratchMaterialParams = new MaterialParams();
 
-// The geometry and material of a shape.
-export class Shape { // Added 'export'
+export class Shape { 
     public constructor(public geom: ShapeGeometry, public material: ShapeMaterial, public isDevGeometry: boolean) {
     }
 
