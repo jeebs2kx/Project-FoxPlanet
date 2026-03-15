@@ -10,6 +10,7 @@ import {
   SFA_SHADER_FIELDS,
   BETA_MODEL_SHADER_FIELDS,
   BETA_MAP_SHADER_FIELDS,
+  CLOUDTREASURE_MODEL_SHADER_FIELDS,
   SFADEMO_MAP_SHADER_FIELDS,
   SFADEMO_MODEL_SHADER_FIELDS,
   EARLY2_MAP_SHADER_FIELDS,
@@ -289,6 +290,46 @@ const FIELDS: any = {
     oldVat: true,
     hasYTranslate: false,
   },
+
+[ModelVersion.cloudtreasure]: {
+    isMapBlock: false,
+    hasNormals: true,
+    hasBones: true,
+    texOffset: 0x20,
+    texCount: 0xb6,
+    posOffset: 0x28,
+    nrmOffset: 0x2c,
+    clrOffset: 0x30,
+    texcoordOffset: 0x34,
+    shaderOffset: 0x38,
+    jointOffset: 0x3c,
+    weightOffset: 0x40,
+
+    posFineSkinningConfig: undefined,
+    posFineSkinningPieces: 0x8c,
+    posFineSkinningWeights: 0x90,
+
+    dlInfoOffset: 0x94,
+    dlInfoSize: 0x34,
+    dlInfoCount: 0x73,
+
+    bitsOffsets: [0x98],
+    bitsByteCounts: [0x9c],
+
+    jointCount: 0xa5,
+    posCount: 0xa8,
+    nrmCount: 0xaa,
+    clrCount: 0xac,
+    texcoordCount: 0xae,
+
+    weightCount: 0xb8,
+    shaderCount: 0xba,
+
+    shaderFields: CLOUDTREASURE_MODEL_SHADER_FIELDS,
+    numListBits: 6,
+    oldVat: true,
+    hasYTranslate: false,
+},
 
   [ModelVersion.Demo]: {
     isMapBlock: false,
@@ -676,12 +717,10 @@ function loadDinosaurPlanetModel(
     materialFactory: MaterialFactory,
 ): Model {
     const model = new Model(ModelVersion.DinosaurPlanet);
-
+const yOffset = 0;
     const ptr00 = data.getUint32(0x00);
     const ptr0C = data.getUint32(0x0C);
-
     const isCharacter = ptr0C > ptr00;
-
 if (isCharacter) {
   // DINOSAUR PLANET CHARACTER PARSER
   model.isMapBlock = false;
@@ -711,15 +750,13 @@ const DP_NO_TINT_TEXIDS = new Set<number>([237, 2576]);
   const jointCount = Math.min(data.getUint8(0x6F), 200);
   const textureCount = Math.min(data.getUint8(0x73), 128);
 
-  const faceBatchCountRaw = (matOff > faceOff) ? (((matOff - faceOff) / 16) | 0) : 0;
-  const faceBatchCount = Math.max(0, Math.min(faceBatchCountRaw, 512));
-
+ const faceBatchCount = Math.max(0, Math.min(data.getUint8(0x70), 512));
   if (DP_CHAR_DEBUG) {
-   // console.warn(
-    //  `[DP_CHAR] matOff=0x${matOff.toString(16)} vtxOff=0x${vtxOff.toString(16)} faceOff=0x${faceOff.toString(16)} ` +
-    //  `dlOff=0x${dlOff.toString(16)} jointOff=0x${jointOff.toString(16)} dlLength=${dlLength} joints=${jointCount} ` +
-   //   `texCount=${textureCount} faceBatches=${faceBatchCount}`
-   // );
+  //  console.warn(
+   //   `[DP_CHAR] matOff=0x${matOff.toString(16)} vtxOff=0x${vtxOff.toString(16)} faceOff=0x${faceOff.toString(16)} ` +
+   //   `dlOff=0x${dlOff.toString(16)} jointOff=0x${jointOff.toString(16)} dlLength=${dlLength} joints=${jointCount} ` +
+  //    `texCount=${textureCount} faceBatches=${faceBatchCount}`
+  //  );
   }
 
   const rgb565ToRGBA8 = (c: number) => {
@@ -798,7 +835,7 @@ const DP_NO_TINT_TEXIDS = new Set<number>([237, 2576]);
 
     if (DP_CHAR_DEBUG) {
       console.warn(
-      //  `[DP_CHAR][MAT] matIdx=${i} texId=${texId} tex=${texW}x${texH} tint=(${tint.r},${tint.g},${tint.b},255) raw=[${rawBytes}]`
+     //  `[DP_CHAR][MAT] matIdx=${i} texId=${texId} tex=${texW}x${texH} tint=(${tint.r},${tint.g},${tint.b},255) raw=[${rawBytes}]`
       );
     }
   }
@@ -839,92 +876,73 @@ const DP_NO_TINT_TEXIDS = new Set<number>([237, 2576]);
   }
 
   // --- FACEBATCHES (16 bytes each) ---
-  interface Facebatch {
-    materialID: number;
-    texW: number;
-    texH: number;
-    dlStartCmd: number;
-    renderFlags: number;
-    tintR: number; tintG: number; tintB: number; tintA: number;
-    tintEnabled: boolean;
-    _wasInvalidMat?: boolean; 
-    tris: { i0: number; i1: number; i2: number }[];
-  }
+interface Facebatch {
+  materialIndex: number;
+  texId: number;
+  jointA: number;
+  jointB: number;
+  jointC: number;
+  jointBFirstVertexBufferIndex: number;
+  jointCFirstVertexBufferIndex: number;
+  baseVertexID: number;
+  dlStartCmd: number;
+  tagA: number;
+  tagB: number;
+  tagC: number;
+  renderFlags: number;
+  texW: number;
+  texH: number;
+  tintR: number; tintG: number; tintB: number; tintA: number;
+  tintEnabled: boolean;
+  tris: { i0: number; i1: number; i2: number }[];
+}
 
-  const facebatches: Facebatch[] = [];
-  for (let i = 0; i < faceBatchCount; i++) {
-    const o = faceOff + i * 16;
-    if (o + 16 > data.byteLength) break;
+const facebatches: Facebatch[] = [];
+for (let i = 0; i < faceBatchCount; i++) {
+  const o = faceOff + i * 16;
+  if (o + 16 > data.byteLength) break;
 
-    const matIdx = data.getUint8(o + 0);
-    const dlStartCmd = data.getInt16(o + 8, false);
-    const renderFlags = data.getUint8(o + 0x0c);
+  const materialIndex = data.getUint8(o + 0x00);
+  const jointA = data.getInt8(o + 0x01);
+  const jointB = data.getInt8(o + 0x02);
+  const jointC = data.getInt8(o + 0x03);
+  const jointBFirstVertexBufferIndex = data.getInt8(o + 0x04);
+  const jointCFirstVertexBufferIndex = data.getInt8(o + 0x05);
+  const baseVertexID = data.getInt16(o + 0x06, false);
+  const dlStartCmd = Math.max(0, data.getInt16(o + 0x08, false) | 0);
+  const tagA = data.getInt8(o + 0x0A);
+  const tagB = data.getUint8(o + 0x0B);
+  const tagC = data.getInt32(o + 0x0C, false);
 
-    const m = mats[matIdx];
-    const texId = m ? m.texId : -1;
+  const m = (materialIndex !== 0xFF && materialIndex < mats.length) ? mats[materialIndex] : undefined;
 
-    facebatches.push({
-      materialID: texId,
-      texW: m ? m.texW : 32,
-      texH: m ? m.texH : 32,
-      dlStartCmd: Math.max(0, dlStartCmd | 0),
-      renderFlags,
-      tintR: m ? m.tintR : 255,
-      tintG: m ? m.tintG : 255,
-      tintB: m ? m.tintB : 255,
-      tintA: 255,
-      tintEnabled: m ? m.tintEnabled : false,
-      _wasInvalidMat: m ? false : true,
-      tris: [],
-    });
-  }
+  facebatches.push({
+    materialIndex,
+    texId: m ? m.texId : -1,
+    jointA,
+    jointB,
+    jointC,
+    jointBFirstVertexBufferIndex,
+    jointCFirstVertexBufferIndex,
+    baseVertexID,
+    dlStartCmd,
+    tagA,
+    tagB,
+    tagC,
+    renderFlags: tagC & 0xFF,
+    texW: m ? m.texW : 32,
+    texH: m ? m.texH : 32,
+    tintR: m ? m.tintR : 255,
+    tintG: m ? m.tintG : 255,
+    tintB: m ? m.tintB : 255,
+    tintA: 255,
+    tintEnabled: m ? m.tintEnabled : false,
+    tris: [],
+  });
+}
+facebatches.sort((a, b) => a.dlStartCmd - b.dlStartCmd);
 
-  facebatches.sort((a, b) => a.dlStartCmd - b.dlStartCmd);
-  let patchedFB = 0;
-  let lastGood: Facebatch | null = null;
 
-  // Optional fallback if the file starts with invalids
-  const fallbackTexId = (mats.length > 0) ? mats[0].texId : 0;
-  const fallbackW = (mats.length > 0) ? mats[0].texW : 32;
-  const fallbackH = (mats.length > 0) ? mats[0].texH : 32;
-
-  for (const fb of facebatches) {
-    if (fb.materialID >= 0) {
-      lastGood = fb;
-      continue;
-    }
-    patchedFB++;
-    if (lastGood) {
-      fb.materialID = lastGood.materialID;
-      fb.texW = lastGood.texW;
-      fb.texH = lastGood.texH;
-      fb.tintR = lastGood.tintR;
-      fb.tintG = lastGood.tintG;
-      fb.tintB = lastGood.tintB;
-      fb.tintEnabled = lastGood.tintEnabled;
-    } else {
-      fb.materialID = fallbackTexId;
-      fb.texW = fallbackW;
-      fb.texH = fallbackH;
-      fb.tintR = 255;
-      fb.tintG = 255;
-      fb.tintB = 255;
-      fb.tintEnabled = false;
-    }
-  }
-
-  if (DP_CHAR_DEBUG && patchedFB > 0) {
-  //  console.warn(`[DP_CHAR][FB_PATCH] patched ${patchedFB} invalid facebatches (materialID=-1) to last-good material`);
-    // show a few patched entries
-    let shown = 0;
-    for (let i = 0; i < facebatches.length && shown < 8; i++) {
-      const fb = facebatches[i];
-      if (fb._wasInvalidMat) {
-      //  console.warn(`  patched fb@cmd=${fb.dlStartCmd} -> texId=${fb.materialID} tex=${fb.texW}x${fb.texH} flags=0x${fb.renderFlags.toString(16)}`);
-        shown++;
-      }
-    }
-  }
 
   if (DP_CHAR_DEBUG) {
   //  console.warn(`[DP_CHAR] Facebatches (first 10):`);
@@ -977,8 +995,8 @@ const DP_NO_TINT_TEXIDS = new Set<number>([237, 2576]);
     if (logCount < DP_CHAR_LOG_LIMIT) {
       logCount++;
       console.warn(msg);
-      if (logCount === DP_CHAR_LOG_LIMIT)
-        console.warn(`[DP_CHAR] (log limit hit: further DP_CHAR logs suppressed)`);
+     // if (logCount === DP_CHAR_LOG_LIMIT)
+      //  console.warn(`[DP_CHAR] (log limit hit: further DP_CHAR logs suppressed)`);
     }
   };
 
@@ -1051,17 +1069,16 @@ function __dpResolveDLTarget(addr: number): number | null {
       break;
     }
 
-    while (fbIndex + 1 < facebatches.length && execCmdIdx >= facebatches[fbIndex + 1].dlStartCmd) {
-      fbIndex++;
-      currentFb = facebatches[fbIndex];
-      if (DP_CHAR_DEBUG) {
-        console.warn(
-   //       `[DP_CHAR][FB] fbIndex=${fbIndex} startCmd=${currentFb.dlStartCmd} texId=${currentFb.materialID} ` +
-   //       `flags=0x${(currentFb.renderFlags & 0xFF).toString(16)} tintEnabled=${currentFb.tintEnabled ? 1 : 0}` +
-   //       `${currentFb._wasInvalidMat ? ' (patched)' : ''}`
-        );
-      }
-    }
+const dlCmdIndex = ((pc - dlOff) >>> 3);
+
+while (fbIndex + 1 < facebatches.length && dlCmdIndex >= facebatches[fbIndex + 1].dlStartCmd) {
+  fbIndex++;
+  currentFb = facebatches[fbIndex];
+  if (DP_CHAR_DEBUG) {
+    console.warn(
+    );
+  }
+}
 
     const w0 = data.getUint32(pc + 0, false);
     const w1 = data.getUint32(pc + 4, false);
@@ -1173,8 +1190,7 @@ function __dpResolveDLTarget(addr: number): number | null {
         const romIdx = baseVtxIndex + v;
         const cacheIdx = (v0 + v) & 0x3F;
         const fbFlags = currentFb ? (currentFb.renderFlags & 0xFF) : 0;
-        const matKey  = currentFb ? (currentFb.materialID | 0) : -1;
-        const texWKey = currentFb ? (currentFb.texW | 0) : 0;
+const matKey  = currentFb ? (currentFb.texId | 0) : -1;        const texWKey = currentFb ? (currentFb.texW | 0) : 0;
         const texHKey = currentFb ? (currentFb.texH | 0) : 0;
         const tintKey = currentFb ? ((currentFb.tintR << 16) | (currentFb.tintG << 8) | currentFb.tintB) : 0;
         const key = `${romIdx}_${currentMtxIdx}_${lightingEnabled ? 1 : 0}_${fbFlags}_${matKey}_${texWKey}_${texHKey}_${tintKey}`;
@@ -1197,8 +1213,7 @@ function __dpResolveDLTarget(addr: number): number | null {
 
 let r = nxU8, g = nyU8, b = nzU8;
 
-const noTintForThisTex = !!currentFb && DP_NO_TINT_TEXIDS.has(currentFb.materialID);
-const hasTint = !!currentFb && !(currentFb.tintR === 255 && currentFb.tintG === 255 && currentFb.tintB === 255);
+const noTintForThisTex = !!currentFb && DP_NO_TINT_TEXIDS.has(currentFb.texId);const hasTint = !!currentFb && !(currentFb.tintR === 255 && currentFb.tintG === 255 && currentFb.tintB === 255);
 const wantsTintBase = !!currentFb && hasTint && currentFb.tintEnabled && !noTintForThisTex;
 
 if (lightingEnabled) {
@@ -1285,6 +1300,7 @@ if (lightingEnabled) {
 
   // --- Buffers ---
   const finalVerts = (outPos.length / 3) | 0;
+ // console.log(`[MODEL INFO] Size: ${data.byteLength} bytes | Verts: ${finalVerts}`);
   const posAB = new ArrayBuffer(finalVerts * 6);
   const clrAB = new ArrayBuffer(finalVerts * 4);
   const texAB = new ArrayBuffer(finalVerts * 4);
@@ -1305,11 +1321,12 @@ if (lightingEnabled) {
     let wx = lx, wy = ly, wz = lz;
     if (jointCount > 0) {
       const bindMtx = jointMats[outBone[j] || 0];
-      if (bindMtx) {
-        wx = bindMtx[0]*lx + bindMtx[4]*ly + bindMtx[8]*lz + bindMtx[12];
-        wy = bindMtx[1]*lx + bindMtx[5]*ly + bindMtx[9]*lz + bindMtx[13];
-        wz = bindMtx[2]*lx + bindMtx[6]*ly + bindMtx[10]*lz + bindMtx[14];
-      }
+if (bindMtx) {
+        wx = bindMtx[0]*lx + bindMtx[4]*ly + bindMtx[8]*lz + bindMtx[12];
+        wy = bindMtx[1]*lx + bindMtx[5]*ly + bindMtx[9]*lz + bindMtx[13];
+wz = bindMtx[2]*lx + bindMtx[6]*ly + bindMtx[10]*lz + bindMtx[14];
+        wy -= yOffset;
+      }
     }
 
     minX = Math.min(minX, wx); minY = Math.min(minY, wy); minZ = Math.min(minZ, wz);
@@ -1328,8 +1345,10 @@ if (lightingEnabled) {
     clrDV.setUint8(j * 4 + 3, outClr[j * 4 + 3]);
   }
 
-  for (const fb of facebatches) {
-    if (fb.tris.length === 0) continue;
+for (const fb of facebatches) {
+  if (fb.tris.length === 0) continue;
+  if (fb.materialIndex === 0xFF || fb.texId < 0) continue;
+  if (fb.materialIndex === 0xFF || fb.texId < 0) continue;
     for (const tri of fb.tris) {
       for (const idx of [tri.i0, tri.i1, tri.i2]) {
         const rawS = outTex[idx * 2 + 0];
@@ -1365,18 +1384,15 @@ if (lightingEnabled) {
     shapes.shapes[1] = [];
     shapes.shapes[2] = [];
 
-    let usedFb = 0;
-    let totalTris = 0;
-    let patchedUsed = 0;
-
+let usedFb = 0;
+let totalTris = 0;
 for (const fb of facebatches) {
   if (fb.tris.length === 0) continue;
 
   if (!(model as any).__dpLoggedFaceTexs) (model as any).__dpLoggedFaceTexs = new Set<string>();
 
   if (DP_LOG_ALL_FACEBATCH_TEXIDS) {
-    const logKey = `${fb.materialID}_${fb.texW}_${fb.texH}_${fb.tintR}_${fb.tintG}_${fb.tintB}_${fb.renderFlags}`;
-    if (!(model as any).__dpLoggedFaceTexs.has(logKey)) {
+const logKey = `${fb.texId}_${fb.texW}_${fb.texH}_${fb.tintR}_${fb.tintG}_${fb.tintB}_${fb.renderFlags}`;    if (!(model as any).__dpLoggedFaceTexs.has(logKey)) {
       (model as any).__dpLoggedFaceTexs.add(logKey);
       console.warn(
       //  `[DP FB DEBUG] texId=${fb.materialID} tex=${fb.texW}x${fb.texH} tint=(${fb.tintR},${fb.tintG},${fb.tintB},${fb.tintA}) flags=0x${fb.renderFlags.toString(16)}`
@@ -1384,14 +1400,12 @@ for (const fb of facebatches) {
     }
   }
 
-  if (DP_HIDE_TEXIDS_FOR_TEST.has(fb.materialID)) {
-   // console.warn(`[DP TEST HIDE] skipping texId=${fb.materialID}`);
+if (DP_HIDE_TEXIDS_FOR_TEST.has(fb.texId)) {   // console.warn(`[DP TEST HIDE] skipping texId=${fb.materialID}`);
     continue;
   }
 
   usedFb++;
   totalTris += fb.tris.length;
-  if (fb._wasInvalidMat) patchedUsed++;
       const wantsCutout = (fb.renderFlags & 0x80) !== 0;
 
       let shaderFlags = 0;
@@ -1404,8 +1418,7 @@ for (const fb of facebatches) {
 
       const shader: Shader = {
         layers: [{
-          texId: fb.materialID,
-          tevMode: 1,
+texId: fb.texId,          tevMode: 1,
           enableScroll: 0,
         }],
         attrFlags: (ShaderAttrFlags.CLR | (ShaderAttrFlags as any).TEX0),
@@ -1463,11 +1476,9 @@ for (const fb of facebatches) {
             const lz = originalLocalPos[j * 3 + 2];
             const boneMtx = matrixPalette[outBone[j] || 0];
 
-            if (boneMtx) {
-              const wx = boneMtx[0]*lx + boneMtx[4]*ly + boneMtx[8]*lz + boneMtx[12];
-              const wy = boneMtx[1]*lx + boneMtx[5]*ly + boneMtx[9]*lz + boneMtx[13];
-              const wz = boneMtx[2]*lx + boneMtx[6]*ly + boneMtx[10]*lz + boneMtx[14];
-
+if (boneMtx) {
+              const wx = boneMtx[0]*lx + boneMtx[4]*ly + boneMtx[8]*lz + boneMtx[12];
+let wy = boneMtx[1]*lx + boneMtx[5]*ly + boneMtx[9]*lz + boneMtx[13] - yOffset;              const wz = boneMtx[2]*lx + boneMtx[6]*ly + boneMtx[10]*lz + boneMtx[14];
               posDV.setInt16(j * 6 + 0, wx, false);
               posDV.setInt16(j * 6 + 2, wy, false);
               posDV.setInt16(j * 6 + 4, wz, false);
@@ -1659,7 +1670,7 @@ const DP_SCROLL_WATERFALL_TEXIDS = new Set<number>([
 const __dpScrollCandidateLogged = new Set<number>();
 for (const b of batches) {
             const isSoftFormat = (b.pixelFormat !== 1 && b.pixelFormat !== 7 && b.pixelFormat !== 8);
-            const isKnownCutoutTex = [3,6,31,61,119,164,289,349,351,354,355,544,356,2087,3195,1101,1028,1122,1125,1050,1049,1051,1066,1075,1423,1896,1897,1888,1889].includes(b.materialId);
+            const isKnownCutoutTex = [905,3,6,31,61,119,164,289,349,351,354,355,544,356,2087,3195,1101,1028,1122,1125,1050,1049,1051,1066,1075,1423,1896,1897,1888,1889].includes(b.materialId);
 
             // 1. SCAN ALPHA (Data Gathering)
             let aMin = 255;
@@ -1723,10 +1734,25 @@ for (const b of batches) {
                 attrFlags |= (ShaderAttrFlags as any).TEX1;
             }
 
-            const allowScroll = b.isWater || DP_SCROLL_WATER_TEXIDS.has(b.materialId) || DP_SCROLL_WATERFALL_TEXIDS.has(b.materialId);
-            b.scrollPxU = 0;
-            b.scrollPxV = allowScroll ? (b.isWater ? -1 : 2) : 0;
+const DP_FORWARD_SCROLL_TEXIDS = new Set<number>([
+  402,
+]);
 
+const allowScroll =
+  b.isWater ||
+  DP_SCROLL_WATER_TEXIDS.has(b.materialId) ||
+  DP_SCROLL_WATERFALL_TEXIDS.has(b.materialId) ||
+  DP_FORWARD_SCROLL_TEXIDS.has(b.materialId);
+
+if (DP_FORWARD_SCROLL_TEXIDS.has(b.materialId)) {
+  // texId 402: forward scroll
+  b.scrollPxU = -9;
+  b.scrollPxV = 0;
+} else {
+  // existing water / waterfall behavior
+  b.scrollPxU = 0;
+  b.scrollPxV = allowScroll ? (b.isWater ? -1 : 2) : 0;
+}
             const addScroll = (layer: any, texW: number, texH: number) => {
                 if (!layer || (b.scrollPxU === 0 && b.scrollPxV === 0)) return;
                 const slot = (materialFactory as any).addScrollSlot?.(((b.scrollPxU << 16) / Math.max(1, texW)) | 0, ((b.scrollPxV << 16) / Math.max(1, texH)) | 0);
@@ -1799,15 +1825,15 @@ return model;
   let fields = FIELDS[version];
 
   const totalMapByteLength = data.buffer.byteLength;
-  //console.warn('[DEBUG] totalMapByteLength =', totalMapByteLength);
+ // console.warn('[DEBUG] totalMapByteLength =', totalMapByteLength);
   if (version === ModelVersion.Early1 && totalMapByteLength === 144448) {
     fields = { ...fields };
     fields.numListBits = 6;
-    // console.warn('[PATCH] Detected full cloudtreasure map (144448 bytes) → numListBits = 6');
+   //  console.warn('[PATCH] Detected full cloudtreasure map (144448 bytes) → numListBits = 6');
   }
 
   function logAllFields(data: DataView, fields: any) {
-   // console.log('--- Detailed Dumping model fields ---');
+ //   console.log('--- Detailed Dumping model fields ---');
     const IMMEDIATE_KEYS = new Set<string>([
       'numListBits','dlInfoSize','isMapBlock','isFinal','isBeta','oldVat',
       'hasNormals','hasBones','hasYTranslate','isfinal','shaderFields'
@@ -1815,7 +1841,7 @@ return model;
 
     for (const key in fields) {
       if (IMMEDIATE_KEYS.has(key)) {
-      //  console.log(`${key} (immediate): ${fields[key]}`);
+     //   console.log(`${key} (immediate): ${fields[key]}`);
         continue;
       }
       const offset = fields[key];
@@ -1843,32 +1869,49 @@ return model;
             else
               bytes.push('??');
           }
-         // console.log(`${key} raw bytes @ 0x${offset.toString(16)}: ${bytes.join(' ')} => ${val}`);
+      //    console.log(`${key} raw bytes @ 0x${offset.toString(16)}: ${bytes.join(' ')} => ${val}`);
         } catch (e) {
-        //  console.warn(`Error reading field ${key} at offset 0x${offset.toString(16)}`, e);
+      //    console.warn(`Error reading field ${key} at offset 0x${offset.toString(16)}`, e);
         }
       }
     }
-    // console.log('--- End detailed dump ---');
+  //   console.log('--- End detailed dump ---');
   }
 
   logAllFields(data, fields);
   const FILE_LEN = data.byteLength;
-  const shaderOff = data.getUint32(fields.shaderOffset);
-  const shaderCnt = data.getUint8(fields.shaderCount);
+  const shaderOffset = data.getUint32(fields.shaderOffset);
+  let shaderCount = data.getUint8(fields.shaderCount);
   const dlInfoOff = data.getUint32(fields.dlInfoOffset);
   const bits0Off = (fields.bitsOffsets?.length ?? 0) > 0 ? data.getUint32(fields.bitsOffsets[0]) : 0;
-  //.warn(
-   // `[PROBE1] shaderOff=0x${shaderOff.toString(16)} shaderCnt=${shaderCnt} dlInfoOff=0x${dlInfoOff.toString(16)} bits0Off=0x${bits0Off.toString(16)} fileLen=0x${FILE_LEN.toString(16)}`
-//  );
 
-  let shaderSpan = (dlInfoOff > shaderOff && shaderCnt) ? (dlInfoOff - shaderOff) : 0;
-  let shaderStride = shaderCnt ? Math.floor(shaderSpan / shaderCnt) : 0;
-  let shaderRema = shaderCnt ? (shaderSpan % shaderCnt) : 0;
- // console.warn(`[PROBE1] shaderStrideCandidate=${shaderStride} (0x${shaderStride.toString(16)}) remainder=${shaderRema}`);
+  let shaderStride = fields.shaderFields.size;
 
-  for (let i = 0; i < Math.min(shaderCnt, 2); i++) {
-    const base = shaderOff + i * shaderStride;
+  if (version === ModelVersion.cloudtreasure) {
+    const jointOff = data.getUint32(fields.jointOffset);
+    const weightOff = data.getUint32(fields.weightOffset);
+
+    const nextCandidates = [jointOff, weightOff, dlInfoOff, data.byteLength].filter((v) => v > shaderOffset);
+    const nextOff = nextCandidates.sort((a, b) => a - b)[0];
+    const span = nextOff - shaderOffset;
+
+    if (shaderCount > 0) {
+      const derived = (span / shaderCount) | 0;
+      if (derived === 0x40 || derived === 0x20 || derived === 0x18)
+        shaderStride = derived;
+    }
+  }
+
+  const shaderSpan = (dlInfoOff > shaderOffset && shaderCount) ? (dlInfoOff - shaderOffset) : 0;
+  const shaderStrideCandidate = shaderCount ? Math.floor(shaderSpan / shaderCount) : 0;
+  const shaderRema = shaderCount ? (shaderSpan % shaderCount) : 0;
+  console.warn(
+    `[PROBE1] shaderStrideCandidate=${shaderStrideCandidate} (0x${shaderStrideCandidate.toString(16)}) ` +
+    `remainder=${shaderRema} actual=0x${shaderStride.toString(16)}`
+  );
+
+  for (let i = 0; i < Math.min(shaderCount, 2); i++) {
+    const base = shaderOffset + i * shaderStride;
     const row: string[] = [];
     for (let b = 0; b < 16 && base + b < FILE_LEN; b++) {
       row.push(data.getUint8(base + b).toString(16).padStart(2, '0'));
@@ -1888,7 +1931,7 @@ return model;
 
   for (const stride of dlStrideCandidates) {
     if (!dlBase || dlBase + stride * dlCnt > FILE_LEN) {
-    //  console.warn(`[PROBE2] dlInfoStride=0x${stride.toString(16)} -> table OOB (base too large or count*stride too big)`);
+   //   console.warn(`[PROBE2] dlInfoStride=0x${stride.toString(16)} -> table OOB (base too large or count*stride too big)`);
       continue;
     }
     let ok = 0, bad = 0;
@@ -1900,9 +1943,9 @@ return model;
       if (i < sampleN) samples.push(`#${i}:off=0x${e.o.toString(16)},size=0x${e.s.toString(16)}`);
       sane ? ok++ : bad++;
     }
-   // console.warn(
+    console.warn(
    //   `[PROBE2] dlInfoStride=0x${stride.toString(16)} score ok=${ok}/${dlCnt} bad=${bad} samples=[${samples.join(' | ')}]`
-   // );
+    );
   }
 
   if (dlBase && dlBase < FILE_LEN) {
@@ -1921,13 +1964,13 @@ return model;
   // Read raw bytes of posCount field (2 bytes)
   const posOffset = data.getUint32(fields.posOffset);
   const posCount = data.getUint16(fields.posCount);
-//  console.log(`Loading ${posCount} positions from 0x${posOffset.toString(16)}`);
+ // console.log(`Loading ${posCount} positions from 0x${posOffset.toString(16)}`);
   model.originalPosBuffer = dataSubarray(data, posOffset);
 
   if (fields.hasNormals) {
     const nrmOffset = data.getUint32(fields.nrmOffset);
     const nrmCount = data.getUint16(fields.nrmCount);
-   // console.log(`Loading ${nrmCount} normals from 0x${nrmOffset.toString(16)}`);
+  //  console.log(`Loading ${nrmCount} normals from 0x${nrmOffset.toString(16)}`);
     model.originalNrmBuffer = dataSubarray(data, nrmOffset, nrmCount * ((normalFlags & NormalFlags.NBT) ? 9 : 3));
   }
 
@@ -1943,12 +1986,135 @@ return model;
         for (let j = 0; j < nrmStride; j++) dst[off + j] = src[tailStart + j] ?? 0;
       }
       model.originalNrmBuffer = new DataView(dst.buffer);
-     // console.warn(`[NRM_PAD] grew normals ${src.byteLength} -> ${needed} (stride=${nrmStride})`);
+    //  console.warn(`[NRM_PAD] grew normals ${src.byteLength} -> ${needed} (stride=${nrmStride})`);
     }
   }
+const ctAltPosFineSkin = (() => {
+  if (version !== ModelVersion.cloudtreasure)
+    return null;
 
-  if (fields.posFineSkinningConfig !== undefined) {
-    const posFineSkinningConfig = parseFineSkinningConfig(dataSubarray(data, fields.posFineSkinningConfig));
+  const piecesOffs = data.getUint32(fields.posFineSkinningPieces, false);
+  const weightsOffs = data.getUint32(fields.posFineSkinningWeights, false);
+
+  if (
+    piecesOffs <= 0 || piecesOffs >= data.byteLength ||
+    weightsOffs <= 0 || weightsOffs >= data.byteLength ||
+    weightsOffs <= piecesOffs
+  ) {
+    console.warn(
+ //     `[CT_ALT_POS] bad tables piecesOffs=0x${piecesOffs.toString(16)} weightsOffs=0x${weightsOffs.toString(16)}`
+    );
+    return null;
+  }
+
+  const gap = weightsOffs - piecesOffs;
+  const numPieces = Math.floor(gap / FineSkinningPiece_SIZE);
+  const remainder = gap % FineSkinningPiece_SIZE;
+
+  if (
+    numPieces <= 0 ||
+    numPieces >= 0x100 ||
+    remainder > 0x10
+  ) {
+    console.warn(
+  //    `[CT_ALT_POS] bad derived count piecesOffs=0x${piecesOffs.toString(16)} ` +
+ //     `weightsOffs=0x${weightsOffs.toString(16)} gap=0x${gap.toString(16)} ` +
+  //    `numPieces=${numPieces} rem=0x${remainder.toString(16)}`
+    );
+    return null;
+  }
+
+  const cfg: FineSkinningConfig = {
+    numPieces,
+    quantizeScale: 0,
+  };
+
+  console.warn(
+ //   `[CT_ALT_POS] piecesOffs=0x${piecesOffs.toString(16)} ` +
+ //   `weightsOffs=0x${weightsOffs.toString(16)} ` +
+ //   `gap=0x${gap.toString(16)} numPieces=${cfg.numPieces} q=${cfg.quantizeScale}`
+  );
+
+  return { cfg, piecesOffs, weightsOffs };
+})();
+const hasAltDemoPosFineSkin = (() => {
+  if (version !== ModelVersion.Demo)
+    return false;
+
+  const posPiecesOffs = data.getUint32(0x8c, false);
+  const posWeightsOffs = data.getUint32(0x90, false);
+  const cfg = parseFineSkinningConfig(dataSubarray(data, 0x94, 0x08));
+
+  console.log(
+  //  `[DEMO_ALT_POS] piecesOffs=0x${posPiecesOffs.toString(16)} ` +
+  //  `weightsOffs=0x${posWeightsOffs.toString(16)} ` +
+  //  `numPieces=${cfg.numPieces} q=${cfg.quantizeScale}`
+  );
+
+  return (
+    cfg.numPieces > 0 &&
+    cfg.numPieces < 0x100 &&
+    posPiecesOffs > 0 &&
+    posWeightsOffs > 0 &&
+    (posPiecesOffs + cfg.numPieces * FineSkinningPiece_SIZE) <= data.byteLength &&
+    posWeightsOffs < data.byteLength
+  );
+})();
+
+if (ctAltPosFineSkin !== null) {
+  const { cfg, piecesOffs, weightsOffs } = ctAltPosFineSkin;
+  const posFineSkinningWeights = dataSubarray(data, weightsOffs);
+
+  model.hasFineSkinning = true;
+  model.fineSkinPositionQuantizeScale = cfg.quantizeScale;
+
+  for (let i = 0; i < cfg.numPieces; i++) {
+    const piece = parseFineSkinningPiece(
+      dataSubarray(data, piecesOffs + i * FineSkinningPiece_SIZE, FineSkinningPiece_SIZE)
+    );
+
+    model.posFineSkins.push({
+      vertexCount: piece.numVertices,
+      bufferOffset: piece.skinDataSrcOffs + piece.skinMeOffset,
+      bone0: piece.bone0,
+      bone1: piece.bone1,
+      weights: dataSubarray(posFineSkinningWeights, piece.weightsSrc, piece.weightsBlockCount * 32),
+    });
+  }
+
+  console.log(
+ //   `[CT_ALT_POS_OK] posFine=${model.posFineSkins.length} q=${model.fineSkinPositionQuantizeScale}`
+  );
+
+} else if (hasAltDemoPosFineSkin) {
+  const cfg = parseFineSkinningConfig(dataSubarray(data, 0x94, 0x08));
+  const piecesOffs = data.getUint32(0x8c, false);
+  const weightsOffs = data.getUint32(0x90, false);
+  const posFineSkinningWeights = dataSubarray(data, weightsOffs);
+
+  model.hasFineSkinning = true;
+  model.fineSkinPositionQuantizeScale = cfg.quantizeScale;
+
+  for (let i = 0; i < cfg.numPieces; i++) {
+    const piece = parseFineSkinningPiece(
+      dataSubarray(data, piecesOffs + i * FineSkinningPiece_SIZE, FineSkinningPiece_SIZE)
+    );
+
+    model.posFineSkins.push({
+      vertexCount: piece.numVertices,
+      bufferOffset: piece.skinDataSrcOffs + piece.skinMeOffset,
+      bone0: piece.bone0,
+      bone1: piece.bone1,
+      weights: dataSubarray(posFineSkinningWeights, piece.weightsSrc, piece.weightsBlockCount * 32),
+    });
+  }
+
+  console.log(
+  //  `[DEMO_ALT_POS_OK] posFine=${model.posFineSkins.length} q=${model.fineSkinPositionQuantizeScale}`
+  );
+
+
+} else if (fields.posFineSkinningConfig !== undefined) {    const posFineSkinningConfig = parseFineSkinningConfig(dataSubarray(data, fields.posFineSkinningConfig));
     if (posFineSkinningConfig.numPieces !== 0) {
       model.hasFineSkinning = true;
       model.fineSkinPositionQuantizeScale = posFineSkinningConfig.quantizeScale;
@@ -2004,7 +2170,7 @@ return model;
      //   console.log('Skipping normals fine skinning: weights or pieces table out-of-bounds/missing (Demo).');
       }
     } else if (nrmFineSkinningConfig.numPieces !== 0) {
-    //  console.log('Skipping normals fine skinning: Demo fields missing pieces/weights offsets.');
+  //    console.log('Skipping normals fine skinning: Demo fields missing pieces/weights offsets.');
     }
 
     model.hasBetaFineSkinning = model.hasFineSkinning && version === ModelVersion.Beta;
@@ -2020,13 +2186,18 @@ return model;
     compCnt: fmt.compCnt,
   })));
 
-  if (fields.oldVat && !fields.isMapBlock && (normalFlags & NormalFlags.NBT)) {
-    for (const r of [5, 6, 7])
-      vat[r][GX.Attr.POS].compShift = 3;
-  }
- // console.warn(
-  //  `[VAT_PICK] oldVat=${!!fields.oldVat} nrmNBT=${!!(normalFlags & NormalFlags.NBT)} -> vatRow5: POS.shift=${vat[5][GX.Attr.POS].compShift} NRM.compType=${vat[5][GX.Attr.NRM].compType}`
-  //);
+if (
+  fields.oldVat &&
+  !fields.isMapBlock &&
+  (normalFlags & NormalFlags.NBT) &&
+  version !== ModelVersion.cloudtreasure
+) {
+  for (const r of [5, 6, 7])
+    vat[r][GX.Attr.POS].compShift = 3;
+}
+  console.warn(
+ //   `[VAT_PICK] oldVat=${!!fields.oldVat} nrmNBT=${!!(normalFlags & NormalFlags.NBT)} -> vatRow5: POS.shift=${vat[5][GX.Attr.POS].compShift} NRM.compType=${vat[5][GX.Attr.NRM].compType}`
+  );
 
   // Early3/Early4 maps: Their vertex color is 16-bit RGBA4. Ensure VAT expects RGBA4 on all streams.
   const isEarly34Map = !!fields.isMapBlock && (version === ModelVersion.Early3 || version === ModelVersion.Early4);
@@ -2043,17 +2214,26 @@ return model;
   // @0x8e: y translation (up/down)
   const texOffset = data.getUint32(fields.texOffset);
   const texCount = data.getUint8(fields.texCount);
-  //console.log(`Loading ${texCount} texture infos from 0x${texOffset.toString(16)}`);
+//  console.log(`Loading ${texCount} texture infos from 0x${texOffset.toString(16)}`);
   const texIds: number[] = [];
   for (let i = 0; i < texCount; i++) {
     const texIdFromFile = readUint32(data, texOffset, i);
     texIds.push(texIdFromFile);
   }
-  //console.log(`texids: ${texIds}`);
+//  console.log(`texids: ${texIds}`);
 
+  version === ModelVersion.cloudtreasure &&
+  texIds.length === 4 &&
+  texIds[0] === 773 &&
+  texIds[1] === 772 &&
+  texIds[2] === 775 &&
+  texIds[3] === 774 &&
+  data.getUint16(fields.posCount) === 620 &&
+  data.getUint8(fields.shaderCount) === 3 &&
+  data.getUint8(fields.dlInfoCount) === 0;
   const clrOffset = data.getUint32(fields.clrOffset);
   const clrCount = data.getUint16(fields.clrCount);
-  //console.log(`Loading ${clrCount} colors from 0x${clrOffset.toString(16)}`);
+//  console.log(`Loading ${clrCount} colors from 0x${clrOffset.toString(16)}`);
   let clrBuffer: Uint8Array;
   if (version === ModelVersion.AncientMap) {
     clrBuffer = ArrayBufferSlice.fromView(dataSubarray(data, clrOffset)).createTypedArray(Uint8Array);
@@ -2102,63 +2282,280 @@ if (fields.isMapBlock && clrBufferForArrays.byteLength === 0) {
 //  console.log(`Loading ${texcoordCount} texcoords from 0x${texcoordOffset.toString(16)}`);
 const texcoordBuffer = dataSubarray(data, texcoordOffset);
 
-  let hasSkinning = false;
-  let jointCount = 0;
-  if (fields.hasBones) {
-    const jointOffset = data.getUint32(fields.jointOffset);
-    jointCount = data.getUint8(fields.jointCount);
-   // console.log(`Loading ${jointCount} joints from offset 0x${jointOffset.toString(16)}`);
-    hasSkinning = jointCount > 0; 
+let hasSkinning = false;
+let jointCount = 0;
+if (fields.hasBones) {
+const jointOffset = data.getUint32(fields.jointOffset);
+jointCount = data.getUint8(fields.jointCount);
 
-    model.joints = [];
-    if (jointCount > 0) {
-      let offs = jointOffset;
-      for (let i = 0; i < jointCount; i++) {
-        model.joints.push({
-          parent: data.getUint8(offs),
-          boneNum: data.getUint8(offs + 0x1) & 0x7f,
-          translation: readVec3(data, offs + 0x4),
-          bindTranslation: readVec3(data, offs + 0x10),
-        });
-        offs += 0x1c;
+if (version === ModelVersion.cloudtreasure) {
+  const maxCtJoints =
+    jointOffset > 0 && jointOffset < data.byteLength
+      ? Math.floor((data.byteLength - jointOffset) / 0x1c)
+      : 0;
+
+  const rawJointCount = jointCount;
+  let scannedJointCount = 0;
+  const seenBoneNums = new Set<number>();
+
+  for (let i = 0; i < maxCtJoints; i++) {
+    const offs = jointOffset + i * 0x1c;
+    if (offs + 0x1c > data.byteLength)
+      break;
+
+    const rawParent = data.getUint8(offs + 0x0);
+    const rawBoneNum = data.getUint8(offs + 0x1) & 0x7f;
+
+    const tx = data.getFloat32(offs + 0x04, false);
+    const ty = data.getFloat32(offs + 0x08, false);
+    const tz = data.getFloat32(offs + 0x0c, false);
+    const bx = data.getFloat32(offs + 0x10, false);
+    const by = data.getFloat32(offs + 0x14, false);
+    const bz = data.getFloat32(offs + 0x18, false);
+
+    const finite =
+      Number.isFinite(tx) && Number.isFinite(ty) && Number.isFinite(tz) &&
+      Number.isFinite(bx) && Number.isFinite(by) && Number.isFinite(bz);
+
+    if (!finite)
+      break;
+
+    if (i === 0) {
+      if (rawParent !== 0xff)
+        break;
+    } else {
+      if (rawParent === 0xff)
+        break;
+      if (rawParent >= i)
+        break;
+      if (seenBoneNums.has(rawBoneNum))
+        break;
+    }
+
+    seenBoneNums.add(rawBoneNum);
+    scannedJointCount++;
+  }
+
+  jointCount = Math.min(maxCtJoints, Math.max(rawJointCount, scannedJointCount));
+
+  console.warn(
+ //   `[CT_JOINT_SCAN] raw=${rawJointCount} max=${maxCtJoints} scanned=${scannedJointCount} -> using ${jointCount}`
+  );
+}
+
+//  console.log(`Loading ${jointCount} joints from offset 0x${jointOffset.toString(16)}`);
+  const jointTableInBounds =
+    jointOffset > 0 && (jointOffset + jointCount * 0x1c) <= data.byteLength;
+
+  if (jointCount > 0 && !jointTableInBounds) {
+    console.warn(
+      `[CT_JOINT_SKIP] joint table OOB: count=${jointCount} offset=0x${jointOffset.toString(16)}`
+    );
+    jointCount = 0;
+  }
+
+  hasSkinning = jointCount > 0;
+model.joints = [];
+if (jointCount > 0) {
+  let offs = jointOffset;
+  let badParentCount = 0;
+
+  const seenBoneNums = new Set<number>();
+  let ctTruncated = false;
+
+  for (let i = 0; i < jointCount; i++) {
+    const rawParent = data.getUint8(offs);
+    const rawBoneNum = data.getUint8(offs + 0x1) & 0x7f;
+
+    if (version === ModelVersion.cloudtreasure) {
+      const boneOutOfRange = rawBoneNum >= jointCount;
+      const boneDuplicate = seenBoneNums.has(rawBoneNum);
+      const extraRoot = (i > 0 && rawParent === 0xff);
+      const parentForward = (rawParent !== 0xff && rawParent >= i);
+
+      if (boneOutOfRange || boneDuplicate || extraRoot || parentForward) {
+        console.warn(
+   //       `[CT_JOINT_TRUNCATE] at i=${i} rawParent=${rawParent} rawBone=${rawBoneNum} ` +
+   //       `reason=${boneOutOfRange ? 'bone_oob' : boneDuplicate ? 'bone_dup' : extraRoot ? 'extra_root' : 'parent_forward'}`
+        );
+        jointCount = model.joints.length;
+        ctTruncated = true;
+        break;
       }
+    }
 
-      if (fields.weightOffset !== undefined) {
-        const weightOffset = data.getUint32(fields.weightOffset);
-        const weightCount = data.getUint8(fields.weightCount);
-        const bytesNeeded = weightCount * 4;
-        const inBounds = (weightOffset > 0) && (weightOffset + bytesNeeded) <= data.byteLength;
-        if (weightCount > 0 && inBounds) {
-         // console.log(`Loading ${weightCount} weights from offset 0x${weightOffset.toString(16)}`);
-          model.coarseBlends = [];
-          let offs = weightOffset;
-          for (let i = 0; i < weightCount; i++) {
-            const split = data.getUint8(offs + 0x2);
-            const influence0 = 0.25 * split;
-            model.coarseBlends.push({
-              joint0: data.getUint8(offs),
-              joint1: data.getUint8(offs + 0x1),
-              influence0,
-              influence1: 1 - influence0,
-            });
-            offs += 0x4;
-          }
-        } else {
-         // console.log(`Skipping weights: count=${weightCount}, offset=0x${weightOffset.toString(16)} (not present / OOB)`);
+    const parent =
+      (rawParent !== 0xff && rawParent < jointCount && rawParent < i)
+        ? rawParent
+        : 0xff;
+
+    if (rawParent !== 0xff && parent === 0xff)
+      badParentCount++;
+
+    const joint = {
+      parent,
+      boneNum: rawBoneNum,
+      translation: readVec3(data, offs + 0x4),
+      bindTranslation: readVec3(data, offs + 0x10),
+    };
+
+    model.joints.push(joint);
+    seenBoneNums.add(rawBoneNum);
+
+    if (version === ModelVersion.cloudtreasure && i < 12) {
+      const t = joint.translation;
+      const b = joint.bindTranslation;
+      console.warn(
+   //     `[CT_JOINT] i=${i} rawParent=${rawParent} parent=${parent} rawBone=${rawBoneNum} bone=${joint.boneNum} ` +
+   //     `t=(${t[0].toFixed(2)},${t[1].toFixed(2)},${t[2].toFixed(2)}) ` +
+   //     `bind=(${b[0].toFixed(2)},${b[1].toFixed(2)},${b[2].toFixed(2)})`
+      );
+    }
+
+    offs += 0x1c;
+  }
+
+  if (version === ModelVersion.cloudtreasure && ctTruncated) {
+  //  console.warn(`[CT_JOINT_FINAL] truncated jointCount -> ${jointCount}`);
+  }
+
+  hasSkinning = jointCount > 0;
+
+    if (version === ModelVersion.cloudtreasure) {
+      for (let i = 0; i < model.joints.length; i++) {
+        if (model.joints[i].boneNum !== i) {
+          console.warn(
+    //        `[CT_BONENUM_MISMATCH] i=${i} bone=${model.joints[i].boneNum} parent=${model.joints[i].parent}`
+          );
+        }
+      }
+    }
+
+    if (version === ModelVersion.cloudtreasure && badParentCount > 0) {
+ //     console.warn(`[CT_JOINT_FIX] clamped ${badParentCount} invalid joint parent indices`);
+    }
+
+if (fields.weightOffset !== undefined) {
+  const weightOffset = data.getUint32(fields.weightOffset);
+  const weightCount = data.getUint8(fields.weightCount);
+  const bytesNeeded = weightCount * 4;
+  const inBounds = (weightOffset > 0) && (weightOffset + bytesNeeded) <= data.byteLength;
+
+  if (weightCount > 0 && inBounds) {
+  //  console.log(`Loading ${weightCount} weights from offset 0x${weightOffset.toString(16)}`);
+    model.coarseBlends = [];
+    let offs = weightOffset;
+
+    for (let i = 0; i < weightCount; i++) {
+      const rawJoint0 = data.getUint8(offs + 0x0);
+      const rawJoint1 = data.getUint8(offs + 0x1);
+      const split = data.getUint8(offs + 0x2);
+
+      if (version === ModelVersion.cloudtreasure) {
+        if (rawJoint0 >= jointCount || rawJoint1 >= jointCount) {
+          console.warn(
+   //         `[CT_WEIGHT_SKIP] i=${i} joint0=${rawJoint0} joint1=${rawJoint1} jointCount=${jointCount}`
+          );
+          offs += 0x4;
+          continue;
         }
       }
 
-      model.skeleton = new Skeleton();
-      model.invBindTranslations = nArray(model.joints.length, () => vec3.create());
-      for (let i = 0; i < model.joints.length; i++) {
-        const joint = model.joints[i];
-        if (joint.boneNum !== i) throw Error("wtf? joint's bone number doesn't match its index!");
-        model.skeleton.addJoint(joint.parent != 0xff ? joint.parent : undefined, joint.translation);
-        vec3.negate(model.invBindTranslations[i], joint.bindTranslation);
+      const influence0 = 0.25 * split;
+      model.coarseBlends.push({
+        joint0: rawJoint0,
+        joint1: rawJoint1,
+        influence0,
+        influence1: 1 - influence0,
+      });
+
+      offs += 0x4;
+    }
+  } else {
+  //  console.log(`Skipping weights: count=${weightCount}, offset=0x${weightOffset.toString(16)} (not present / OOB)`);
+  }
+}
+
+model.skeleton = new Skeleton();
+model.invBindTranslations = nArray(model.joints.length, () => vec3.create());
+
+try {
+  for (let i = 0; i < model.joints.length; i++) {
+    const joint = model.joints[i];
+    model.skeleton.addJoint(joint.parent != 0xff ? joint.parent : undefined, joint.translation);
+    vec3.negate(model.invBindTranslations[i], joint.bindTranslation);
+  }
+} catch (e) {
+  if (version === ModelVersion.cloudtreasure) {
+    console.warn(
+  //    `[CT_SKINNING_DISABLE] skeleton rejected: ${e instanceof Error ? e.message : String(e)}`
+    );
+
+    model.joints = [];
+    model.coarseBlends = [];
+    model.skeleton = new Skeleton();
+    model.invBindTranslations = [];
+    jointCount = 0;
+    hasSkinning = false;
+  } else {
+    throw e;
+  }
+}
+  }
+}
+if (version === ModelVersion.cloudtreasure && model.hasFineSkinning) {
+  if (jointCount <= 0 || model.joints.length === 0 || model.invBindTranslations.length === 0) {
+    console.warn(
+  //    `[CT_FINE_DISABLE] no valid joints for fine skinning ` +
+  //    `jointCount=${jointCount} joints=${model.joints.length} invBind=${model.invBindTranslations.length}`
+    );
+
+    model.posFineSkins = [];
+    model.nrmFineSkins = [];
+    model.hasFineSkinning = false;
+  } else {
+    const oldPosCount = model.posFineSkins.length;
+    const oldNrmCount = model.nrmFineSkins.length;
+
+    model.posFineSkins = model.posFineSkins.filter((piece, i) => {
+      const ok =
+        piece.bone0 >= 0 && piece.bone0 < jointCount &&
+        piece.bone1 >= 0 && piece.bone1 < jointCount;
+
+      if (!ok) {
+        console.warn(
+   //       `[CT_FINE_SKIP_POS] piece=${i} bone0=${piece.bone0} bone1=${piece.bone1} jointCount=${jointCount}`
+        );
       }
+
+      return ok;
+    });
+
+    model.nrmFineSkins = model.nrmFineSkins.filter((piece, i) => {
+      const ok =
+        piece.bone0 >= 0 && piece.bone0 < jointCount &&
+        piece.bone1 >= 0 && piece.bone1 < jointCount;
+
+      if (!ok) {
+        console.warn(
+   //       `[CT_FINE_SKIP_NRM] piece=${i} bone0=${piece.bone0} bone1=${piece.bone1} jointCount=${jointCount}`
+        );
+      }
+
+      return ok;
+    });
+
+    console.warn(
+  //    `[CT_FINE_VALIDATE] pos ${oldPosCount} -> ${model.posFineSkins.length}, ` +
+   //   `nrm ${oldNrmCount} -> ${model.nrmFineSkins.length}, jointCount=${jointCount}`
+    );
+
+    if (model.posFineSkins.length === 0 && model.nrmFineSkins.length === 0) {
+  //    console.warn('[CT_FINE_DISABLE] no valid fine-skin pieces remain');
+      model.hasFineSkinning = false;
     }
   }
-
+}
   if (!fields.isMapBlock && fields.isFinal) {
     model.cullRadius = data.getUint16(0xe0);
     model.lightFlags = data.getUint16(0xe2);
@@ -2167,39 +2564,43 @@ const texcoordBuffer = dataSubarray(data, texcoordOffset);
   let texMtxCount = 0;
   if (fields.hasBones && fields.texMtxCount !== undefined)
     texMtxCount = data.getUint8(fields.texMtxCount);
-  //console.warn(`[TEXMTX] texMtxCount=${texMtxCount}`);
+ // console.warn(`[TEXMTX] texMtxCount=${texMtxCount}`);
 
   // Debug dump bytes in a range (adjust range as needed)
   for (let off = 0x00; off < 0x150; off++) {
-   // console.log(`0x${off.toString(16)}: 0x${data.getUint8(off).toString(16)}`);
+  //  console.log(`0x${off.toString(16)}: 0x${data.getUint8(off).toString(16)}`);
   }
 
-  const shaderOffset = data.getUint32(fields.shaderOffset);
-  const shaderCount = data.getUint8(fields.shaderCount);
-  //console.log(`Loading ${shaderCount} shaders from offset 0x${shaderOffset.toString(16)}`);
+//console.log(`Loading ${shaderCount} shaders from offset 0x${shaderOffset.toString(16)} stride=0x${shaderStride.toString(16)}`);
 
-  const shaders: Shader[] = [];
-  let offs = shaderOffset;
-  for (let i = 0; i < shaderCount; i++) {
-    const shaderBin = dataSubarray(data, offs, fields.shaderFields.size);
+const shaders: Shader[] = [];
+let offs = shaderOffset;
+for (let i = 0; i < shaderCount; i++) {
+    const shaderBin = dataSubarray(data, offs, shaderStride);
     shaders.push(
-      parseShader(
-        shaderBin,
-        fields.shaderFields,
-        texIds,
-        normalFlags,
-        model.lightFlags,
-        texMtxCount,
-      ),
+        parseShader(
+            shaderBin,
+            fields.shaderFields,
+            texIds,
+            normalFlags,
+            model.lightFlags,
+            texMtxCount,
+        ),
     );
-    offs += fields.shaderFields.size;
-  }
+    offs += shaderStride;
+}
 
   model.materials = [];
 
-  const dlInfos: DisplayListInfo[] = [];
-  const dlInfoCount = data.getUint8(fields.dlInfoCount);
-//  console.log(`Loading ${dlInfoCount} display lists...`);
+const dlInfos: DisplayListInfo[] = [];
+let dlInfoCount = data.getUint8(fields.dlInfoCount);
+
+if (version === ModelVersion.cloudtreasure && dlInfoCount === 0) {
+  dlInfoCount = 16;
+ // console.warn(`[CT_DLCOUNT_FALLBACK] dlInfoCount field was 0, using fallback count=${dlInfoCount}`);
+}
+
+//console.log(`Loading ${dlInfoCount} display lists...`);
 
   if (fields.isBeta) {
     for (let i = 0; i < dlInfoCount; i++) {
@@ -2213,7 +2614,7 @@ const texcoordBuffer = dataSubarray(data, texcoordOffset);
   } else {
     const dlInfoOffset = data.getUint32(fields.dlInfoOffset);
     if (dlInfoOffset === 0 || dlInfoOffset >= data.byteLength) {
-     // console.warn(`DL info table missing or OOB: offset=0x${dlInfoOffset.toString(16)} (Demo/object)`);
+  //    console.warn(`DL info table missing or OOB: offset=0x${dlInfoOffset.toString(16)} (Demo/object)`);
     } else {
       const fileLen = data.byteLength >>> 0;
       const stride = fields.dlInfoSize >>> 0;
@@ -2252,10 +2653,10 @@ const texcoordBuffer = dataSubarray(data, texcoordOffset);
   for (let i = 0; i < dlInfos.length; i++) {
     const { offset, size } = dlInfos[i];
     if (offset === 0 || size === 0) {
-     // console.warn(`[DL_SANITY] #${i} empty offset/size (offset=0x${offset.toString(16)}, size=0x${size.toString(16)})`);
+ //     console.warn(`[DL_SANITY] #${i} empty offset/size (offset=0x${offset.toString(16)}, size=0x${size.toString(16)})`);
     }
     if (offset < 0 || offset + size > data.byteLength) {
-     // console.error(`[DL_OOB] #${i} offset=0x${offset.toString(16)} size=0x${size.toString(16)} > fileLen=0x${data.byteLength.toString(16)}`);
+  //    console.error(`[DL_OOB] #${i} offset=0x${offset.toString(16)} size=0x${size.toString(16)} > fileLen=0x${data.byteLength.toString(16)}`);
     }
   }
  // console.warn(`[DL_SUMMARY] count=${dlInfos.length} dlInfoSize(field)=${fields.dlInfoSize}`);
@@ -2284,7 +2685,7 @@ const texcoordBuffer = dataSubarray(data, texcoordOffset);
   };
 
   const readVertexDesc = (bits: LowBitReader, shader: Shader): GX_VtxDesc[] => {
-    //console.log('Setting descriptor');
+ //   console.log('Setting descriptor');
     const vcd: GX_VtxDesc[] = [] as any;
     for (let i = 0; i <= GX.Attr.MAX; i++) vcd[i] = { type: GX.AttrType.NONE };
 
@@ -2319,13 +2720,10 @@ const texcoordBuffer = dataSubarray(data, texcoordOffset);
       vcd[GX.Attr.NRM].type = GX.AttrType.NONE;
 
     // Colors:
-    // Early/Demo map bitstreams still encode the CLR0 size bit even when the shader doesn't use color.
-    // If we skip it, the stream desyncs. Consume it whenever a palette is present on maps.
     const mapHasPalette = hasColorTable && !!fields.isMapBlock;
     const wantClr0 = mapHasPalette || !!(shader.attrFlags & ShaderAttrFlags.CLR);
     if (wantClr0) {
       if (isEarly34Map) {
-        // Early3/4 maps force CLR as INDEX16 but still encode one size bit — consume it to keep alignment.
        bits.get(1);
         vcd[GX.Attr.CLR0].type = GX.AttrType.INDEX16;
       } else {
@@ -2364,7 +2762,7 @@ const texcoordBuffer = dataSubarray(data, texcoordOffset);
     posBuffer: DataView,
     nrmBuffer?: DataView,
   ): Shape => {
-   // console.log(`running special bitstream at offset 0x${bitsOffset.toString(16)} bit-address 0x${bitAddress.toString(16)}`);
+ //   console.log(`running special bitstream at offset 0x${bitsOffset.toString(16)} bit-address 0x${bitAddress.toString(16)}`);
     const bits = new LowBitReader(data, bitsOffset);
     bits.seekBit(bitAddress);
 
@@ -2385,7 +2783,7 @@ const texcoordBuffer = dataSubarray(data, texcoordOffset);
     const listNum = bits.get(fields.numListBits);
     const dlInfo = dlInfos[listNum];
 
-   // console.log(`Calling special bitstream DL #${listNum} at offset 0x${dlInfo.offset.toString(16)}, size 0x${dlInfo.size.toString(16)}`);
+  //  console.log(`Calling special bitstream DL #${listNum} at offset 0x${dlInfo.offset.toString(16)}, size 0x${dlInfo.size.toString(16)}`);
 
     const displayList = dataSubarray(data, dlInfo.offset, dlInfo.size);
     const vtxArrays = getVtxArrays(posBuffer, nrmBuffer);
@@ -2579,35 +2977,82 @@ const texcoordBuffer = dataSubarray(data, texcoordOffset);
       return v;
     }
   }
+function forceVCDStrideToTexMtxOnly(vcdIn: GX_VtxDesc[], targetStride: number): GX_VtxDesc[] {
+  const v = vcdClone(vcdIn);
+  let cur = vcdIndexBytes(v) + vcdDirectBytes(v);
+  if (cur === targetStride) return v;
 
-  function tuneVCDForDL(
-    data: DataView,
-    dlOff: number,
-    dlSize: number,
-    baseVcd: GX_VtxDesc[],
-    fields: any,
-    shader: Shader
-  ): GX_VtxDesc[] {
-    if (!fields.oldVat || dlSize < 4) return baseVcd;
+  if (cur < targetStride) {
+    let need = targetStride - cur;
 
-    const target = guessTargetStride(data, dlOff, dlSize);
-    if (target == null) return baseVcd;
-
-    const curStride = vcdIndexBytes(baseVcd) + vcdDirectBytes(baseVcd);
-    if (curStride === target) return baseVcd;
-
-    const forced = forceVCDStrideTo(baseVcd, target);
-    const newStride = vcdIndexBytes(forced) + vcdDirectBytes(forced);
-    if (newStride === target) {
-     // console.warn(
-      //  `[VCD_FORCE] @0x${dlOff.toString(16)} stride ${curStride} -> ${newStride} ` +
-      //  `(PN=${forced[GX.Attr.PNMTXIDX]?.type === GX.AttrType.DIRECT ? 1 : 0}, ` +
-      //  `TEXMTX=${(() => { let n=0; for(let i=0;i<8;i++) if (forced[GX.Attr.TEX0MTXIDX+i]?.type===GX.AttrType.DIRECT) n++; return n; })()})`
-    //  );
-      return forced;
+    // CloudTreasure no-skinning case:
+    // pad stride using TEXnMTXIDX only, never PNMTXIDX.
+    for (let i = 0; i < 8 && need > 0; i++) {
+      const a = GX.Attr.TEX0MTXIDX + i;
+      if ((v[a]?.type ?? GX.AttrType.NONE) !== GX.AttrType.DIRECT) {
+        v[a] = { type: GX.AttrType.DIRECT };
+        need--;
+      }
     }
+    return v;
+  } else {
+    let over = cur - targetStride;
+
+    for (let i = 7; i >= 0 && over > 0; i--) {
+      const a = GX.Attr.TEX0MTXIDX + i;
+      if (v[a]?.type === GX.AttrType.DIRECT) {
+        v[a] = { type: GX.AttrType.NONE };
+        over--;
+      }
+    }
+
+    return v;
+  }
+}
+function tuneVCDForDL(
+  data: DataView,
+  dlOff: number,
+  dlSize: number,
+  baseVcd: GX_VtxDesc[],
+  fields: any,
+  shader: Shader
+): GX_VtxDesc[] {
+  if (!fields.oldVat || dlSize < 4) return baseVcd;
+
+  const target = guessTargetStride(data, dlOff, dlSize);
+  if (target == null) return baseVcd;
+
+  const baseIdx = vcdIndexBytes(baseVcd);
+  const baseDirect = vcdDirectBytes(baseVcd);
+  const curStride = baseIdx + baseDirect;
+  if (curStride === target) return baseVcd;
+
+  const isCloudTreasureNoSkin =
+    version === ModelVersion.cloudtreasure && jointCount === 0;
+
+  if (!isCloudTreasureNoSkin && baseDirect === 0 && target > baseIdx) {
+    console.warn(
+    //  `[VCD_SKIP_FORCE] @0x${dlOff.toString(16)} target=${target} idx=${baseIdx} direct=${baseDirect}`
+    );
     return baseVcd;
   }
+
+  const forced = isCloudTreasureNoSkin
+    ? forceVCDStrideToTexMtxOnly(baseVcd, target)
+    : forceVCDStrideTo(baseVcd, target);
+
+  const newStride = vcdIndexBytes(forced) + vcdDirectBytes(forced);
+  if (newStride === target) {
+    console.warn(
+   //   `[VCD_FORCE] @0x${dlOff.toString(16)} stride ${curStride} -> ${newStride} ` +
+    //  `(PN=${forced[GX.Attr.PNMTXIDX]?.type === GX.AttrType.DIRECT ? 1 : 0}, ` +
+   //   `TEXMTX=${(() => { let n=0; for(let i=0;i<8;i++) if (forced[GX.Attr.TEX0MTXIDX+i]?.type===GX.AttrType.DIRECT) n++; return n; })()})`
+    );
+    return forced;
+  }
+
+  return baseVcd;
+}
   const runBitstream = (
     modelShapes: ModelShapes,
     bitsOffset: number,
@@ -2615,8 +3060,8 @@ const texcoordBuffer = dataSubarray(data, texcoordOffset);
     posBuffer: DataView,
     nrmBuffer?: DataView,
   ) => {
-   // console.log(`running bitstream at offset 0x${bitsOffset.toString(16)}`);
-   // console.warn(`[RUN_BITS] drawStep=${drawStep} offset=0x${bitsOffset.toString(16)}`);
+ //   console.log(`running bitstream at offset 0x${bitsOffset.toString(16)}`);
+  //  console.warn(`[RUN_BITS] drawStep=${drawStep} offset=0x${bitsOffset.toString(16)}`);
 
     modelShapes.shapes[drawStep] = [];
     const shapes = modelShapes.shapes[drawStep];
@@ -2651,6 +3096,10 @@ if (usingDummyClr) {
       }
       curMaterial = model.materials[num];
     };
+    if (shaders.length === 0) {
+  //  console.warn(`[RUN_BITS_SKIP] no shaders parsed`);
+    return;
+}
     setShader(0);
 
     const bits = new LowBitReader(data, bitsOffset);
@@ -2662,26 +3111,26 @@ if (usingDummyClr) {
       switch (opcode) {
         case Opcode.SetShader: {
           const shaderNum = bits.get(6);
-        //  console.log(`Setting shader #${shaderNum}`);
+  //       console.log(`Setting shader #${shaderNum}`);
           setShader(shaderNum);
           break;
         }
 
         case Opcode.CallDL: {
           const listNum = bits.get(fields.numListBits);
-         // console.warn(`[CALL_DL] list=${listNum}/${dlInfos.length} step=${drawStep} numListBits(field)=${fields.numListBits}`);
+   //       console.warn(`[CALL_DL] list=${listNum}/${dlInfos.length} step=${drawStep} numListBits(field)=${fields.numListBits}`);
           if (listNum >= dlInfos.length) {
-           // console.warn(`Can't draw display list #${listNum} (out of range)`);
+   //         console.warn(`Can't draw display list #${listNum} (out of range)`);
             continue;
           }
           const dlInfo = dlInfos[listNum];
           if (!dlInfo || dlInfo.offset === 0 || dlInfo.size === 0 || (dlInfo.offset + dlInfo.size) > data.byteLength) {
-          //  console.warn(`[DL_SKIP] list=${listNum} invalid dlInfo (offs=0x${dlInfo?.offset?.toString(16) ?? '??'} size=0x${dlInfo?.size?.toString(16) ?? '??'})`);
+    //        console.warn(`[DL_SKIP] list=${listNum} invalid dlInfo (offs=0x${dlInfo?.offset?.toString(16) ?? '??'} size=0x${dlInfo?.size?.toString(16) ?? '??'})`);
             break;
           }
 
           const displayList = dataSubarray(data, dlInfo.offset, dlInfo.size);
-        //  console.warn(`[DL] #${listNum} offs=0x${dlInfo.offset.toString(16)} size=0x${dlInfo.size.toString(16)}`);
+    //      console.warn(`[DL] #${listNum} offs=0x${dlInfo.offset.toString(16)} size=0x${dlInfo.size.toString(16)}`);
 
           if (listNum < 10) {
             try {
@@ -2697,12 +3146,12 @@ if (usingDummyClr) {
                     if (isLikelyGXOpcode(b)) candidates.push(`s=${s}->0x${b.toString(16)} @+0x${(p2-base).toString(16)}`);
                   }
                 }
-             //   console.warn(`[DL_STRIDE_GUESS] list=${listNum} prim=0x${prim.toString(16)} count=${cnt} candidates=[${candidates.join(', ')}]`);
+       //         console.warn(`[DL_STRIDE_GUESS] list=${listNum} prim=0x${prim.toString(16)} count=${cnt} candidates=[${candidates.join(', ')}]`);
               } else {
-             //   console.warn(`[DL_STRIDE_GUESS] list=${listNum} prim=0x${prim.toString(16)} (not GX draw)`);
+       //         console.warn(`[DL_STRIDE_GUESS] list=${listNum} prim=0x${prim.toString(16)} (not GX draw)`);
               }
             } catch (e) {
-            //  console.warn(`[DL_STRIDE_GUESS] list=${listNum} error: ${e instanceof Error ? e.message : String(e)}`);
+       //       console.warn(`[DL_STRIDE_GUESS] list=${listNum} error: ${e instanceof Error ? e.message : String(e)}`);
             }
 
             {
@@ -2710,7 +3159,7 @@ if (usingDummyClr) {
               const lim = Math.min(base + 16, data.byteLength);
               let s = '';
               for (let p = base; p < lim; p++) s += data.getUint8(p).toString(16).padStart(2, '0') + ' ';
-            //  console.warn(`[DL_BYTES] list=${listNum} @0x${base.toString(16)} : ${s.trim()}`);
+      //        console.warn(`[DL_BYTES] list=${listNum} @0x${base.toString(16)} : ${s.trim()}`);
             }
             {
               const base = dlInfo.offset >>> 0;
@@ -2720,18 +3169,18 @@ if (usingDummyClr) {
                 const b = data.getUint8(base + d);
                 if (isLikelyGXOpcode(b)) { firstGX = base + d; break; }
               }
-             // console.warn(`[DL_SNIFF] list=${listNum} firstGX=${firstGX >= 0 ? '0x' + firstGX.toString(16) : 'none'} delta=${firstGX >= 0 ? '0x' + (firstGX - base).toString(16) : 'n/a'}`);
+      //        console.warn(`[DL_SNIFF] list=${listNum} firstGX=${firstGX >= 0 ? '0x' + firstGX.toString(16) : 'none'} delta=${firstGX >= 0 ? '0x' + (firstGX - base).toString(16) : 'n/a'}`);
               if (firstGX >= 0) {
                 const lim2 = Math.min(firstGX + 16, data.byteLength);
                 let s2 = '';
                 for (let p = firstGX; p < lim2; p++) s2 += data.getUint8(p).toString(16).padStart(2, '0') + ' ';
-              //  console.warn(`[DL_BYTES+] list=${listNum} @0x${firstGX.toString(16)} : ${s2.trim()}`);
+       //         console.warn(`[DL_BYTES+] list=${listNum} @0x${firstGX.toString(16)} : ${s2.trim()}`);
               }
             }
           }
 
           if ((displayList.byteLength | 0) === 0) {
-          //  console.warn('[GEOM] Empty display list -> nothing to render');
+       //     console.warn('[GEOM] Empty display list -> nothing to render');
           }
 
           // Early1/Early3: detect BP alpha-compare and OR it into the shader if necessary.
@@ -2778,7 +3227,7 @@ if (usingDummyClr) {
           };
 
           if (vcd[GX.Attr.CLR0]?.type !== GX.AttrType.NONE && clrCount === 0)
-          //  console.error('[ATTR] CLR0 requested but clrCount==0');
+       //     console.error('[ATTR] CLR0 requested but clrCount==0');
           if (vcd[GX.Attr.NRM]?.type !== GX.AttrType.NONE && !fields.hasNormals)
             console.error('[ATTR] NRM requested but hasNormals==false');
 
@@ -2832,7 +3281,7 @@ const tunedVcd = tuneVCDForDL(data, dlInfo.offset, dlInfo.size, vcd, fields, cur
                                  b(GX.Attr.TEX1) + b(GX.Attr.TEX2) + b(GX.Attr.TEX3);
                 const needed = 3 + cnt * (idxBytes + direct);
                 if (needed > dlInfo.size) {
-              //    console.warn(`[DL_TINY_SKIP] list=${listNum} cnt=${cnt} need=${needed} > size=${dlInfo.size}`);
+           //       console.warn(`[DL_TINY_SKIP] list=${listNum} cnt=${cnt} need=${needed} > size=${dlInfo.size}`);
                   break; // skip this DL only
                 }
               }
@@ -2856,19 +3305,19 @@ const tunedVcd = tuneVCDForDL(data, dlInfo.offset, dlInfo.size, vcd, fields, cur
             const posStride = 6, nrmStride = (normalFlags & NormalFlags.NBT) ? 9 : 3, texStride = 4;
             const msg = (e as Error)?.message ?? String(e);
 
-           // console.warn(
-           //   `[GEOM_FAIL:${tag}] list=${listNum}/${dlInfos.length} step=${drawStep} ` +
-           //   `offs=0x${dlInfo.offset.toString(16)} size=0x${dlInfo.size.toString(16)} ` +
-           //   `VCD{POS=${typeStr(v(GX.Attr.POS))} NRM=${typeStr(v(GX.Attr.NRM))} CLR=${typeStr(v(GX.Attr.CLR0))} ` +
-           //   `T0=${typeStr(v(GX.Attr.TEX0))} T1=${typeStr(v(GX.Attr.TEX1))} T2=${typeStr(v(GX.Attr.TEX2))} T3=${typeStr(v(GX.Attr.TEX3))} ` +
-           //   `PN=${typeStr(v(GX.Attr.PNMTXIDX))} TMX#=${(() => { let n=0; for(let i=0;i<8;i++) if (tunedVcd[GX.Attr.TEX0MTXIDX+i]?.type===GX.AttrType.DIRECT) n++; return n; })()}} ` +
-           //   `VAT5{POS.shift=${vat[5][GX.Attr.POS].compShift} NRM.compType=${vat[5][GX.Attr.NRM].compType}} ` +
-           //   `POS{offs=0 len=${posBuffer.byteLength} stride=${posStride}} ` +
-           //   `NRM{offs=0 len=${nrmBuffer?.byteLength ?? 0} stride=${nrmStride}} ` +
-           //   `CLR{offs=0 len=${clrBufferForArrays.byteLength} stride=2} ` +
-           //   `T0{offs=0 len=${texcoordBuffer.byteLength} stride=${texStride}} ` +
-           //   `msg=${msg}`
-           // );
+            console.warn(
+    //          `[GEOM_FAIL:${tag}] list=${listNum}/${dlInfos.length} step=${drawStep} ` +
+    //          `offs=0x${dlInfo.offset.toString(16)} size=0x${dlInfo.size.toString(16)} ` +
+    //          `VCD{POS=${typeStr(v(GX.Attr.POS))} NRM=${typeStr(v(GX.Attr.NRM))} CLR=${typeStr(v(GX.Attr.CLR0))} ` +
+     //         `T0=${typeStr(v(GX.Attr.TEX0))} T1=${typeStr(v(GX.Attr.TEX1))} T2=${typeStr(v(GX.Attr.TEX2))} T3=${typeStr(v(GX.Attr.TEX3))} ` +
+    //          `PN=${typeStr(v(GX.Attr.PNMTXIDX))} TMX#=${(() => { let n=0; for(let i=0;i<8;i++) if (tunedVcd[GX.Attr.TEX0MTXIDX+i]?.type===GX.AttrType.DIRECT) n++; return n; })()}} ` +
+    //          `VAT5{POS.shift=${vat[5][GX.Attr.POS].compShift} NRM.compType=${vat[5][GX.Attr.NRM].compType}} ` +
+    //         `POS{offs=0 len=${posBuffer.byteLength} stride=${posStride}} ` +
+     //         `NRM{offs=0 len=${nrmBuffer?.byteLength ?? 0} stride=${nrmStride}} ` +
+    //          `CLR{offs=0 len=${clrBufferForArrays.byteLength} stride=2} ` +
+    //          `T0{offs=0 len=${texcoordBuffer.byteLength} stride=${texStride}} ` +
+    //          `msg=${msg}`
+            );
           };
 
           try {
@@ -2886,11 +3335,14 @@ const tunedVcd = tuneVCDForDL(data, dlInfo.offset, dlInfo.size, vcd, fields, cur
           } catch (err) {
             logGeomFail(err, 'PRIMARY');
 
-            {
+            const skipAltStrideRetry =
+              version === ModelVersion.cloudtreasure && jointCount === 0;
+
+            if (!skipAltStrideRetry) {
               const altSeq = scanStrideCandidates(data, dlInfo.offset, dlInfo.size);
               let recovered = false;
               for (const s of altSeq) {
-                const vcdAlt = forceVCDStrideTo(vcd, s);
+const vcdAlt = (version === ModelVersion.cloudtreasure && jointCount === 0) ? forceVCDStrideToTexMtxOnly(vcd, s) : forceVCDStrideTo(vcd, s);
                 const curIdx = vcdIndexBytes(vcdAlt) + vcdDirectBytes(vcdAlt);
                 if (curIdx !== s) continue;
 
@@ -2906,7 +3358,7 @@ const tunedVcd = tuneVCDForDL(data, dlInfo.offset, dlInfo.size, vcd, fields, cur
                     !!(curShader.flags & ShaderFlags.DevGeometry)
                   );
                   shapes.push(shapeAlt);
-                 // console.warn(`[GEOM_RETRY_OK] list=${listNum} via alt stride=${s}`);
+      //            console.warn(`[GEOM_RETRY_OK] list=${listNum} via alt stride=${s}`);
                   recovered = true;
                   break;
                 } catch (errAlt) {
@@ -2914,6 +3366,10 @@ const tunedVcd = tuneVCDForDL(data, dlInfo.offset, dlInfo.size, vcd, fields, cur
                 }
               }
               if (recovered) break;
+            } else {
+              console.warn(
+       //         `[CT_SKIP_ALT_RETRY] list=${listNum} skipping alt-stride retry while jointCount=0`
+              );
             }
 
             // Retry A: skip 0x20 preamble seen in some demo DLs
@@ -2931,7 +3387,7 @@ const tunedVcd = tuneVCDForDL(data, dlInfo.offset, dlInfo.size, vcd, fields, cur
                   !!(curShader.flags & ShaderFlags.DevGeometry)
                 );
                 shapes.push(shape2);
-               // console.warn(`[GEOM_RETRY_OK] list=${listNum} (skipped 0x20-byte DL header)`);
+     //           console.warn(`[GEOM_RETRY_OK] list=${listNum} (skipped 0x20-byte DL header)`);
                 break;
               } catch (err2) {
                 logGeomFail(err2, 'RETRY+SKIP20');
@@ -2954,7 +3410,7 @@ const tunedVcd = tuneVCDForDL(data, dlInfo.offset, dlInfo.size, vcd, fields, cur
                   !!(curShader.flags & ShaderFlags.DevGeometry)
                 );
                 shapes.push(shape);
-              //  console.warn(`[GEOM_RETRY_OK] list=${listNum} (PNMTXIDX disabled)`);
+     //           console.warn(`[GEOM_RETRY_OK] list=${listNum} (PNMTXIDX disabled)`);
                 break;
               } catch (err3) {
                 logGeomFail(err3, 'RETRY');
@@ -2975,7 +3431,7 @@ const tunedVcd = tuneVCDForDL(data, dlInfo.offset, dlInfo.size, vcd, fields, cur
                     !!(curShader.flags & ShaderFlags.DevGeometry)
                   );
                   shapes.push(shape3);
-                 // console.warn(`[GEOM_RETRY_OK] list=${listNum} (PNMTXIDX disabled + skip 0x20)`);
+     //             console.warn(`[GEOM_RETRY_OK] list=${listNum} (PNMTXIDX disabled + skip 0x20)`);
                   break;
                 } catch (err4) {
                   logGeomFail(err4, 'RETRY+PNOFF+SKIP20');
@@ -3018,41 +3474,58 @@ const tunedVcd = tuneVCDForDL(data, dlInfo.offset, dlInfo.size, vcd, fields, cur
             t === GX.AttrType.INDEX16 ? 'INDEX16' : `UNK(${t})`;
 
           const show = (a: number) => attrTypeToStr(vcd[a]?.type ?? GX.AttrType.NONE);
-        //  console.warn(
-         //   `[VCD] POS=${show(GX.Attr.POS)} NRM=${show(GX.Attr.NRM)} CLR=${show(GX.Attr.CLR0)} ` +
-        //    `T0=${show(GX.Attr.TEX0)} T1=${show(GX.Attr.TEX1)} T2=${show(GX.Attr.TEX2)} T3=${show(GX.Attr.TEX3)}`
-       //   );
+          console.warn(
+      //      `[VCD] POS=${show(GX.Attr.POS)} NRM=${show(GX.Attr.NRM)} CLR=${show(GX.Attr.CLR0)} ` +
+     //       `T0=${show(GX.Attr.TEX0)} T1=${show(GX.Attr.TEX1)} T2=${show(GX.Attr.TEX2)} T3=${show(GX.Attr.TEX3)}`
+          );
 
           const b = (a: number) =>
             vcd[a]?.type === GX.AttrType.INDEX16 ? 2 :
             vcd[a]?.type === GX.AttrType.INDEX8  ? 1 : 0;
           const idxBytesExpected =
             b(GX.Attr.POS) + b(GX.Attr.NRM) + b(GX.Attr.CLR0) + b(GX.Attr.TEX0) + b(GX.Attr.TEX1) + b(GX.Attr.TEX2) + b(GX.Attr.TEX3);
-        //  console.warn(`[VCD_EXPECT] idxBytesPerVertex=${idxBytesExpected}`);
+       //   console.warn(`[VCD_EXPECT] idxBytesPerVertex=${idxBytesExpected}`);
 
           let directBytes = 0;
           if (vcd[GX.Attr.PNMTXIDX]?.type === GX.AttrType.DIRECT) directBytes += 1;
           for (let i = 0; i < 8; i++) {
             if (vcd[GX.Attr.TEX0MTXIDX + i]?.type === GX.AttrType.DIRECT) directBytes += 1;
           }
-        //  console.warn(`[VCD_DIRECT] directBytesPerVertex=${directBytes}`);
+     //     console.warn(`[VCD_DIRECT] directBytesPerVertex=${directBytes}`);
           break;
         }
 
-        case Opcode.SetMatrices: {
-          const numBones = bits.get(4);
-          if (numBones > 10) throw Error('Too many PN matrices');
-          for (let i = 0; i < numBones; i++)
-            pnMatrixMap[i] = bits.get(8);
-          break;
-        }
+case Opcode.SetMatrices: {
+  const numBones = bits.get(4);
+  if (numBones > 10) throw Error('Too many PN matrices');
+
+  for (let i = 0; i < numBones; i++) {
+    const raw = bits.get(8);
+    let mapped = raw;
+
+    if (version === ModelVersion.cloudtreasure && jointCount > 0 && mapped >= jointCount) {
+   //   console.warn(`[CT_PN_CLAMP] raw=${raw} max=${jointCount - 1} -> using ${jointCount - 1}`);
+      mapped = jointCount - 1;
+    }
+
+    pnMatrixMap[i] = mapped;
+  }
+
+  if (version === ModelVersion.cloudtreasure) {
+    console.warn(
+   //   `[CT_PNMAP] numBones=${numBones} jointCount=${jointCount} map=${pnMatrixMap.slice(0, numBones).join(',')}`
+    );
+  }
+
+  break;
+}
 
         case Opcode.End:
           done = true;
           break;
 
         default:
-        //  console.warn(`Skipping unknown model bits opcode ${opcode}`);
+     //     console.warn(`Skipping unknown model bits opcode ${opcode}`);
           break;
       }
     }
@@ -3076,11 +3549,11 @@ const tunedVcd = tuneVCDForDL(data, dlInfo.offset, dlInfo.size, vcd, fields, cur
       try {
         runBitstream(modelShapes, bitsOffsets[i], i, modelShapes.posBuffer, modelShapes.nrmBuffer);
       } catch (err) {
-      //  console.error(
-       //   `[RUN_BITS_CRASH] step=${i} bitsOffs=0x${bitsOffsets[i].toString(16)} ` +
-       //   `posLen=${modelShapes.posBuffer.byteLength} nrmLen=${modelShapes.nrmBuffer?.byteLength ?? 0} ` +
-      //    `msg=${(err as Error)?.message}`
-      //  );
+        console.error(
+    //     `[RUN_BITS_CRASH] step=${i} bitsOffs=0x${bitsOffsets[i].toString(16)} ` +
+    //      `posLen=${modelShapes.posBuffer.byteLength} nrmLen=${modelShapes.nrmBuffer?.byteLength ?? 0} ` +
+     //    `msg=${(err as Error)?.message}`
+      );
         console.error(err);
         
       }

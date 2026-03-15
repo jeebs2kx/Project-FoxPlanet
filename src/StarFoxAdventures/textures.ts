@@ -556,7 +556,7 @@ const EARLYDUP_PER_MODEL_REMAP: { [mapNum: number]: { [srcId: number]: number } 
 const DP_FACE_CLAMP_TEXIDS = new Set<number>([2562, 2575, 2581, 2761, 2762]);
 const DP_FACE_SOFT_ALPHA_TEXIDS = new Set<number>([2562, 2581]);
 const DP_FORCE_MIRROR_S_TEXIDS = new Set<number>([
- 1172,1173 // put broken texId here
+ 1172,1173,1026,1027 // put broken texId here
 ]);
 
 const DP_FORCE_MIRROR_T_TEXIDS = new Set<number>([
@@ -618,19 +618,25 @@ public getDPTintedTexId(baseId: number, r: number, g: number, b: number): number
         return self;
     }
 
-    private async loadDPBinTexture(cache: GfxRenderCache, texId: number) {
-        if (!this.dataFetcherRef) return;
-        
-        const idStr = (texId < 1000) ? texId.toString().padStart(3, '0') : texId.toString();
-        const path = `${this.gameInfo.pathBase}/uncompressed_textures/tex_${idStr}.bin`;
-        try {
-            const buf = await this.dataFetcherRef.fetchData(path);
-            if (!buf) return;
+private async loadDPBinTexture(cache: GfxRenderCache, texId: number) {
+    if (!this.dataFetcherRef) return;
 
-            const decoded = decodeRareN64Texture(buf.createDataView());
-            if (decoded && (texId === 2562 || texId === 2581 || texId === 2575 || texId === 2761 || texId === 2762)) {
-   // console.warn(`[DP TEX DEBUG] texId=${texId} fmt=${decoded.pixelFormat} size=${decoded.width}x${decoded.height}`);
-}
+    // Ignore invalid ids entirely.
+    if (!Number.isInteger(texId) || texId < 0 || texId > 0x7FFF)
+        return;
+
+    const idStr = (texId < 1000) ? texId.toString().padStart(3, '0') : texId.toString();
+    const path = `${this.gameInfo.pathBase}/uncompressed_textures/tex_${idStr}.bin`;
+
+    try {
+        const buf = await this.dataFetcherRef.fetchData(path, { allow404: true }).catch(() => null);
+        if (!buf || buf.byteLength === 0)
+            return;
+
+        const decoded = decodeRareN64Texture(buf.createDataView());
+        if (decoded && (texId === 2562 || texId === 2581 || texId === 2575 || texId === 2761 || texId === 2762)) {
+            // console.warn(`[DP TEX DEBUG] texId=${texId} fmt=${decoded.pixelFormat} size=${decoded.width}x${decoded.height}`);
+        }
 if (decoded) {
                 const device = cache.device;
  if (texId === 16 || texId === 17) {
@@ -827,32 +833,38 @@ private buildDPDerivedTexture(cache: GfxRenderCache, derivedId: number) {
     }
 }
     public getTextureArray(cache: GfxRenderCache, texId: number, useTex1: boolean): SFATextureArray | null {
-        if (this.modelVersion === ModelVersion.DinosaurPlanet) {
-if (texId < 0 && this.dpDerivedInfo.has(texId)) {
-    if (this.dpBinCache.has(texId))
-        return this.dpBinCache.get(texId)!;
+if (this.modelVersion === ModelVersion.DinosaurPlanet) {
+    if (texId < 0 && this.dpDerivedInfo.has(texId)) {
+        if (this.dpBinCache.has(texId))
+            return this.dpBinCache.get(texId)!;
 
-    const fakeTex = this.fakes.getTextureArray(cache, texId, useTex1)!.textures[0];
-    const arr = new SFATextureArray([fakeTex]);
-    this.dpBinCache.set(texId, arr);
+        const fakeTex = this.fakes.getTextureArray(cache, 0, useTex1)!.textures[0];
+        const arr = new SFATextureArray([fakeTex]);
+        this.dpBinCache.set(texId, arr);
 
-    this.buildDPDerivedTexture(cache, texId);
-    return arr;
+        this.buildDPDerivedTexture(cache, texId);
+        return arr;
+    }
+
+    // Bad / out-of-range DP texids: keep geometry, just use fallback texture.
+    if (!Number.isInteger(texId) || texId < 0 || texId > 0x7FFF) {
+        return this.fakes.getTextureArray(cache, 0, useTex1);
+    }
+
+    const fileId = texId;
+
+    if (this.dpBinCache.has(fileId))
+        return this.dpBinCache.get(fileId)!;
+
+    const fakeTex = this.fakes.getTextureArray(cache, fileId, useTex1)!.textures[0];
+    const mutableArray = new SFATextureArray([fakeTex]);
+
+    this.dpBinCache.set(fileId, mutableArray);
+
+    void this.loadDPBinTexture(cache, fileId);
+
+    return mutableArray;
 }
-            const fileId = texId; 
-
-            if (this.dpBinCache.has(fileId))
-                return this.dpBinCache.get(fileId)!;
-
-            const fakeTex = this.fakes.getTextureArray(cache, fileId, useTex1)!.textures[0];
-            const mutableArray = new SFATextureArray([fakeTex]);
-
-            this.dpBinCache.set(fileId, mutableArray);
-
-            this.loadDPBinTexture(cache, fileId);
-
-            return mutableArray;
-        }
 
         if (!this.texturesEnabled) return this.fakes.getTextureArray(cache, texId, useTex1); 
         if (this.modelVersion === ModelVersion.Early1) {

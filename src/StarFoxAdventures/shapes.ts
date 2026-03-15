@@ -184,12 +184,24 @@ export class ShapeGeometry {
         } else {
         }
 
-        for (let i = 0; i < this.drawParams.u_PosMtx.length; i++) {
-            if (this.hasFineSkinning && i === 9)
-                mat4.copy(this.drawParams.u_PosMtx[i], modelToViewMtx);
-            else
-                mat4.mul(this.drawParams.u_PosMtx[i], modelToViewMtx, matrixPalette[this.pnMatrixMap[i]]);
-        }
+for (let i = 0; i < this.drawParams.u_PosMtx.length; i++) {
+    // If fine-skinning is enabled, matrix 9 is overridden with the model-view matrix,
+    // and vertices marked with matrix 9 are skinned by software.
+    if (this.hasFineSkinning && i === 9) {
+        mat4.copy(this.drawParams.u_PosMtx[i], modelToViewMtx);
+        continue;
+    }
+
+    const paletteMtx =
+        (this.hasSkinning && this.pnMatrixMap[i] < matrixPalette.length)
+            ? matrixPalette[this.pnMatrixMap[i]]
+            : undefined;
+
+    if (paletteMtx !== undefined)
+        mat4.mul(this.drawParams.u_PosMtx[i], modelToViewMtx, paletteMtx);
+    else
+        mat4.copy(this.drawParams.u_PosMtx[i], modelToViewMtx);
+}
     }
 
     public getDrawParams() {

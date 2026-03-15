@@ -293,15 +293,17 @@ class WorldRenderer extends SFARenderer {
     private enableAmbient: boolean = true;
     private enableFog: boolean = true;
     private layerSelect: UI.Slider;
-    private showObjects: boolean = true;
+    private showObjects: boolean;
     private showDevGeometry: boolean = false;
     private showDevObjects: boolean = false;
     private enableLights: boolean = true;
-    private sky: Sky; // TODO: move to World?
+    private sky: Sky;
     private sphereMapMan: SphereMapManager;
 
-    constructor(protected override world: World, materialFactory: MaterialFactory) {
+    constructor(protected override world: World, materialFactory: MaterialFactory, defaultShowObjects: boolean = true) {
         super(world.context, world.animController, materialFactory);
+        this.showObjects = defaultShowObjects;
+
         if (this.world.resColl.texFetcher instanceof SFATextureFetcher)
             this.textureHolder = this.world.resColl.texFetcher.textureHolder;
         this.sky = new Sky(this.world);
@@ -333,7 +335,7 @@ class WorldRenderer extends SFARenderer {
         const layerPanel = new UI.Panel();
         layerPanel.setTitle(UI.LAYER_ICON, 'Layers');
 
-        const hideObjects = new UI.Checkbox("Hide objects", false);
+const hideObjects = new UI.Checkbox("Hide objects", !this.showObjects);
         hideObjects.onchanged = () => {
             this.showObjects = !hideObjects.checked;
         };
@@ -594,8 +596,9 @@ export class SFAWorldSceneDesc implements Viewer.SceneDesc {
           //  console.log(`[ShowAllTextures] Bank=${useTex1 ? 'TEX1' : 'TEX0/TEXPRE'} attempted=${attempted} registered=${shown}`);
         };
 
-        const renderer = new WorldRenderer(world, materialFactory);
-        return renderer;
+const defaultShowObjects = this.gameInfo.pathBase !== 'StarFoxAdventuresDemo';
+const renderer = new WorldRenderer(world, materialFactory, defaultShowObjects);
+return renderer;
     }
 }
 export class SFAMapSceneDesc implements Viewer.SceneDesc {

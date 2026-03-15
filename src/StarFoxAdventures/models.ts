@@ -222,11 +222,13 @@ export class ModelShapes {
 }
 
 export interface FineSkin {
-    vertexCount: number;
-    bufferOffset: number;
-    bone0: number;
-    bone1: number;
-    weights: DataView;
+    vertexCount: number;
+    bufferOffset: number;
+    srcBufferOffset?: number;
+    dstBufferOffset?: number;
+    bone0: number;
+    bone1: number;
+    weights: DataView;
 }
 
 export class Model {

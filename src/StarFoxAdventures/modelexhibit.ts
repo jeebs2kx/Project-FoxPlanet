@@ -425,17 +425,21 @@ private async destroyCurrentModelResources(device: GfxDevice) {
         }
 
 
-        const animate = (this.animController.animController as any).playbackEnabled;
-        let canAnimate = animate && !!this.modelInst?.model?.joints && this.modelInst.model.joints.length > 0;
+const animate = (this.animController.animController as any).playbackEnabled;
+let canAnimate = animate && !!this.modelInst?.model?.joints && this.modelInst.model.joints.length > 0;
 
-        if (this.modelVersion === ModelVersion.DinosaurPlanet && !this.dpAnimsEnabled) {
-            canAnimate = false;
-        }
+if (this.modelVersion === ModelVersion.DinosaurPlanet && !this.dpAnimsEnabled) {
+    canAnimate = false;
+}
 
-        if (!canAnimate) {
-            if (this.anim !== null && this.modelInst) this.modelInst.resetPose();
-            this.anim = null;
-        } else {
+if (this.modelVersion === ModelVersion.Demo || this.modelVersion === ModelVersion.cloudtreasure) {
+    canAnimate = false;
+}
+
+if (!canAnimate) {
+    if (this.modelInst) this.modelInst.resetPose();
+    this.anim = null;
+} else {
             if (this.anim === null) {
                 try {
                     let globalAnimNum: number | undefined;
@@ -777,23 +781,25 @@ export class SFAModelExhibitSceneDesc implements Viewer.SceneDesc {
         const modanimColl = await ModanimCollection.create(this.gameInfo, context.dataFetcher);
         const amapColl = await AmapCollection.create(this.gameInfo, context.dataFetcher);
 
-        const isBeta = this.modelVersion === ModelVersion.Beta;
-        const isDemo = (this.modelVersion as any) === (ModelVersion as any).Demo;
+const isBeta = this.modelVersion === ModelVersion.Beta;
+const isCloudTreasure = this.modelVersion === ModelVersion.cloudtreasure;
+const isDemo = this.modelVersion === ModelVersion.Demo;
 
-        const selectedSubdirs = this.subdirs ?? (isBeta
-            ? ['swapcircle']
-            : isDemo
-                ? ['Copy of swaphol', 'insidegal', 'linklevel']
-                : [
-                    'animtest', 'arwing', 'arwingcity', 'arwingcloud', 'arwingdarkice', 'arwingdragon', 'arwingtoplanet',
-                    'bossdrakor', 'bossgaldon', 'bosstrex', 'capeclaw', 'clouddungeon', 'cloudrace', 'crfort',
-                    'darkicemines', 'darkicemines2', 'dbshrine', 'desert', 'dfptop', 'dfshrine', 'dragrock', 'dragrockbot',
-                    'ecshrine', 'gamefront', 'gpshrine', 'greatfox', 'icemountain', 'lightfoot',
-                    'linka', 'linkb', 'linkc', 'linkd', 'linke', 'linkf', 'linkg', 'linkh', 'linki', 'linkj',
-                    'magiccave', 'mazecave', 'mmpass', 'mmshrine', 'nwastes', 'nwshrine', 'shipbattle', 'shop',
-                    'swaphol', 'swapholbot', 'volcano', 'wallcity', 'warlock', 'worldmap',
-                ]);
-
+const selectedSubdirs = this.subdirs ?? (isBeta
+    ? ['swapcircle']
+    : isCloudTreasure
+        ? ['cloudtreasure']
+        : isDemo
+            ? ['Copy of swaphol', 'insidegal', 'linklevel']
+            : [
+                'animtest', 'arwing', 'arwingcity', 'arwingcloud', 'arwingdarkice', 'arwingdragon', 'arwingtoplanet',
+                'bossdrakor', 'bossgaldon', 'bosstrex', 'capeclaw', 'clouddungeon', 'cloudrace', 'crfort',
+                'darkicemines', 'darkicemines2', 'dbshrine', 'desert', 'dfptop', 'dfshrine', 'dragrock', 'dragrockbot',
+                'ecshrine', 'gamefront', 'gpshrine', 'greatfox', 'icemountain', 'lightfoot',
+                'linka', 'linkb', 'linkc', 'linkd', 'linke', 'linkf', 'linkg', 'linkh', 'linki', 'linkj',
+                'magiccave', 'mazecave', 'mmpass', 'mmshrine', 'nwastes', 'nwshrine', 'shipbattle', 'shop',
+                'swaphol', 'swapholbot', 'volcano', 'wallcity', 'warlock', 'worldmap',
+            ]);
         const texFetcher = await SFATextureFetcher.create(this.gameInfo, context.dataFetcher, this.modelVersion === ModelVersion.Beta);
         await texFetcher.loadSubdirs(selectedSubdirs, context.dataFetcher);
 

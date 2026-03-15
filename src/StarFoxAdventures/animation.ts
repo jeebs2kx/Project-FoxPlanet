@@ -4,7 +4,7 @@ import AnimationController from '../AnimationController.js';
 import { ViewerRenderInput } from '../viewer.js';
 import { DataFetcher } from '../DataFetcher.js';
 import { nArray } from '../util.js';
-
+import ArrayBufferSlice from '../ArrayBufferSlice.js';
 import { GameInfo } from './scenes.js';
 import { dataSubarray, interpS16, signExtend, angle16ToRads, HighBitReader, readUint32, readUint16 } from './util.js';
 import { ModelInstance } from './models.js';
@@ -21,7 +21,25 @@ export class SFAAnimationController {
         this.envAnimValue1 = (0.003 * this.animController.getTimeInFrames()) % 256;
     }
 }
+async function fetchDataCaseFallback(
+    dataFetcher: DataFetcher,
+    upperPath: string,
+    lowerPath: string,
+    allow404: boolean = false,
+): Promise<ArrayBufferSlice | null> {
+    const upper = await dataFetcher.fetchData(upperPath, { allow404: true }).catch(() => null);
+    if (upper && upper.byteLength > 0)
+        return upper;
 
+    const lower = await dataFetcher.fetchData(lowerPath, { allow404: true }).catch(() => null);
+    if (lower && lower.byteLength > 0)
+        return lower;
+
+    if (allow404)
+        return null;
+
+    return null;
+}
 interface AnimCurve {
 }
 
@@ -97,22 +115,22 @@ export class AnimFile {
     private constructor() {
     }
 
-    public static async create(dataFetcher: DataFetcher, path: string, allowMissing: boolean = false): Promise<AnimFile | null> {
-        const [tab, bin] = await Promise.all([
-            dataFetcher.fetchData(`${path}.TAB`, { allow404: allowMissing }).catch(() => null),
-            dataFetcher.fetchData(`${path}.BIN`, { allow404: allowMissing }).catch(() => null),
-        ]);
+public static async create(dataFetcher: DataFetcher, path: string, allowMissing: boolean = false): Promise<AnimFile | null> {
+    const [tab, bin] = await Promise.all([
+        fetchDataCaseFallback(dataFetcher, `${path}.TAB`, `${path}.tab`, allowMissing),
+        fetchDataCaseFallback(dataFetcher, `${path}.BIN`, `${path}.bin`, allowMissing),
+    ]);
 
-        if (!tab || !bin || tab.byteLength === 0 || bin.byteLength === 0) {
-            return null;
-        }
-
-        const self = new AnimFile();
-        self.tab = tab.createDataView();
-        self.bin = bin.createDataView();
-
-        return self;
+    if (!tab || !bin || tab.byteLength === 0 || bin.byteLength === 0) {
+        return null;
     }
+
+    const self = new AnimFile();
+    self.tab = tab.createDataView();
+    self.bin = bin.createDataView();
+
+    return self;
+}
 
     public hasAnim(num: number): boolean {
         if (num < 0 || (num + 1) * 4 > this.tab.byteLength) {
@@ -352,19 +370,24 @@ export class AmapCollection {
     private constructor() {
     }
 
-    public static async create(gameInfo: GameInfo, dataFetcher: DataFetcher): Promise<AmapCollection> {
-        const self = new AmapCollection();
+public static async create(gameInfo: GameInfo, dataFetcher: DataFetcher): Promise<AmapCollection> {
+    const self = new AmapCollection();
 
-        const pathBase = gameInfo.pathBase;
-        const [amapTab, amapBin] = await Promise.all([
-            dataFetcher.fetchData(`${pathBase}/AMAP.TAB`),
-            dataFetcher.fetchData(`${pathBase}/AMAP.BIN`),
-        ]);
-        self.amapTab = amapTab.createDataView();
-        self.amapBin = amapBin.createDataView();
+    const pathBase = gameInfo.pathBase;
+    const [amapTab, amapBin] = await Promise.all([
+        fetchDataCaseFallback(dataFetcher, `${pathBase}/AMAP.TAB`, `${pathBase}/AMAP.tab`),
+        fetchDataCaseFallback(dataFetcher, `${pathBase}/AMAP.BIN`, `${pathBase}/AMAP.bin`),
+    ]);
 
-        return self;
+    if (!amapTab || !amapBin) {
+        throw new Error(`Missing AMAP files for ${pathBase}`);
     }
+
+    self.amapTab = amapTab.createDataView();
+    self.amapBin = amapBin.createDataView();
+
+    return self;
+}
 
     public getAmap(modelNum: number): DataView {
         const offs = readUint32(this.amapTab, 0, modelNum);
@@ -380,19 +403,24 @@ export class ModanimCollection {
     private constructor() {
     }
 
-    public static async create(gameInfo: GameInfo, dataFetcher: DataFetcher): Promise<ModanimCollection> {
-        const self = new ModanimCollection();
+public static async create(gameInfo: GameInfo, dataFetcher: DataFetcher): Promise<ModanimCollection> {
+    const self = new ModanimCollection();
 
-        const pathBase = gameInfo.pathBase;
-        const [tab, bin] = await Promise.all([
-            dataFetcher.fetchData(`${pathBase}/MODANIM.TAB`),
-            dataFetcher.fetchData(`${pathBase}/MODANIM.BIN`),
-        ]);
-        self.modanimTab = tab.createDataView();
-        self.modanimBin = bin.createDataView();
+    const pathBase = gameInfo.pathBase;
+    const [tab, bin] = await Promise.all([
+        fetchDataCaseFallback(dataFetcher, `${pathBase}/MODANIM.TAB`, `${pathBase}/MODANIM.tab`),
+        fetchDataCaseFallback(dataFetcher, `${pathBase}/MODANIM.BIN`, `${pathBase}/MODANIM.bin`),
+    ]);
 
-        return self;
+    if (!tab || !bin) {
+        throw new Error(`Missing MODANIM files for ${pathBase}`);
     }
+
+    self.modanimTab = tab.createDataView();
+    self.modanimBin = bin.createDataView();
+
+    return self;
+}
 
     public getModanim(modelNum: number): DataView {
         const offs = readUint16(this.modanimTab, 0, modelNum);

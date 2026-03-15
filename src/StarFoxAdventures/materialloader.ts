@@ -70,6 +70,14 @@ export const SFADEMO_MODEL_SHADER_FIELDS: ShaderFields = {
     layers: 0x24, // ???
 };
 
+export const CLOUDTREASURE_MODEL_SHADER_FIELDS: ShaderFields = {
+    isBeta: true,
+    isEarly1: true,
+    size: 0x40,     
+    numLayers: 0x3b, 
+    layers: 0x24,   
+};
+
 export const SFADEMO_MAP_SHADER_FIELDS: ShaderFields = {
     isBeta: true,
     isEarly1: true,
@@ -296,6 +304,7 @@ if (fields.isAncient) {
   const texId1  = L1?.texId ?? null;
   const tmode0  = (L0?.tevMode ?? 0) & 0x7f;
   const tmode1  = (L1?.tevMode ?? 0) & 0x7f;
+  
   const lowNib  = flags8 & 0x0F;
 
   const singleLayer =

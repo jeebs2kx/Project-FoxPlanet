@@ -192,8 +192,10 @@ const sceneDescs = [
 new SFAModelExhibitSceneDesc('modelexhibit', 'Model + Animation Viewer (Final)', ModelVersion.Final),
 new SFAModelExhibitSceneDesc('modelexhibit', 'Model + Animation Viewer (Kiosk)', ModelVersion.Final, SFADEMO_GAME_INFO),
 new SFAModelExhibitSceneDesc('betamodelexhibit', 'Early 2001 Model Viewer (in progress)', ModelVersion.Beta, SFADEMO_GAME_INFO),
-new SFAModelExhibitSceneDesc('demomodelexhibit_mid', 'Mid 2001 Models (Swaphol/Linklevel)', ModelVersion.Demo, SFADEMO_GAME_INFO, ['Copy of swaphol', 'linklevel']),
-    new SFAModelExhibitSceneDesc('demomodelexhibit_gal', 'Mid/later 2001 Models (insidegal)', ModelVersion.Demo, SFADEMO_GAME_INFO, ['insidegal']),
+new SFAModelExhibitSceneDesc( 'cloudtreasuremodelexhibit', 'Early/Mid 2001 Models (CloudTreasure)', ModelVersion.cloudtreasure,SFADEMO_GAME_INFO, ['cloudtreasure'],),
+new SFAModelExhibitSceneDesc('demomodelexhibit_mid', 'Mid 2001 Models (Copy of Swaphol)', ModelVersion.Demo, SFADEMO_GAME_INFO, ['Copy of swaphol', 'linklevel']),
+new SFAModelExhibitSceneDesc('demomodelexhibit_gal', 'Mid/later 2001 Models (InsideGal)', ModelVersion.Demo, SFADEMO_GAME_INFO, ['insidegal']),
+
 'Full World Maps (experimental)',
 new SFAFullFinalWorldSceneDesc('Full Final World'),
 new SFAFullFinalWorldSceneDesc('Full Kiosk World', SFADEMO_GAME_INFO),
