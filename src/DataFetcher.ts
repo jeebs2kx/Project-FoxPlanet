@@ -7,12 +7,12 @@ import { ProgressMeter } from './SceneBase.js';
 export interface NamedArrayBufferSlice extends ArrayBufferSlice {
     name: string;
 }
-
+//
 function getDataStorageBaseURL(isDevelopment: boolean): string {
     if (isDevelopment)
         return `/data`;
     else
-        return `/SFA-Model-Viewer`;
+        return `/Project-FoxPlanet`;
 }
 
 function getDataURLForPath(url: string, isDevelopment: boolean): string {

@@ -2372,13 +2372,36 @@ if (musicState.audio) {
     const mapRenderer = new MapSceneRenderer(context, animController, materialFactory);
 mapRenderer.mapNum = this.mapNum;
 
-    const texFetcher = await SFATextureFetcher.create(this.gameInfo, context.dataFetcher, false);
-    texFetcher.setModelVersion(ModelVersion.Early3);
-    await texFetcher.loadSubdirs([''], context.dataFetcher);
+const texFetcher = await SFATextureFetcher.create(this.gameInfo, context.dataFetcher, false);
+texFetcher.setModelVersion(ModelVersion.Early3);
+await texFetcher.loadSubdirs([''], context.dataFetcher);
 
-    texFetcher.setPngOverride(3600, 'textures/dim2wall.png');
-    texFetcher.setPngOverride(3500, 'textures/wcfloor.png');
-    
+let firstMod: number | null = null;
+
+for (let row = 0; row < mapSceneInfo.getNumRows(); row++) {
+  for (let col = 0; col < mapSceneInfo.getNumCols(); col++) {
+    const b = mapSceneInfo.getBlockInfoAt(col, row);
+    if (b) {
+      firstMod = b.mod;
+      break;
+    }
+  }
+  if (firstMod !== null)
+    break;
+}
+
+if (firstMod !== null) {
+  const subdir = getSubdir(firstMod, this.gameInfo);
+
+  await texFetcher.loadSubdirs([subdir], context.dataFetcher);
+
+  if (subdir === 'swapholbot' || subdir === 'shop') {
+    await texFetcher.loadSubdirs(['Copy of swaphol', 'swaphol', 'ecshrine'], context.dataFetcher);
+  }
+}
+
+texFetcher.setPngOverride(3600, 'textures/dim2wall.png');
+texFetcher.setPngOverride(3500, 'textures/wcfloor.png');
      await texFetcher.preloadPngOverrides(
       (materialFactory as any).cache ?? (materialFactory as any).getCache?.(),
       context.dataFetcher
@@ -2432,12 +2455,36 @@ if (musicState.audio) {
         const mapRenderer = new MapSceneRenderer(context, animController, materialFactory);
         mapRenderer.mapNum = this.mapNum;
 
-                const texFetcher = await SFATextureFetcher.create(this.gameInfo, context.dataFetcher, false);
-    texFetcher.setModelVersion(ModelVersion.Early4);
-    await texFetcher.loadSubdirs([''], context.dataFetcher);
+const texFetcher = await SFATextureFetcher.create(this.gameInfo, context.dataFetcher, false);
+texFetcher.setModelVersion(ModelVersion.Early4);
+await texFetcher.loadSubdirs([''], context.dataFetcher);
 texFetcher.setCurrentModelID(this.mapNum);
 
-    texFetcher.setPngOverride(3610, 'textures/wcbluehead.png');
+let firstMod: number | null = null;
+
+for (let row = 0; row < mapSceneInfo.getNumRows(); row++) {
+  for (let col = 0; col < mapSceneInfo.getNumCols(); col++) {
+    const b = mapSceneInfo.getBlockInfoAt(col, row);
+    if (b) {
+      firstMod = b.mod;
+      break;
+    }
+  }
+  if (firstMod !== null)
+    break;
+}
+
+if (firstMod !== null) {
+  const subdir = getSubdir(firstMod, this.gameInfo);
+
+  await texFetcher.loadSubdirs([subdir], context.dataFetcher);
+
+  if (subdir === 'swapholbot' || subdir === 'shop') {
+    await texFetcher.loadSubdirs(['Copy of swaphol', 'swaphol', 'ecshrine'], context.dataFetcher);
+  }
+}
+
+texFetcher.setPngOverride(3610, 'textures/wcbluehead.png');
    texFetcher.setPngOverride(3611, 'textures/wcrims.png');
    texFetcher.setPngOverride(3612, 'textures/wcmoon1.png');
    texFetcher.setPngOverride(3613, 'textures/wcmoon2.png');
@@ -2543,27 +2590,36 @@ requiredModels.add(0x03EB);
         if (!texFetcher.textureHolder) texFetcher.textureHolder = { viewerTextures: [], onnewtextures: null };
         let pointSampler: any = null;
         const shownTextures = new Set<any>(); 
-        const origGetTexture = (texFetcher as any).getTexture.bind(texFetcher);
-        (texFetcher as any).getTexture = function(cache: any, id: number, useTex1: boolean) {
-            const res = origGetTexture(cache, id, useTex1);
-            if (res && res.viewerTexture) {
-                const vt = res.viewerTexture;
-                if (!shownTextures.has(vt)) {
-                    shownTextures.add(vt);
-                    this.textureHolder.viewerTextures.push(vt);
-                    if (this.textureHolder.onnewtextures) this.textureHolder.onnewtextures();
-                }
+const origGetTexture = (texFetcher as any).getTexture.bind(texFetcher);
+(window as any).__dpTexReqCount = 0;
 
-                const cutoutTextures = [0];
-                if (cutoutTextures.includes(id)) {
-                    if (!pointSampler) pointSampler = cache.device.createSampler({
-                        wrapS: 1, wrapT: 1, minFilter: 0, magFilter: 0, mipFilter: 0, minLOD: 0, maxLOD: 100,
-                    });
-                    res.gfxSampler = pointSampler;
-                }
-            }
-            return res;
-        };
+(texFetcher as any).getTexture = function(cache: any, id: number, useTex1: boolean) {
+    if ((window as any).__dpTexReqCount < 300) {
+      //  console.warn(`[DP TEX REQ] id=${id} bank=${useTex1 ? 'TEX1' : 'TEX0'}`);
+        (window as any).__dpTexReqCount++;
+    }
+
+    const res = origGetTexture(cache, id, useTex1);
+
+    if (res && res.viewerTexture) {
+        const vt = res.viewerTexture;
+        if (!shownTextures.has(vt)) {
+            shownTextures.add(vt);
+            this.textureHolder.viewerTextures.push(vt);
+            if (this.textureHolder.onnewtextures) this.textureHolder.onnewtextures();
+        }
+
+        const cutoutTextures = [0];
+        if (cutoutTextures.includes(id)) {
+            if (!pointSampler) pointSampler = cache.device.createSampler({
+                wrapS: 1, wrapT: 1, minFilter: 0, magFilter: 0, mipFilter: 0, minLOD: 0, maxLOD: 100,
+            });
+            res.gfxSampler = pointSampler;
+        }
+    }
+
+    return res;
+};
 
         const ZERO_ENVFX_MAPS = [2,  11, 15, 16, 21, 27, 28, 30, 31, 32, 33, 34, 39, 40, 41, 42, 48, 50, 51, 52, 53, 54];
         const isZeroEnvMap = ZERO_ENVFX_MAPS.includes(this.mapNum as number);

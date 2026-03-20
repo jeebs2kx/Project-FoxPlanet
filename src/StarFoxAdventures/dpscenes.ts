@@ -47,7 +47,17 @@ function makeLazyDPModelExhibitSceneDesc(id: string, name: string, gameInfo: Gam
         },
     };
 }
-
+function makeLazyDPTextureExhibitSceneDesc(id: string, name: string, gameInfo: GameInfo): Viewer.SceneDesc {
+    return {
+        id,
+        name,
+        createScene: async (device: any, context: any) => {
+            const m = await import('./modelexhibit.js');
+            const real = new m.DPTextureExhibitSceneDesc(id, name, gameInfo);
+            return real.createScene(device, context);
+        },
+    };
+}
 function makeLazyCombinedOldIceMtSceneDesc(id: string, name: string, gameInfo: GameInfo): Viewer.SceneDesc {
     return {
         id,
@@ -86,8 +96,9 @@ function makeLazyDPSequenceSceneDesc(sequenceId: number, id: string, name: strin
 
 const sceneDescs: (string | Viewer.SceneDesc)[] = [
     'Dinosaur Planet Map + Model Viewer ',
-    makeLazyDPModelExhibitSceneDesc('dp_models', 'DP: Models (in progress)', DP_GAME_INFO),
-
+    makeLazyDPModelExhibitSceneDesc('dp_models', 'DP: Models', DP_GAME_INFO),
+    'Textures',
+    makeLazyDPTextureExhibitSceneDesc('dp_textures', 'DP: Texture Viewer', DP_GAME_INFO),
     'Full World Maps (experimental)',
     makeLazyDPFullWorldSceneDesc('dp_full_world', 'DP: Full World', DP_GAME_INFO),
 //'Cutscenes & Sequences',

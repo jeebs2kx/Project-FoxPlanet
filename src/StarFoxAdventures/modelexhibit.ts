@@ -19,11 +19,103 @@ import { TextureFetcher, SFATextureFetcher } from './textures.js';
 import { ModelVersion, loadModel } from "./modelloader.js";
 import { downloadBufferSlice } from '../DownloadUtils.js';
 import ArrayBufferSlice from '../ArrayBufferSlice.js';
+function getAllUniqueSubdirs(gameInfo: GameInfo): string[] {
+    const seen = new Set<string>();
 
+    for (const k in gameInfo.subdirs) {
+        const v = gameInfo.subdirs[k];
+        if (typeof v === 'string' && v.length > 0)
+            seen.add(v);
+    }
+
+    return [...seen.values()].sort((a, b) => a.localeCompare(b));
+}
+
+function ensureTextureViewerHolder(texFetcher: any): UI.TextureListHolder {
+    if (!texFetcher.textureHolder) {
+        texFetcher.textureHolder = { viewerTextures: [], onnewtextures: null };
+    }
+
+    return texFetcher.textureHolder as UI.TextureListHolder;
+}
+
+function dedupeViewerTextures(holder: UI.TextureListHolder): void {
+    const src = holder.viewerTextures as any[];
+    const out: any[] = [];
+    const seen = new Set<string>();
+
+    for (const vt of src) {
+        if (!vt)
+            continue;
+
+        const name =
+            (vt as any).name ??
+            (vt as any).debugName ??
+            '';
+
+        const width =
+            (vt as any).width ??
+            (vt as any).surfaces?.[0]?.width ??
+            0;
+
+        const height =
+            (vt as any).height ??
+            (vt as any).surfaces?.[0]?.height ??
+            0;
+
+        const key = `${name}__${width}x${height}`;
+        if (seen.has(key))
+            continue;
+
+        seen.add(key);
+        out.push(vt);
+    }
+
+    src.length = 0;
+    src.push(...out);
+
+    if (holder.onnewtextures)
+        holder.onnewtextures();
+}
+
+async function warmAllTexturesIntoViewer(
+    texFetcher: any,
+    materialFactory: MaterialFactory,
+    maxTexId: number = 4096,
+): Promise<void> {
+    const cache =
+        (materialFactory as any).cache ??
+        (materialFactory as any).getCache?.();
+
+    if (!cache || !texFetcher?.getTexture)
+        return;
+
+    const holder = ensureTextureViewerHolder(texFetcher);
+
+    for (let texId = 0; texId < maxTexId; texId++) {
+        try {
+            await Promise.resolve(texFetcher.getTexture(cache, texId, false)); // TEX0
+        } catch (e) {
+        }
+
+        try {
+            await Promise.resolve(texFetcher.getTexture(cache, texId, true)); // TEX1
+        } catch (e) {
+        }
+
+        // Let the browser breathe every 64 IDs so the page stays responsive.
+        if ((texId & 0x3F) === 0) {
+            dedupeViewerTextures(holder);
+            await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        }
+    }
+
+    dedupeViewerTextures(holder);
+}
 class ModelExhibitRenderer extends SFARenderer {
     private turntableEnabled = false;
     private turntableAngle = 0;
-    private turntableSpeed = Math.PI / 8;
+    private turntableSpeed = 0.001;
 
     private modelInst: ModelInstance | null | undefined = undefined;
     private modelNum = 1;
@@ -61,10 +153,12 @@ private dpAnimsEnabled = false;
         private modanimColl: ModanimCollection,
         private gameInfo: GameInfo,
         private modelVersion: ModelVersion
+        
     ) {
         super(context, animController, materialFactory);
         (this.animController.animController as any).playbackEnabled = true;
         (this.animController.animController as any).playbackEnabled = true;
+        this.modelNum = this.modelVersion === ModelVersion.Beta ? 0 : 1;
     }
 
     private dpResetNormalizeState(): void {
@@ -270,7 +364,9 @@ private async destroyCurrentModelResources(device: GfxDevice) {
 
     this.dpResetNormalizeState();
 }
-
+private isBetaDevCube(inst: any): boolean {
+    return this.modelVersion === ModelVersion.Beta && !!(inst?.model as any)?.isBetaDevCube;
+}
     public downloadModel() {
         if (this.modelInst !== null && this.modelInst !== undefined) {
             downloadBufferSlice(
@@ -563,23 +659,27 @@ if (!canAnimate) {
         if (this.displayBones) {
             if (this.modelInst && this.modelInst.model && this.modelInst.skeletonInst) {
                 const ctx = getDebugOverlayCanvas2D();
-                for (let i = 1; i < this.modelInst.model.joints.length; i++) {
-                    const joint = this.modelInst.model.joints[i];
-                    const jointMtx = mat4.clone(this.modelInst.skeletonInst.getJointMatrix(i));
-                    mat4.mul(jointMtx, jointMtx, mtx);
-                    const jointPt = vec3.create();
-                    mat4.getTranslation(jointPt, jointMtx);
+for (let i = 1; i < this.modelInst.model.joints.length; i++) {
+    const joint = this.modelInst.model.joints[i];
 
-                    if (joint.parent != 0xff) {
-                        const parentMtx = mat4.clone(this.modelInst.skeletonInst.getJointMatrix(joint.parent));
-                        mat4.mul(parentMtx, parentMtx, mtx);
-                        const parentPt = vec3.create();
-                        mat4.getTranslation(parentPt, parentMtx);
-                        drawWorldSpaceLine(ctx, sceneCtx.viewerInput.camera.clipFromWorldMatrix, parentPt, jointPt);
-                    } else {
-                        drawWorldSpacePoint(ctx, sceneCtx.viewerInput.camera.clipFromWorldMatrix, jointPt);
-                    }
-                }
+    const jointMtx = mat4.create();
+    mat4.mul(jointMtx, mtx, this.modelInst.skeletonInst.getJointMatrix(i));
+
+    const jointPt = vec3.create();
+    mat4.getTranslation(jointPt, jointMtx);
+
+    if (joint.parent != 0xff) {
+        const parentMtx = mat4.create();
+        mat4.mul(parentMtx, mtx, this.modelInst.skeletonInst.getJointMatrix(joint.parent));
+
+        const parentPt = vec3.create();
+        mat4.getTranslation(parentPt, parentMtx);
+
+        drawWorldSpaceLine(ctx, sceneCtx.viewerInput.camera.clipFromWorldMatrix, parentPt, jointPt);
+    } else {
+        drawWorldSpacePoint(ctx, sceneCtx.viewerInput.camera.clipFromWorldMatrix, jointPt);
+    }
+}
             }
         }
     }
@@ -608,10 +708,15 @@ private async loadNextValidModel(): Promise<void> {
 
             if (loadGeneration !== this.modelLoadGeneration) return;
 
-            if (!resolvedInst || !(resolvedInst as any).modelShapes?.shapes?.length) {
-                this.modelInst = null;
-                continue;
-            }
+if (!resolvedInst || !(resolvedInst as any).modelShapes?.shapes?.length) {
+    this.modelInst = null;
+    continue;
+}
+
+if (this.isBetaDevCube(resolvedInst)) {
+    this.modelInst = null;
+    continue;
+}
 
             this.modelNum = candidate;
             this.modelAnimNum = 0;
@@ -666,10 +771,15 @@ private async loadPreviousValidModel(): Promise<void> {
 
             if (loadGeneration !== this.modelLoadGeneration) return;
 
-            if (!resolvedInst || !(resolvedInst as any).modelShapes?.shapes?.length) {
-                this.modelInst = null;
-                continue;
-            }
+if (!resolvedInst || !(resolvedInst as any).modelShapes?.shapes?.length) {
+    this.modelInst = null;
+    continue;
+}
+
+if (this.isBetaDevCube(resolvedInst)) {
+    this.modelInst = null;
+    continue;
+}
 
             this.modelNum = candidate;
             this.modelAnimNum = 0;
@@ -763,7 +873,47 @@ private async loadPreviousValidModel(): Promise<void> {
     }
 }
 
+class TextureExhibitRenderer extends SFARenderer {
+    public textureHolder: UI.TextureListHolder = { viewerTextures: [], onnewtextures: null };
 
+    constructor(
+        private context: SceneContext,
+        animController: SFAAnimationController,
+        public override materialFactory: MaterialFactory,
+        private titleText: string,
+    ) {
+        super(context, animController, materialFactory);
+    }
+
+    public createPanels(): UI.Panel[] {
+        const panel = new UI.Panel();
+        panel.setTitle(UI.SAND_CLOCK_ICON, this.titleText);
+
+        const msg = document.createElement('div');
+        msg.style.whiteSpace = 'pre-wrap';
+        msg.textContent =
+            'Texture gallery scene.\n' +
+            'Use the texture viewer list to scroll through all loaded TEX0/TEX1 textures.';
+        panel.contents.appendChild(msg);
+
+        return [panel];
+    }
+
+    protected override addWorldRenderInsts(
+        device: GfxDevice,
+        renderInstManager: GfxRenderInstManager,
+        renderLists: SFARenderLists,
+        sceneCtx: SceneRenderContext
+    ) {
+        // No world geometry here. Texture viewer only.
+    }
+
+    public override destroy(device: GfxDevice): void {
+        super.destroy(device);
+        if (this.materialFactory)
+            this.materialFactory.destroy(device);
+    }
+}
 export class SFAModelExhibitSceneDesc implements Viewer.SceneDesc {
     constructor(
         public id: string, 
@@ -786,7 +936,7 @@ const isCloudTreasure = this.modelVersion === ModelVersion.cloudtreasure;
 const isDemo = this.modelVersion === ModelVersion.Demo;
 
 const selectedSubdirs = this.subdirs ?? (isBeta
-    ? ['swapcircle']
+    ? ['swapcircle','frontend']
     : isCloudTreasure
         ? ['cloudtreasure']
         : isDemo
@@ -811,7 +961,103 @@ const selectedSubdirs = this.subdirs ?? (isBeta
         return new ModelExhibitRenderer(context, animController, materialFactory, texFetcher, modelFetcher, animColl, amapColl, modanimColl, this.gameInfo, this.modelVersion);
     }
 }
+export class SFATextureExhibitSceneDesc implements Viewer.SceneDesc {
+    constructor(
+        public id: string,
+        public name: string,
+        private gameInfo: GameInfo = SFA_GAME_INFO,
+        private explicitSubdirs?: string[],
+        private betaTex: boolean = false,
+        private maxTexId: number = 4096,
+    ) {}
 
+    public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+        const materialFactory = new MaterialFactory(device);
+        materialFactory.initialize();
+
+        const animController = new SFAAnimationController();
+
+        const texFetcher = await SFATextureFetcher.create(
+            this.gameInfo,
+            context.dataFetcher,
+            this.betaTex,
+        );
+
+        const subdirs = this.explicitSubdirs ?? getAllUniqueSubdirs(this.gameInfo);
+
+        console.log(`[TextureExhibit] loading ${subdirs.length} folders...`, subdirs);
+        await texFetcher.loadSubdirs(subdirs, context.dataFetcher);
+
+        const renderer = new TextureExhibitRenderer(
+            context,
+            animController,
+            materialFactory,
+            this.name,
+        );
+
+renderer.textureHolder = ensureTextureViewerHolder(texFetcher as any);
+
+// Start warming in the background so the scene opens immediately.
+void warmAllTexturesIntoViewer(
+    texFetcher as any,
+    materialFactory,
+    this.maxTexId,
+).then(() => {
+    dedupeViewerTextures(renderer.textureHolder);
+
+    console.log(
+        `[TextureExhibit] done, viewer textures=${renderer.textureHolder.viewerTextures.length}`
+    );
+}).catch((e) => {
+    console.error('[TextureExhibit] warm failed:', e);
+});
+
+return renderer;
+    }
+}
+export class DPTextureExhibitSceneDesc implements Viewer.SceneDesc {
+    constructor(
+        public id: string,
+        public name: string,
+        private gameInfo: GameInfo = DP_GAME_INFO,
+        private maxTexId: number = 4096,
+    ) {}
+
+    public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+        const materialFactory = new MaterialFactory(device);
+        materialFactory.initialize();
+
+        const animController = new SFAAnimationController();
+
+        const texFetcher = await SFATextureFetcher.create(this.gameInfo, context.dataFetcher, true);
+        texFetcher.setModelVersion(ModelVersion.DinosaurPlanet);
+
+        const renderer = new TextureExhibitRenderer(
+            context,
+            animController,
+            materialFactory,
+            this.name,
+        );
+
+        renderer.textureHolder = ensureTextureViewerHolder(texFetcher as any);
+
+        void warmAllTexturesIntoViewer(
+            texFetcher as any,
+            materialFactory,
+            this.maxTexId,
+        ).then(() => {
+            dedupeViewerTextures(renderer.textureHolder);
+
+            console.log(
+                `[DPTextureExhibit] done, viewer textures=${renderer.textureHolder.viewerTextures.length}`
+            );
+        }).catch((e) => {
+            console.error('[DPTextureExhibit] warm failed:', e);
+        });
+
+        return renderer;
+    }
+}
 export class DPModelFetcher {
     public constructor(
         private gameInfo: GameInfo,

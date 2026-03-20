@@ -132,146 +132,122 @@ public static async create(dataFetcher: DataFetcher, path: string, allowMissing:
     return self;
 }
 
-    public hasAnim(num: number): boolean {
-        if (num < 0 || (num + 1) * 4 > this.tab.byteLength) {
-            return false;
-        }
-        
-        const val = this.tab.getUint32(num * 4);
-        const nextVal = this.tab.getUint32((num + 1) * 4);
-        
-        const isSFA = (val & 0xFF000000) === 0x10000000;
-        const offs = isSFA ? (val & 0x0FFFFFFF) : val;
-        const nextOffs = isSFA ? (nextVal & 0x0FFFFFFF) : nextVal;
-        
-        return (nextOffs - offs) > 0;
+public hasAnim(num: number): boolean {
+    if (num < 0 || (num + 1) * 4 > this.tab.byteLength) {
+        return false;
     }
 
-    public getAnim(num: number): Anim {
-        const val = this.tab.getUint32(num * 4);
-        const nextVal = this.tab.getUint32((num + 1) * 4);
-        
-        const isSFA = (val & 0xFF000000) === 0x10000000;
-        const offs = isSFA ? (val & 0x0FFFFFFF) : val;
-        const nextOffs = isSFA ? (nextVal & 0x0FFFFFFF) : nextVal;
-        
-        const byteLength = nextOffs - offs;
-        const data = dataSubarray(this.bin, offs, byteLength);
+    return (readUint32(this.tab, 0, num) & 0xff000000) === 0x10000000;
+}
 
-        const HEADER_SIZE = 0xa;
-        const header = {
-            keyframesOffset: data.getUint16(0x2),
-            timesOffset: data.getUint16(0x4),
-            numBones: data.getUint8(0x6),
-            numKeyframes: data.getUint8(0x7),
-            keyframeStride: data.getUint8(0x8),
-        };
+public getAnim(num: number): Anim {
+    const offs = readUint32(this.tab, 0, num) & 0x0fffffff;
+    const nextOffs = readUint32(this.tab, 0, num + 1) & 0x0fffffff;
+    const byteLength = nextOffs - offs;
+    const data = dataSubarray(this.bin, offs, byteLength);
 
-        function loadKeyframe(kfNum: number): Keyframe {
-            let cmdOffs = HEADER_SIZE;
-            let kfOffs = header.keyframesOffset + kfNum * header.keyframeStride;
-            const kfReader = new HighBitReader(data, kfOffs);
+    const HEADER_SIZE = 0x0a;
+    const header = {
+        keyframesOffset: data.getUint16(0x2),
+        timesOffset: data.getUint16(0x4),
+        numBones: data.getUint8(0x6),
+        numKeyframes: data.getUint8(0x7),
+        keyframeStride: data.getUint8(0x8),
+    };
 
-            function getNextCmd(): number {
-                const result = data.getUint16(cmdOffs);
-                cmdOffs += 2;
-                return result;
+    function loadKeyframe(kfNum: number): Keyframe {
+        let cmdOffs = HEADER_SIZE;
+        const kfOffs = header.keyframesOffset + kfNum * header.keyframeStride;
+        const kfReader = new HighBitReader(data, kfOffs);
+
+        function getNextCmd(): number {
+            const result = data.getUint16(cmdOffs);
+            cmdOffs += 2;
+            return result;
+        }
+
+        function loadAxis(): Axis {
+            const result: Axis = createAxis();
+
+            let cmd = getNextCmd();
+
+            result.rotation = interpS16(cmd & 0xfff0);
+
+            const numAngleBits = cmd & 0xf;
+            if (numAngleBits !== 0) {
+                const value = kfReader.get(numAngleBits);
+                result.rotation += signExtend(value, 14) * 4;
             }
 
-            function loadAxis(): Axis {
-                const result: Axis = { translation: 0, rotation: 0, scale: 1 };
+            result.rotation = angle16ToRads(result.rotation);
 
-                let cmd = getNextCmd();
+            if (cmd & 0x10) {
+                cmd = getNextCmd();
 
-                result.rotation = interpS16(cmd & 0xfff0);
+                let hasScale = !!(cmd & 0x10);
+                let hasTranslation = true;
 
-                const numAngleBits = cmd & 0xf;
-                if (numAngleBits !== 0) {
-                    const value = kfReader.get(numAngleBits);
-                    result.rotation += signExtend(value, 14) * 4;
+                if (hasScale) {
+                    result.scale = cmd & 0xffc0;
+
+                    const numScaleBits = cmd & 0xf;
+                    if (numScaleBits !== 0) {
+                        const value = kfReader.get(numScaleBits);
+                        result.scale += signExtend(value, 16) * 2;
+                    }
+
+                    result.scale = (result.scale & 0xffff) / 1024;
+
+                    hasTranslation = !!(cmd & 0x20);
+                    if (hasTranslation)
+                        cmd = getNextCmd();
                 }
 
-                result.rotation = angle16ToRads(result.rotation);
+                if (hasTranslation) {
+                    result.translation = interpS16(cmd & 0xfff0);
 
-                if (cmd & 0x10) {
-                    cmd = getNextCmd();
+                    const numTransBits = cmd & 0xf;
+                    if (numTransBits !== 0)
+                        result.translation += kfReader.get(numTransBits);
 
-                    let hasScale = !!(cmd & 0x10);
-                    let hasTranslation = true;
-
-                    if (hasScale) {
-                        result.scale = cmd & 0xffc0;
-
-                        const numScaleBits = cmd & 0xf;
-                        if (numScaleBits !== 0) {
-                            const value = kfReader.get(numScaleBits);
-                            result.scale += signExtend(value, 16) * 2;
-                        }
-
-                        result.scale = (result.scale & 0xffff) / 1024;
-
-                        hasTranslation = !!(cmd & 0x20);
-                        if (hasTranslation)
-                            cmd = getNextCmd();
-                    }
-                    
-                    if (hasTranslation) {
-                        result.translation = interpS16(cmd & 0xfff0);
-
-                        const numTransBits = cmd & 0xf;
-                        if (numTransBits !== 0)
-                            result.translation += kfReader.get(numTransBits);
-
-                        result.translation = interpS16(result.translation) / 512;
-                    }
+                    result.translation = interpS16(result.translation) / 512;
                 }
-
-                return result;
-            }
-
-            function loadPose(): Pose {
-                const result: Pose = { axes: [
-                    { translation: 0, rotation: 0, scale: 1 },
-                    { translation: 0, rotation: 0, scale: 1 },
-                    { translation: 0, rotation: 0, scale: 1 }
-                ]};
-
-                for (let i = 0; i < 3; i++)
-                    result.axes[i] = loadAxis();
-
-                return result;
-            }
-
-            const result: Keyframe = { poses: [] };
-
-            for (let i = 0; i < header.numBones; i++) {
-                result.poses[i] = loadPose();
             }
 
             return result;
         }
 
-        const keyframes: Keyframe[] = [];
-        for (let i = 0; i < header.numKeyframes; i++) {
-            const keyframe = loadKeyframe(i);
-            keyframes.push(keyframe);
+        function loadPose(): Pose {
+            const result: Pose = createPose();
+            for (let i = 0; i < NUM_AXES; i++)
+                result.axes[i] = loadAxis();
+            return result;
         }
 
-        let speed = 1;
-        if (header.timesOffset !== 0) {
-            let timesOffs = header.timesOffset;
+        const result: Keyframe = createKeyframe(header.numBones);
+        for (let i = 0; i < header.numBones; i++)
+            result.poses[i] = loadPose();
 
-            speed = data.getFloat32(timesOffs);
-            timesOffs += 0x4;
-            const numTimes = data.getUint16(timesOffs);
-            timesOffs += 0x2;
-            for (let i = 0; i < numTimes; i++) {
-                timesOffs += 0x2;
-            }
-        }
-
-        return { keyframes, speed, times: [] };
+        return result;
     }
+
+    const keyframes: Keyframe[] = [];
+    for (let i = 0; i < header.numKeyframes; i++)
+        keyframes.push(loadKeyframe(i));
+
+    let speed = 1;
+    if (header.timesOffset !== 0) {
+        let timesOffs = header.timesOffset;
+        speed = data.getFloat32(timesOffs);
+        timesOffs += 0x4;
+        const numTimes = data.getUint16(timesOffs);
+        timesOffs += 0x2;
+        for (let i = 0; i < numTimes; i++)
+            timesOffs += 0x2;
+    }
+
+    return { keyframes, speed, times: [] };
+}
 }
 
 export function interpolateAxes(axis0: Axis, axis1: Axis, ratio: number, reuse?: Axis): Axis {

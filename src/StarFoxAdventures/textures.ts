@@ -621,7 +621,6 @@ public getDPTintedTexId(baseId: number, r: number, g: number, b: number): number
 private async loadDPBinTexture(cache: GfxRenderCache, texId: number) {
     if (!this.dataFetcherRef) return;
 
-    // Ignore invalid ids entirely.
     if (!Number.isInteger(texId) || texId < 0 || texId > 0x7FFF)
         return;
 

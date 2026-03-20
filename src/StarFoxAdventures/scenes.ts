@@ -2,8 +2,7 @@ import * as Viewer from '../viewer.js';
 
 import {SFAMapSceneDesc, SwapcircleSceneDesc, AncientMapSceneDesc, EarlydupMapSceneDesc, EarlyfearMapSceneDesc, EarlyDFPMapSceneDesc, Early1MapSceneDesc, Early2MapSceneDesc, Early3MapSceneDesc, Early4MapSceneDesc, } from './maps.js';
 import { SFAWorldSceneDesc, SFAFullFinalWorldSceneDesc } from './world.js';
-import { SFAModelExhibitSceneDesc } from './modelexhibit.js';
-import { ModelVersion } from './modelloader.js';
+import { SFAModelExhibitSceneDesc, SFATextureExhibitSceneDesc } from './modelexhibit.js';import { ModelVersion } from './modelloader.js';
 import { EARLYFEAR } from './blocks.js';
 
 export interface GameInfo {
@@ -179,7 +178,21 @@ export const SFADEMO_GAME_INFO: GameInfo = {
     }
 };
 
+const BETA_TEXTURE_EXHIBIT_SUBDIRS = [
+    'frontend',
+    'Copy of swaphol',
+    'insidegal',
+    'swapcircle',
+    'cloudtreasure',
+    'linklevel',
+];
 
+const KIOSK_TEXTURE_EXHIBIT_SUBDIRS = [...new Set(
+    Object.values(SFADEMO_GAME_INFO.subdirs).filter((v) =>
+        typeof v === 'string' &&
+        !BETA_TEXTURE_EXHIBIT_SUBDIRS.includes(v)
+    )
+)].sort((a, b) => a.localeCompare(b));
 
 const ANCIENT_DP_GAME_INFO: GameInfo = {
     pathBase: 'StarFoxAdventuresDemo',
@@ -189,12 +202,19 @@ const ANCIENT_DP_GAME_INFO: GameInfo = {
 const sceneDescs = [
     'StarFox Adventures Maps - Oldest to Newest',
     "Model Viewer",
+
 new SFAModelExhibitSceneDesc('modelexhibit', 'Model + Animation Viewer (Final)', ModelVersion.Final),
 new SFAModelExhibitSceneDesc('modelexhibit', 'Model + Animation Viewer (Kiosk)', ModelVersion.Final, SFADEMO_GAME_INFO),
 new SFAModelExhibitSceneDesc('betamodelexhibit', 'Early 2001 Model Viewer (in progress)', ModelVersion.Beta, SFADEMO_GAME_INFO),
 new SFAModelExhibitSceneDesc( 'cloudtreasuremodelexhibit', 'Early/Mid 2001 Models (CloudTreasure)', ModelVersion.cloudtreasure,SFADEMO_GAME_INFO, ['cloudtreasure'],),
 new SFAModelExhibitSceneDesc('demomodelexhibit_mid', 'Mid 2001 Models (Copy of Swaphol)', ModelVersion.Demo, SFADEMO_GAME_INFO, ['Copy of swaphol', 'linklevel']),
 new SFAModelExhibitSceneDesc('demomodelexhibit_gal', 'Mid/later 2001 Models (InsideGal)', ModelVersion.Demo, SFADEMO_GAME_INFO, ['insidegal']),
+
+'Texture Viewer',
+new SFATextureExhibitSceneDesc('finaltextureexhibit', 'Texture Viewer (Final - All Folders)', SFA_GAME_INFO),
+new SFATextureExhibitSceneDesc('kiosktextureexhibit', 'Texture Viewer (Kiosk - Main Folders)', SFADEMO_GAME_INFO, KIOSK_TEXTURE_EXHIBIT_SUBDIRS),
+new SFATextureExhibitSceneDesc('betatextureexhibit', 'Texture Viewer (Kiosk Beta Folders)', SFADEMO_GAME_INFO, BETA_TEXTURE_EXHIBIT_SUBDIRS, true),
+
 
 'Full World Maps (experimental)',
 new SFAFullFinalWorldSceneDesc('Full Final World'),

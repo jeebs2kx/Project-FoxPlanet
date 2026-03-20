@@ -353,8 +353,8 @@ if (fields.isAncient) {
     
   } else if (fields.isBeta) {
   shader.isBeta = true;
-       shader.attrFlags = ShaderAttrFlags.CLR;
-        shader.flags = ShaderFlags.CullBackface;
+       shader.attrFlags = data.getUint8(0x34);
+        shader.flags = data.getUint16(0x2c);
  
 if (fields.isold) {
   const raw16 = data.getUint16(0x38);

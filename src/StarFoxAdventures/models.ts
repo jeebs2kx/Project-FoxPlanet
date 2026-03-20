@@ -360,11 +360,28 @@ public getAmap(modelAnimNum: number): DataView {
         if (!this.skinningDirty)
             return;
 
-        for (let i = 0; i < this.model.joints.length; i++) {
-            const joint = this.model.joints[i];
-            mat4.copy(this.matrixPalette[joint.boneNum], this.skeletonInst!.getJointMatrix(joint.boneNum));
-            // FIXME: Check beta models
-        }
+for (let i = 0; i < this.model.joints.length; i++) {
+  const joint = this.model.joints[i];
+
+  const betaFine =
+    this.model.version === ModelVersion.Beta &&
+    this.model.hasBetaFineSkinning;
+
+  const poseIndex = betaFine ? i : joint.boneNum;
+
+  mat4.copy(
+    this.matrixPalette[joint.boneNum],
+    this.skeletonInst!.getJointMatrix(poseIndex),
+  );
+
+  if (betaFine) {
+    mat4.translate(
+      this.matrixPalette[joint.boneNum],
+      this.matrixPalette[joint.boneNum],
+      this.model.invBindTranslations[i],
+    );
+  }
+}
 
         for (let i = 0; i < this.model.coarseBlends.length; i++) {
             const blend = this.model.coarseBlends[i];

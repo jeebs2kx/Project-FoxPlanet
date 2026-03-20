@@ -1,14 +1,8 @@
 /* @preserve The source code to this website is under the MIT license and can be found at https://github.com/magcius/noclip.website */
 
 import { Viewer, SceneGfx, InitErrorCode, initializeViewer, makeErrorUI, resizeCanvas, ViewerUpdateInfo } from './viewer.js';
-
-// --- WE ONLY KEEP SFA AND DP ---
 import * as Scenes_DinosaurPlanet from './StarFoxAdventures/dpscenes.js';
 import * as Scenes_StarFoxAdventures from './StarFoxAdventures/scenes.js';
-
-// --- WE REMOVE THE FILEDROPS IMPORT THAT CAUSES THE CRASH ---
-// import { DroppedFileSceneDesc, traverseFileSystemDataTransfer } from './Scenes_FileDrops.js';
-
 import { UI, Panel } from './ui.js';
 import { serializeCamera, deserializeCamera, FPSCameraController } from './Camera.js';
 import { assertExists, assert } from './util.js';
@@ -29,7 +23,6 @@ import InputManager from './InputManager.js';
 import { WebXRContext } from './WebXR.js';
 import { debugJunk } from './DebugJunk.js';
 
-/* Keep ALL scenes in code; we’ll hide everything except SFA in the UI. */
 const sceneGroups: (string | SceneGroup)[] = [
     "MAP + MODEL VIEWER FOR SFA AND DP",
     Scenes_DinosaurPlanet.sceneGroup,
@@ -67,8 +60,6 @@ function hideAllButGames(groups: (string | SceneGroup)[], allowed: Set<SceneGrou
     }
 }
 
-// Find all left-side tiny tool buttons (noclip uses different containers per build)
-// We detect by screen position/size, then tag them with .sfa-dock-btn.
 function applySFADockSkin() {
   const btns = Array.from(document.querySelectorAll('button, .button, .tool-button')) as HTMLElement[];
   btns.forEach(b => {
@@ -79,41 +70,82 @@ function applySFADockSkin() {
   });
 }
 
-// Re-apply skin when UI elements are created/destroyed.
 function observeUiForDockSkin() {
   applySFADockSkin();
   const mo = new MutationObserver(() => applySFADockSkin());
   mo.observe(document.body, { childList: true, subtree: true });
 }
+
+type BackgroundMode = 'none' | 'landing' | 'sfa' | 'dp';
+
+function injectBackgroundOnlyCSS() {
+  if (document.getElementById('sfa-dp-background-only-style')) return;
+
+  const css = `
+html, body {
+  min-height: 100%;
+}
+
+html[data-bg-mode="landing"], body[data-bg-mode="landing"]{
+  background:
+    radial-gradient(900px 420px at 10% 8%, rgba(43,43,184,.14), transparent 55%),
+    radial-gradient(900px 420px at 90% 6%, rgba(224,181,78,.12), transparent 58%),
+    linear-gradient(180deg, rgba(6,10,18,.96), rgba(7,10,18,.98)) !important;
+}
+
+html[data-bg-mode="sfa"], body[data-bg-mode="sfa"]{
+  background:
+    radial-gradient(900px 420px at 10% 8%, rgba(43,43,184,.14), transparent 55%),
+    radial-gradient(900px 420px at 90% 6%, rgba(224,181,78,.12), transparent 58%),
+    linear-gradient(180deg, rgba(6,10,18,.96), rgba(7,10,18,.98)) !important;
+}
+
+html[data-bg-mode="dp"], body[data-bg-mode="dp"]{
+  background:
+    radial-gradient(900px 420px at 12% 8%, rgba(120,70,24,.22), transparent 55%),
+    radial-gradient(900px 420px at 88% 6%, rgba(211,154,58,.12), transparent 58%),
+    linear-gradient(180deg, rgba(10,7,5,.96), rgba(8,6,5,.98)) !important;
+}
+
+html[data-bg-mode="none"], body[data-bg-mode="none"]{
+  background: #000 !important;
+}
+  `;
+
+  const style = document.createElement('style');
+  style.id = 'sfa-dp-background-only-style';
+  style.textContent = css;
+  document.head.appendChild(style);
+}
+
+function setBackgroundMode(mode: BackgroundMode, canvas?: HTMLCanvasElement) {
+  document.body.dataset.bgMode = mode;
+  document.documentElement.dataset.bgMode = mode;
+  if (canvas) canvas.style.display = (mode === 'none') ? '' : 'none';
+}
+
 function setLandingModeUI(isLanding: boolean) {
   document.body.dataset.landing = isLanding ? '1' : '0';
-
-  // Hide/show the left MAPS panel only on landing
   const mapsPanel = document.querySelector('#Panel') as HTMLElement | null;
   if (mapsPanel) {
     mapsPanel.style.display = isLanding ? 'none' : '';
   }
 
-  // Add splash title once (to the visible landing panel area)
   if (isLanding) {
     ensureSplashTitle();
   }
 }
 
 function ensureSplashTitle() {
-  // Don't duplicate
   if (document.getElementById('sfa-dp-splash-title')) return;
 
-  // Find the landing panel by looking for the "SELECT GAME" heading on the right side
   const allHeaders = Array.from(document.querySelectorAll('span, div, h1, h2, h3')) as HTMLElement[];
   const selectGameNode = allHeaders.find((el) => (el.textContent || '').trim().toUpperCase() === 'SELECT GAME');
   if (!selectGameNode) return;
 
-  // Find a good container above the logos/cards
-  // Usually the heading is inside the landing card; use its parent chain.
   let landingContainer: HTMLElement | null = selectGameNode.parentElement as HTMLElement | null;
   for (let i = 0; i < 4 && landingContainer; i++) {
-    if (landingContainer.querySelector('img')) break; // likely the landing content box
+    if (landingContainer.querySelector('img')) break;
     landingContainer = landingContainer.parentElement as HTMLElement | null;
   }
   if (!landingContainer) return;
@@ -125,15 +157,43 @@ function ensureSplashTitle() {
     <div class="splash-sub">Map and Model Viewer</div>
   `;
 
-  // Insert at top of landing container
   landingContainer.insertBefore(titleWrap, landingContainer.firstChild);
 }
+
+function ensureLandingVersion() {
+  const allNodes = Array.from(document.querySelectorAll('span, div, h1, h2, h3')) as HTMLElement[];
+  const selectGameNodes = allNodes.filter((el) => (el.textContent || '').trim().toUpperCase() === 'SELECT GAME');
+  if (!selectGameNodes.length) return;
+
+  // Pick the right-side "SELECT GAME", not the left maps entry.
+  const selectGameNode = selectGameNodes.sort(
+    (a, b) => b.getBoundingClientRect().left - a.getBoundingClientRect().left
+  )[0];
+
+  let container: HTMLElement | null = selectGameNode.parentElement as HTMLElement | null;
+  for (let i = 0; i < 6 && container; i++) {
+    if (container.querySelectorAll('img').length >= 2) break;
+    container = container.parentElement as HTMLElement | null;
+  }
+  if (!container) return;
+
+  container.style.position = 'relative';
+
+  let version = document.getElementById('landing-version') as HTMLElement | null;
+  if (!version) {
+    version = document.createElement('div');
+    version.id = 'landing-version';
+    version.textContent = 'Version 0.8.7';
+    container.appendChild(version);
+  } else if (version.parentElement !== container) {
+    container.appendChild(version);
+  }
+}
+
 function injectSFASkin() {
   const css = `
 :root{
-  /* SFA palette (dimmed gold) */
   --sfa-gold:#E0B54E;
-  --sfa-purple:#2B2BB8;
   --sfa-navy:#0B1124;
   --sfa-border: rgba(43,43,184,.26);
   --sfa-accent: var(--sfa-gold);
@@ -143,19 +203,16 @@ function injectSFASkin() {
   --radius-sm:12px;
 }
 
-/* ===== splash / landing mode ===== */
 body[data-landing="1"] #Panel{
   display:none !important;
 }
 
-/* Keep the game chooser centered on splash */
 body[data-landing="1"] #SceneSelect,
 body[data-landing="1"] [class*="scene-select"],
 body[data-landing="1"] [class*="SceneSelect"]{
   margin-inline:auto !important;
 }
 
-/* Injected title above game logos */
 #sfa-dp-splash-title{
   text-align:center;
   margin: 6px 0 18px 0;
@@ -187,13 +244,28 @@ body[data-landing="1"] [class*="SceneSelect"]{
   text-shadow: 0 1px 6px rgba(0,0,0,.45);
 }
 
-/* ================= DP THEME OVERRIDES ================= */
+#landing-version{
+  position:absolute;
+  left:0;
+  right:0;
+  bottom:22px;
+  color:rgba(255,255,255,.72);
+  font-size:12px;
+  font-weight:600;
+  letter-spacing:.5px;
+  text-align:center;
+  text-shadow:0 1px 4px rgba(0,0,0,.55);
+  pointer-events:none;
+  z-index:20;
+}
+
+/* Original theme CSS kept unchanged below */
 body[data-game-theme="dp"]{
-  --sfa-gold: #D39A3A;
-  --sfa-purple: #5A3418;
+  --sfa-gold: #a8a8a8;
+  --sfa-purple: #8f8f8f;
   --sfa-navy: #120C08;
-  --sfa-border: rgba(170,110,48,.30);
-  --sfa-accent: #D39A3A;
+  --sfa-border: rgba(207, 207, 207, 0.3);
+  --sfa-accent: #858585;
   --sfa-accent-8: rgba(211,154,58,.12);
   --sfa-white: #F4E9D8;
 }
@@ -236,21 +308,6 @@ body[data-game-theme="dp"] .sfa-title{
   box-shadow: inset 0 1px 0 rgba(255,230,180,.10);
 }
 
-body[data-game-theme="dp"] .sfa-right-menu span.header{
-  color: #F2CF7A !important;
-  font-weight: 900;
-  letter-spacing: 1px;
-  text-transform: uppercase;
-  -webkit-text-stroke: 1.6px #2B160A !important;
-  paint-order: stroke fill;
-  text-shadow:
-    0 1px 0 #2B160A,  0 -1px 0 #2B160A,
-    1px 0 0 #2B160A,  -1px 0 0 #2B160A,
-    1px 1px 0 #2B160A, -1px 1px 0 #2B160A,
-    1px -1px 0 #2B160A, -1px -1px 0 #2B160A,
-    0 0 8px rgba(242,207,122,.14) !important;
-}
-
 body[data-game-theme="dp"] .sfa-dock-btn,
 body[data-game-theme="dp"] #LeftBar button,
 body[data-game-theme="dp"] #Toolbox button,
@@ -289,7 +346,6 @@ body[data-game-theme="dp"] #Dock .button::before{
   background: radial-gradient(28px 28px at -6px 50%, rgba(211,154,58,.32), transparent 60%) !important;
 }
 
-/* ================= SFA THEME ================= */
 body[data-game-theme="sfa"]{
   background:
     radial-gradient(900px 420px at 10% 8%, rgba(43,43,184,.10), transparent 55%),
@@ -516,11 +572,10 @@ class Main {
 
 public setActiveGame(game: 'sfa' | 'dp'): void {
     setLandingModeUI(false);
+    setBackgroundMode(game, this.canvas);
     this.ui.applyGameTheme(game);
     document.body.dataset.gameTheme = game;
 
-    // Hide the landing and show the normal right list
-    this.ui.sceneSelect.showGameLanding(false);
     const gameToGroups: Record<'sfa' | 'dp', SceneGroup[]> = {
       sfa: [Scenes_StarFoxAdventures.sceneGroup],
       dp:  [Scenes_DinosaurPlanet.sceneGroup],
@@ -529,37 +584,26 @@ public setActiveGame(game: 'sfa' | 'dp'): void {
     const allowed = new Set(gameToGroups[game]);
     hideAllButGames(this.groups, allowed);
 
-    // keep hidden groups hidden
     (this.ui.sceneSelect as any).setForceVisible(false);
 
-// refresh UI list
 this._loadSceneGroups();
 
-// Auto-select the game's scene group so the right list populates immediately.
 const firstGroup = gameToGroups[game][0];
 (this.ui.sceneSelect as any).selectSceneGroup(firstGroup);
 
-// Show the normal right list (hide landing)
 this.ui.sceneSelect.showGameLanding(false);
-
-// Keep panel open
 this.ui.sceneSelect.setExpanded(true);
-
 }
 
 public showGamePicker(): void {
     setLandingModeUI(true);
+    setBackgroundMode('landing', this.canvas);
 
-    // Show the landing panel again
     this.ui.sceneSelect.showGameLanding(true);
-    // Hide everything (so left list is empty while picking)
     hideAllButGames(this.groups, new Set());
-
-    // Refresh UI
     this._loadSceneGroups();
-
-    // Keep panel open
     this.ui.sceneSelect.setExpanded(true);
+    requestAnimationFrame(() => ensureLandingVersion());
 }
 
     public async init() {
@@ -569,7 +613,10 @@ public showGamePicker(): void {
         document.body.appendChild(this.toplevel);
 
         injectSFASkin();
-document.body.dataset.gameTheme = 'sfa';
+        injectBackgroundOnlyCSS();
+        document.body.dataset.gameTheme = 'sfa';
+        document.body.dataset.bgMode = 'landing';
+        document.documentElement.dataset.bgMode = 'landing';
         this.canvas = document.createElement('canvas');
         this.canvas.style.imageRendering = 'pixelated';
         this.canvas.style.outline = 'none';
@@ -585,6 +632,8 @@ document.body.dataset.gameTheme = 'sfa';
             return;
         }
 
+        setBackgroundMode('landing', this.canvas);
+
         this.webXRContext = new WebXRContext(this.viewer.gfxSwapChain);
         this.webXRContext.onframe = this.postAnimFrameWebXR.requestPostAnimationFrame;
 
@@ -599,9 +648,6 @@ document.body.dataset.gameTheme = 'sfa';
             e.preventDefault();
         };
         this.toplevel.ondragleave = (e) => { this.ui.dragHighlight.style.display = 'none'; e.preventDefault(); };
-        
-        // Removed FileDrops logic to prevent crashing
-        // this.toplevel.ondrop = this._onDrop.bind(this);
 
         this.viewer.onstatistics = (s: RenderStatistics) => { this.ui.statisticsPanel.addRenderStatistics(s); };
         this.viewer.oncamerachanged = (force: boolean) => { this._saveState(force); };
@@ -622,21 +668,15 @@ this.ui.sceneSelect.showGameLanding(true);
 
         this._loadSceneGroups();
 this.ui.sceneSelect.showGameLanding(true);
+requestAnimationFrame(() => ensureLandingVersion());
 
-        // Skin hooks on SceneSelect internals (safe "as any" labels)
         const maps = (this.ui.sceneSelect as any);
-// Make the whole MAPS widget a single rounded shell (fixes square/flat top)
 (maps.elem as HTMLElement).classList.add('sfa-shell');
-
-// Keep existing lines:
 maps.headerContainer?.classList?.add('sfa-title');
 maps.contents?.classList?.add('sfa-card');
-
-// Give both lists the rounded look as well
 (maps.sceneGroupList.elem as HTMLElement).classList.add('sfa-list');
 (maps.sceneDescList.elem as HTMLElement).classList.add('sfa-list','sfa-right-menu');
 
-        // Title: MAPS with star icon
         const starIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" height="20" fill="white"><path d="M48 6l8 20 22 2-17 14 6 21-19-12-19 12 6-21-17-14 22-2 8-20z"/></svg>`;
         (this.ui.sceneSelect as any).setTitle(starIcon, 'MAPS');
 
@@ -733,7 +773,6 @@ maps.contents?.classList?.add('sfa-card');
 
     private _onRequestAnimationFrameCanvas = (): void => {
         if (this.webXRContext.xrSession !== null) {
-            // XR presenting—skip canvas
         } else {
             this.postAnimFrameCanvas.requestPostAnimationFrame();
         }
@@ -892,6 +931,8 @@ maps.contents?.classList?.add('sfa-card');
 
     private _loadSceneDesc(sceneGroup: SceneGroup, sceneDesc: SceneDesc, sceneStateStr: string | null = null, force: boolean = false): void {
         if (this.currentSceneDesc === sceneDesc && !force) { this._loadSceneSaveState(sceneStateStr); return; }
+
+        setBackgroundMode('none', this.canvas);
 
         const device = this.viewer.gfxDevice;
 

@@ -694,7 +694,7 @@ function dumpRawBytes(data: DataView, byteCount: number = 256) {
         rowBytes.push(' ');
       }
     }
-    // console.log(`0x${offset.toString(16).padStart(4, '0')}: ${rowBytes.join(' ')}`);
+  //   console.log(`0x${offset.toString(16).padStart(4, '0')}: ${rowBytes.join(' ')}`);
   }
 }
 
@@ -1300,7 +1300,7 @@ if (lightingEnabled) {
 
   // --- Buffers ---
   const finalVerts = (outPos.length / 3) | 0;
- // console.log(`[MODEL INFO] Size: ${data.byteLength} bytes | Verts: ${finalVerts}`);
+  //console.log(`[MODEL INFO] Size: ${data.byteLength} bytes | Verts: ${finalVerts}`);
   const posAB = new ArrayBuffer(finalVerts * 6);
   const clrAB = new ArrayBuffer(finalVerts * 4);
   const texAB = new ArrayBuffer(finalVerts * 4);
@@ -1833,7 +1833,7 @@ return model;
   }
 
   function logAllFields(data: DataView, fields: any) {
- //   console.log('--- Detailed Dumping model fields ---');
+ //  console.log('--- Detailed Dumping model fields ---');
     const IMMEDIATE_KEYS = new Set<string>([
       'numListBits','dlInfoSize','isMapBlock','isFinal','isBeta','oldVat',
       'hasNormals','hasBones','hasYTranslate','isfinal','shaderFields'
@@ -1841,7 +1841,7 @@ return model;
 
     for (const key in fields) {
       if (IMMEDIATE_KEYS.has(key)) {
-     //   console.log(`${key} (immediate): ${fields[key]}`);
+    //   console.log(`${key} (immediate): ${fields[key]}`);
         continue;
       }
       const offset = fields[key];
@@ -1869,9 +1869,9 @@ return model;
             else
               bytes.push('??');
           }
-      //    console.log(`${key} raw bytes @ 0x${offset.toString(16)}: ${bytes.join(' ')} => ${val}`);
+       //  console.log(`${key} raw bytes @ 0x${offset.toString(16)}: ${bytes.join(' ')} => ${val}`);
         } catch (e) {
-      //    console.warn(`Error reading field ${key} at offset 0x${offset.toString(16)}`, e);
+        //  console.warn(`Error reading field ${key} at offset 0x${offset.toString(16)}`, e);
         }
       }
     }
@@ -1906,8 +1906,8 @@ return model;
   const shaderStrideCandidate = shaderCount ? Math.floor(shaderSpan / shaderCount) : 0;
   const shaderRema = shaderCount ? (shaderSpan % shaderCount) : 0;
   console.warn(
-    `[PROBE1] shaderStrideCandidate=${shaderStrideCandidate} (0x${shaderStrideCandidate.toString(16)}) ` +
-    `remainder=${shaderRema} actual=0x${shaderStride.toString(16)}`
+   // `[PROBE1] shaderStrideCandidate=${shaderStrideCandidate} (0x${shaderStrideCandidate.toString(16)}) ` +
+   // `remainder=${shaderRema} actual=0x${shaderStride.toString(16)}`
   );
 
   for (let i = 0; i < Math.min(shaderCount, 2); i++) {
@@ -1916,7 +1916,7 @@ return model;
     for (let b = 0; b < 16 && base + b < FILE_LEN; b++) {
       row.push(data.getUint8(base + b).toString(16).padStart(2, '0'));
     }
-   // console.warn(`[PROBE1] shader[${i}] @0x${base.toString(16)}: ${row.join(' ')}`);
+  //  console.warn(`[PROBE1] shader[${i}] @0x${base.toString(16)}: ${row.join(' ')}`);
   }
 
   const dlCnt = data.getUint8(fields.dlInfoCount);
@@ -1931,7 +1931,7 @@ return model;
 
   for (const stride of dlStrideCandidates) {
     if (!dlBase || dlBase + stride * dlCnt > FILE_LEN) {
-   //   console.warn(`[PROBE2] dlInfoStride=0x${stride.toString(16)} -> table OOB (base too large or count*stride too big)`);
+   //  console.warn(`[PROBE2] dlInfoStride=0x${stride.toString(16)} -> table OOB (base too large or count*stride too big)`);
       continue;
     }
     let ok = 0, bad = 0;
@@ -1944,7 +1944,7 @@ return model;
       sane ? ok++ : bad++;
     }
     console.warn(
-   //   `[PROBE2] dlInfoStride=0x${stride.toString(16)} score ok=${ok}/${dlCnt} bad=${bad} samples=[${samples.join(' | ')}]`
+    //  `[PROBE2] dlInfoStride=0x${stride.toString(16)} score ok=${ok}/${dlCnt} bad=${bad} samples=[${samples.join(' | ')}]`
     );
   }
 
@@ -1955,7 +1955,7 @@ return model;
       const b = data.getUint8(dlBase + i).toString(16).padStart(2,'0');
       line += b + (i % 16 === 15 ? ` @+0x${(i-15).toString(16)}\n` : ' ');
     }
-   // console.warn(`[PROBE3] dlInfo head @0x${dlBase.toString(16)} (first ${dumpLen} bytes)\n${line}`);
+  //  console.warn(`[PROBE3] dlInfo head @0x${dlBase.toString(16)} (first ${dumpLen} bytes)\n${line}`);
   }
 
   const normalFlags = fields.hasNormals ? data.getUint8(0x24) : 0;
@@ -1964,13 +1964,13 @@ return model;
   // Read raw bytes of posCount field (2 bytes)
   const posOffset = data.getUint32(fields.posOffset);
   const posCount = data.getUint16(fields.posCount);
- // console.log(`Loading ${posCount} positions from 0x${posOffset.toString(16)}`);
+  //console.log(`Loading ${posCount} positions from 0x${posOffset.toString(16)}`);
   model.originalPosBuffer = dataSubarray(data, posOffset);
 
   if (fields.hasNormals) {
     const nrmOffset = data.getUint32(fields.nrmOffset);
     const nrmCount = data.getUint16(fields.nrmCount);
-  //  console.log(`Loading ${nrmCount} normals from 0x${nrmOffset.toString(16)}`);
+//   console.log(`Loading ${nrmCount} normals from 0x${nrmOffset.toString(16)}`);
     model.originalNrmBuffer = dataSubarray(data, nrmOffset, nrmCount * ((normalFlags & NormalFlags.NBT) ? 9 : 3));
   }
 
@@ -1986,7 +1986,7 @@ return model;
         for (let j = 0; j < nrmStride; j++) dst[off + j] = src[tailStart + j] ?? 0;
       }
       model.originalNrmBuffer = new DataView(dst.buffer);
-    //  console.warn(`[NRM_PAD] grew normals ${src.byteLength} -> ${needed} (stride=${nrmStride})`);
+     // console.warn(`[NRM_PAD] grew normals ${src.byteLength} -> ${needed} (stride=${nrmStride})`);
     }
   }
 const ctAltPosFineSkin = (() => {
@@ -2002,7 +2002,7 @@ const ctAltPosFineSkin = (() => {
     weightsOffs <= piecesOffs
   ) {
     console.warn(
- //     `[CT_ALT_POS] bad tables piecesOffs=0x${piecesOffs.toString(16)} weightsOffs=0x${weightsOffs.toString(16)}`
+    //  `[CT_ALT_POS] bad tables piecesOffs=0x${piecesOffs.toString(16)} weightsOffs=0x${weightsOffs.toString(16)}`
     );
     return null;
   }
@@ -2017,9 +2017,9 @@ const ctAltPosFineSkin = (() => {
     remainder > 0x10
   ) {
     console.warn(
-  //    `[CT_ALT_POS] bad derived count piecesOffs=0x${piecesOffs.toString(16)} ` +
- //     `weightsOffs=0x${weightsOffs.toString(16)} gap=0x${gap.toString(16)} ` +
-  //    `numPieces=${numPieces} rem=0x${remainder.toString(16)}`
+     // `[CT_ALT_POS] bad derived count piecesOffs=0x${piecesOffs.toString(16)} ` +
+   //  `weightsOffs=0x${weightsOffs.toString(16)} gap=0x${gap.toString(16)} ` +
+   //   `numPieces=${numPieces} rem=0x${remainder.toString(16)}`
     );
     return null;
   }
@@ -2030,9 +2030,9 @@ const ctAltPosFineSkin = (() => {
   };
 
   console.warn(
- //   `[CT_ALT_POS] piecesOffs=0x${piecesOffs.toString(16)} ` +
- //   `weightsOffs=0x${weightsOffs.toString(16)} ` +
- //   `gap=0x${gap.toString(16)} numPieces=${cfg.numPieces} q=${cfg.quantizeScale}`
+   // `[CT_ALT_POS] piecesOffs=0x${piecesOffs.toString(16)} ` +
+  //  `weightsOffs=0x${weightsOffs.toString(16)} ` +
+   // `gap=0x${gap.toString(16)} numPieces=${cfg.numPieces} q=${cfg.quantizeScale}`
   );
 
   return { cfg, piecesOffs, weightsOffs };
@@ -2046,9 +2046,9 @@ const hasAltDemoPosFineSkin = (() => {
   const cfg = parseFineSkinningConfig(dataSubarray(data, 0x94, 0x08));
 
   console.log(
-  //  `[DEMO_ALT_POS] piecesOffs=0x${posPiecesOffs.toString(16)} ` +
-  //  `weightsOffs=0x${posWeightsOffs.toString(16)} ` +
-  //  `numPieces=${cfg.numPieces} q=${cfg.quantizeScale}`
+  // `[DEMO_ALT_POS] piecesOffs=0x${posPiecesOffs.toString(16)} ` +
+   // `weightsOffs=0x${posWeightsOffs.toString(16)} ` +
+   // `numPieces=${cfg.numPieces} q=${cfg.quantizeScale}`
   );
 
   return (
@@ -2083,7 +2083,7 @@ if (ctAltPosFineSkin !== null) {
   }
 
   console.log(
- //   `[CT_ALT_POS_OK] posFine=${model.posFineSkins.length} q=${model.fineSkinPositionQuantizeScale}`
+  //  `[CT_ALT_POS_OK] posFine=${model.posFineSkins.length} q=${model.fineSkinPositionQuantizeScale}`
   );
 
 } else if (hasAltDemoPosFineSkin) {
@@ -2167,10 +2167,10 @@ if (ctAltPosFineSkin !== null) {
           });
         }
       } else {
-     //   console.log('Skipping normals fine skinning: weights or pieces table out-of-bounds/missing (Demo).');
+    //    console.log('Skipping normals fine skinning: weights or pieces table out-of-bounds/missing (Demo).');
       }
     } else if (nrmFineSkinningConfig.numPieces !== 0) {
-  //    console.log('Skipping normals fine skinning: Demo fields missing pieces/weights offsets.');
+    //  console.log('Skipping normals fine skinning: Demo fields missing pieces/weights offsets.');
     }
 
     model.hasBetaFineSkinning = model.hasFineSkinning && version === ModelVersion.Beta;
@@ -2196,7 +2196,7 @@ if (
     vat[r][GX.Attr.POS].compShift = 3;
 }
   console.warn(
- //   `[VAT_PICK] oldVat=${!!fields.oldVat} nrmNBT=${!!(normalFlags & NormalFlags.NBT)} -> vatRow5: POS.shift=${vat[5][GX.Attr.POS].compShift} NRM.compType=${vat[5][GX.Attr.NRM].compType}`
+   // `[VAT_PICK] oldVat=${!!fields.oldVat} nrmNBT=${!!(normalFlags & NormalFlags.NBT)} -> vatRow5: POS.shift=${vat[5][GX.Attr.POS].compShift} NRM.compType=${vat[5][GX.Attr.NRM].compType}`
   );
 
   // Early3/Early4 maps: Their vertex color is 16-bit RGBA4. Ensure VAT expects RGBA4 on all streams.
@@ -2214,13 +2214,35 @@ if (
   // @0x8e: y translation (up/down)
   const texOffset = data.getUint32(fields.texOffset);
   const texCount = data.getUint8(fields.texCount);
-//  console.log(`Loading ${texCount} texture infos from 0x${texOffset.toString(16)}`);
+ // console.log(`Loading ${texCount} texture infos from 0x${texOffset.toString(16)}`);
   const texIds: number[] = [];
   for (let i = 0; i < texCount; i++) {
     const texIdFromFile = readUint32(data, texOffset, i);
     texIds.push(texIdFromFile);
   }
-//  console.log(`texids: ${texIds}`);
+  if (version === ModelVersion.Beta) {
+  const posCount = data.getUint16(fields.posCount, false);
+  const nrmCount = data.getUint16(fields.nrmCount, false);
+  const clrCount = data.getUint16(fields.clrCount, false);
+  const texcoordCount = data.getUint16(fields.texcoordCount, false);
+  const jointCount = data.getUint8(fields.jointCount);
+  const dlInfoCount = data.getUint8(fields.dlInfoCount);
+  const shaderCount = data.getUint8(fields.shaderCount);
+
+  (model as any).isBetaDevCube =
+    posCount === 8 &&
+    nrmCount === 0 &&
+    clrCount === 1 &&
+    texcoordCount === 8 &&
+    texCount === 1 &&
+    jointCount === 0 &&
+    dlInfoCount === 1 &&
+    shaderCount === 1 &&
+    texIds.length === 1 &&
+    texIds[0] === 2044;
+}
+
+ // console.log(`texids: ${texIds}`);
 
   version === ModelVersion.cloudtreasure &&
   texIds.length === 4 &&
@@ -2233,7 +2255,7 @@ if (
   data.getUint8(fields.dlInfoCount) === 0;
   const clrOffset = data.getUint32(fields.clrOffset);
   const clrCount = data.getUint16(fields.clrCount);
-//  console.log(`Loading ${clrCount} colors from 0x${clrOffset.toString(16)}`);
+ // console.log(`Loading ${clrCount} colors from 0x${clrOffset.toString(16)}`);
   let clrBuffer: Uint8Array;
   if (version === ModelVersion.AncientMap) {
     clrBuffer = ArrayBufferSlice.fromView(dataSubarray(data, clrOffset)).createTypedArray(Uint8Array);
@@ -2279,7 +2301,7 @@ if (fields.isMapBlock && clrBufferForArrays.byteLength === 0) {
 
   const texcoordOffset = data.getUint32(fields.texcoordOffset);
   const texcoordCount = data.getUint16(fields.texcoordCount);
-//  console.log(`Loading ${texcoordCount} texcoords from 0x${texcoordOffset.toString(16)}`);
+ // console.log(`Loading ${texcoordCount} texcoords from 0x${texcoordOffset.toString(16)}`);
 const texcoordBuffer = dataSubarray(data, texcoordOffset);
 
 let hasSkinning = false;
@@ -2343,13 +2365,13 @@ if (version === ModelVersion.cloudtreasure) {
   );
 }
 
-//  console.log(`Loading ${jointCount} joints from offset 0x${jointOffset.toString(16)}`);
+ // console.log(`Loading ${jointCount} joints from offset 0x${jointOffset.toString(16)}`);
   const jointTableInBounds =
     jointOffset > 0 && (jointOffset + jointCount * 0x1c) <= data.byteLength;
 
   if (jointCount > 0 && !jointTableInBounds) {
     console.warn(
-      `[CT_JOINT_SKIP] joint table OOB: count=${jointCount} offset=0x${jointOffset.toString(16)}`
+    //  `[CT_JOINT_SKIP] joint table OOB: count=${jointCount} offset=0x${jointOffset.toString(16)}`
     );
     jointCount = 0;
   }
@@ -2375,8 +2397,8 @@ if (jointCount > 0) {
 
       if (boneOutOfRange || boneDuplicate || extraRoot || parentForward) {
         console.warn(
-   //       `[CT_JOINT_TRUNCATE] at i=${i} rawParent=${rawParent} rawBone=${rawBoneNum} ` +
-   //       `reason=${boneOutOfRange ? 'bone_oob' : boneDuplicate ? 'bone_dup' : extraRoot ? 'extra_root' : 'parent_forward'}`
+        //  `[CT_JOINT_TRUNCATE] at i=${i} rawParent=${rawParent} rawBone=${rawBoneNum} ` +
+        //  `reason=${boneOutOfRange ? 'bone_oob' : boneDuplicate ? 'bone_dup' : extraRoot ? 'extra_root' : 'parent_forward'}`
         );
         jointCount = model.joints.length;
         ctTruncated = true;
@@ -2406,9 +2428,9 @@ if (jointCount > 0) {
       const t = joint.translation;
       const b = joint.bindTranslation;
       console.warn(
-   //     `[CT_JOINT] i=${i} rawParent=${rawParent} parent=${parent} rawBone=${rawBoneNum} bone=${joint.boneNum} ` +
-   //     `t=(${t[0].toFixed(2)},${t[1].toFixed(2)},${t[2].toFixed(2)}) ` +
-   //     `bind=(${b[0].toFixed(2)},${b[1].toFixed(2)},${b[2].toFixed(2)})`
+     //   `[CT_JOINT] i=${i} rawParent=${rawParent} parent=${parent} rawBone=${rawBoneNum} bone=${joint.boneNum} ` +
+     //   `t=(${t[0].toFixed(2)},${t[1].toFixed(2)},${t[2].toFixed(2)}) ` +
+    //    `bind=(${b[0].toFixed(2)},${b[1].toFixed(2)},${b[2].toFixed(2)})`
       );
     }
 
@@ -2416,7 +2438,7 @@ if (jointCount > 0) {
   }
 
   if (version === ModelVersion.cloudtreasure && ctTruncated) {
-  //  console.warn(`[CT_JOINT_FINAL] truncated jointCount -> ${jointCount}`);
+   // console.warn(`[CT_JOINT_FINAL] truncated jointCount -> ${jointCount}`);
   }
 
   hasSkinning = jointCount > 0;
@@ -2425,14 +2447,14 @@ if (jointCount > 0) {
       for (let i = 0; i < model.joints.length; i++) {
         if (model.joints[i].boneNum !== i) {
           console.warn(
-    //        `[CT_BONENUM_MISMATCH] i=${i} bone=${model.joints[i].boneNum} parent=${model.joints[i].parent}`
+        //   `[CT_BONENUM_MISMATCH] i=${i} bone=${model.joints[i].boneNum} parent=${model.joints[i].parent}`
           );
         }
       }
     }
 
     if (version === ModelVersion.cloudtreasure && badParentCount > 0) {
- //     console.warn(`[CT_JOINT_FIX] clamped ${badParentCount} invalid joint parent indices`);
+     // console.warn(`[CT_JOINT_FIX] clamped ${badParentCount} invalid joint parent indices`);
     }
 
 if (fields.weightOffset !== undefined) {
@@ -2442,7 +2464,7 @@ if (fields.weightOffset !== undefined) {
   const inBounds = (weightOffset > 0) && (weightOffset + bytesNeeded) <= data.byteLength;
 
   if (weightCount > 0 && inBounds) {
-  //  console.log(`Loading ${weightCount} weights from offset 0x${weightOffset.toString(16)}`);
+   // console.log(`Loading ${weightCount} weights from offset 0x${weightOffset.toString(16)}`);
     model.coarseBlends = [];
     let offs = weightOffset;
 
@@ -2454,7 +2476,7 @@ if (fields.weightOffset !== undefined) {
       if (version === ModelVersion.cloudtreasure) {
         if (rawJoint0 >= jointCount || rawJoint1 >= jointCount) {
           console.warn(
-   //         `[CT_WEIGHT_SKIP] i=${i} joint0=${rawJoint0} joint1=${rawJoint1} jointCount=${jointCount}`
+         //  `[CT_WEIGHT_SKIP] i=${i} joint0=${rawJoint0} joint1=${rawJoint1} jointCount=${jointCount}`
           );
           offs += 0x4;
           continue;
@@ -2472,7 +2494,7 @@ if (fields.weightOffset !== undefined) {
       offs += 0x4;
     }
   } else {
-  //  console.log(`Skipping weights: count=${weightCount}, offset=0x${weightOffset.toString(16)} (not present / OOB)`);
+   // console.log(`Skipping weights: count=${weightCount}, offset=0x${weightOffset.toString(16)} (not present / OOB)`);
   }
 }
 
@@ -2488,7 +2510,7 @@ try {
 } catch (e) {
   if (version === ModelVersion.cloudtreasure) {
     console.warn(
-  //    `[CT_SKINNING_DISABLE] skeleton rejected: ${e instanceof Error ? e.message : String(e)}`
+    //  `[CT_SKINNING_DISABLE] skeleton rejected: ${e instanceof Error ? e.message : String(e)}`
     );
 
     model.joints = [];
@@ -2506,8 +2528,8 @@ try {
 if (version === ModelVersion.cloudtreasure && model.hasFineSkinning) {
   if (jointCount <= 0 || model.joints.length === 0 || model.invBindTranslations.length === 0) {
     console.warn(
-  //    `[CT_FINE_DISABLE] no valid joints for fine skinning ` +
-  //    `jointCount=${jointCount} joints=${model.joints.length} invBind=${model.invBindTranslations.length}`
+    // `[CT_FINE_DISABLE] no valid joints for fine skinning ` +
+    //  `jointCount=${jointCount} joints=${model.joints.length} invBind=${model.invBindTranslations.length}`
     );
 
     model.posFineSkins = [];
@@ -2524,7 +2546,7 @@ if (version === ModelVersion.cloudtreasure && model.hasFineSkinning) {
 
       if (!ok) {
         console.warn(
-   //       `[CT_FINE_SKIP_POS] piece=${i} bone0=${piece.bone0} bone1=${piece.bone1} jointCount=${jointCount}`
+        //  `[CT_FINE_SKIP_POS] piece=${i} bone0=${piece.bone0} bone1=${piece.bone1} jointCount=${jointCount}`
         );
       }
 
@@ -2538,7 +2560,7 @@ if (version === ModelVersion.cloudtreasure && model.hasFineSkinning) {
 
       if (!ok) {
         console.warn(
-   //       `[CT_FINE_SKIP_NRM] piece=${i} bone0=${piece.bone0} bone1=${piece.bone1} jointCount=${jointCount}`
+       //   `[CT_FINE_SKIP_NRM] piece=${i} bone0=${piece.bone0} bone1=${piece.bone1} jointCount=${jointCount}`
         );
       }
 
@@ -2546,12 +2568,12 @@ if (version === ModelVersion.cloudtreasure && model.hasFineSkinning) {
     });
 
     console.warn(
-  //    `[CT_FINE_VALIDATE] pos ${oldPosCount} -> ${model.posFineSkins.length}, ` +
+   //   `[CT_FINE_VALIDATE] pos ${oldPosCount} -> ${model.posFineSkins.length}, ` +
    //   `nrm ${oldNrmCount} -> ${model.nrmFineSkins.length}, jointCount=${jointCount}`
     );
 
     if (model.posFineSkins.length === 0 && model.nrmFineSkins.length === 0) {
-  //    console.warn('[CT_FINE_DISABLE] no valid fine-skin pieces remain');
+   //   console.warn('[CT_FINE_DISABLE] no valid fine-skin pieces remain');
       model.hasFineSkinning = false;
     }
   }
@@ -2568,7 +2590,7 @@ if (version === ModelVersion.cloudtreasure && model.hasFineSkinning) {
 
   // Debug dump bytes in a range (adjust range as needed)
   for (let off = 0x00; off < 0x150; off++) {
-  //  console.log(`0x${off.toString(16)}: 0x${data.getUint8(off).toString(16)}`);
+   // console.log(`0x${off.toString(16)}: 0x${data.getUint8(off).toString(16)}`);
   }
 
 //console.log(`Loading ${shaderCount} shaders from offset 0x${shaderOffset.toString(16)} stride=0x${shaderStride.toString(16)}`);
@@ -2614,7 +2636,7 @@ if (version === ModelVersion.cloudtreasure && dlInfoCount === 0) {
   } else {
     const dlInfoOffset = data.getUint32(fields.dlInfoOffset);
     if (dlInfoOffset === 0 || dlInfoOffset >= data.byteLength) {
-  //    console.warn(`DL info table missing or OOB: offset=0x${dlInfoOffset.toString(16)} (Demo/object)`);
+    // console.warn(`DL info table missing or OOB: offset=0x${dlInfoOffset.toString(16)} (Demo/object)`);
     } else {
       const fileLen = data.byteLength >>> 0;
       const stride = fields.dlInfoSize >>> 0;
@@ -2653,10 +2675,10 @@ if (version === ModelVersion.cloudtreasure && dlInfoCount === 0) {
   for (let i = 0; i < dlInfos.length; i++) {
     const { offset, size } = dlInfos[i];
     if (offset === 0 || size === 0) {
- //     console.warn(`[DL_SANITY] #${i} empty offset/size (offset=0x${offset.toString(16)}, size=0x${size.toString(16)})`);
+    //  console.warn(`[DL_SANITY] #${i} empty offset/size (offset=0x${offset.toString(16)}, size=0x${size.toString(16)})`);
     }
     if (offset < 0 || offset + size > data.byteLength) {
-  //    console.error(`[DL_OOB] #${i} offset=0x${offset.toString(16)} size=0x${size.toString(16)} > fileLen=0x${data.byteLength.toString(16)}`);
+    //  console.error(`[DL_OOB] #${i} offset=0x${offset.toString(16)} size=0x${size.toString(16)} > fileLen=0x${data.byteLength.toString(16)}`);
     }
   }
  // console.warn(`[DL_SUMMARY] count=${dlInfos.length} dlInfoSize(field)=${fields.dlInfoSize}`);
@@ -2685,30 +2707,44 @@ if (version === ModelVersion.cloudtreasure && dlInfoCount === 0) {
   };
 
   const readVertexDesc = (bits: LowBitReader, shader: Shader): GX_VtxDesc[] => {
- //   console.log('Setting descriptor');
+   // console.log('Setting descriptor');
     const vcd: GX_VtxDesc[] = [] as any;
     for (let i = 0; i <= GX.Attr.MAX; i++) vcd[i] = { type: GX.AttrType.NONE };
 
-      if (fields.hasBones && jointCount >= 2) {
-      vcd[GX.Attr.PNMTXIDX].type = GX.AttrType.DIRECT;
-      let texmtxNum = 0;
-      if (shader.hasHemisphericProbe || shader.hasReflectiveProbe) {
-        if (shader.hasNBTTexture) {
-          vcd[GX.Attr.TEX0MTXIDX + texmtxNum].type = GX.AttrType.DIRECT;
-          texmtxNum++;
-          vcd[GX.Attr.TEX0MTXIDX + texmtxNum].type = GX.AttrType.DIRECT;
-          texmtxNum++;
-        }
+if (fields.hasBones && jointCount >= 2) {
+  const isOldBetaBoneModel =
+    !!fields.oldVat &&
+    !fields.isMapBlock &&
+    version === ModelVersion.Beta;
+
+  const betaNeedsExtraTex0MtxByte =
+    isOldBetaBoneModel &&
+    model.hasBetaFineSkinning;
+
+  vcd[GX.Attr.PNMTXIDX].type = GX.AttrType.DIRECT;
+
+  if (betaNeedsExtraTex0MtxByte) {
+    vcd[GX.Attr.TEX0MTXIDX].type = GX.AttrType.DIRECT;
+  } else {
+    let texmtxNum = 0;
+    if (shader.hasHemisphericProbe || shader.hasReflectiveProbe) {
+      if (shader.hasNBTTexture) {
+        vcd[GX.Attr.TEX0MTXIDX + texmtxNum].type = GX.AttrType.DIRECT;
+        texmtxNum++;
         vcd[GX.Attr.TEX0MTXIDX + texmtxNum].type = GX.AttrType.DIRECT;
         texmtxNum++;
       }
-
-      texmtxNum = 7;
-      for (let i = 0; i < texMtxCount; i++) {
-        vcd[GX.Attr.TEX0MTXIDX + texmtxNum].type = GX.AttrType.DIRECT;
-        texmtxNum--;
-      }
+      vcd[GX.Attr.TEX0MTXIDX + texmtxNum].type = GX.AttrType.DIRECT;
+      texmtxNum++;
     }
+
+    texmtxNum = 7;
+    for (let i = 0; i < texMtxCount; i++) {
+      vcd[GX.Attr.TEX0MTXIDX + texmtxNum].type = GX.AttrType.DIRECT;
+      texmtxNum--;
+    }
+  }
+}
 
     // POS
     vcd[GX.Attr.POS].type = bits.get(1) ? GX.AttrType.INDEX16 : GX.AttrType.INDEX8;
@@ -2783,7 +2819,7 @@ if (version === ModelVersion.cloudtreasure && dlInfoCount === 0) {
     const listNum = bits.get(fields.numListBits);
     const dlInfo = dlInfos[listNum];
 
-  //  console.log(`Calling special bitstream DL #${listNum} at offset 0x${dlInfo.offset.toString(16)}, size 0x${dlInfo.size.toString(16)}`);
+   // console.log(`Calling special bitstream DL #${listNum} at offset 0x${dlInfo.offset.toString(16)}, size 0x${dlInfo.size.toString(16)}`);
 
     const displayList = dataSubarray(data, dlInfo.offset, dlInfo.size);
     const vtxArrays = getVtxArrays(posBuffer, nrmBuffer);
@@ -3044,9 +3080,9 @@ function tuneVCDForDL(
   const newStride = vcdIndexBytes(forced) + vcdDirectBytes(forced);
   if (newStride === target) {
     console.warn(
-   //   `[VCD_FORCE] @0x${dlOff.toString(16)} stride ${curStride} -> ${newStride} ` +
-    //  `(PN=${forced[GX.Attr.PNMTXIDX]?.type === GX.AttrType.DIRECT ? 1 : 0}, ` +
-   //   `TEXMTX=${(() => { let n=0; for(let i=0;i<8;i++) if (forced[GX.Attr.TEX0MTXIDX+i]?.type===GX.AttrType.DIRECT) n++; return n; })()})`
+   //  `[VCD_FORCE] @0x${dlOff.toString(16)} stride ${curStride} -> ${newStride} ` +
+   //  `(PN=${forced[GX.Attr.PNMTXIDX]?.type === GX.AttrType.DIRECT ? 1 : 0}, ` +
+   //  `TEXMTX=${(() => { let n=0; for(let i=0;i<8;i++) if (forced[GX.Attr.TEX0MTXIDX+i]?.type===GX.AttrType.DIRECT) n++; return n; })()})`
     );
     return forced;
   }
@@ -3060,8 +3096,8 @@ function tuneVCDForDL(
     posBuffer: DataView,
     nrmBuffer?: DataView,
   ) => {
- //   console.log(`running bitstream at offset 0x${bitsOffset.toString(16)}`);
-  //  console.warn(`[RUN_BITS] drawStep=${drawStep} offset=0x${bitsOffset.toString(16)}`);
+  //  console.log(`running bitstream at offset 0x${bitsOffset.toString(16)}`);
+   // console.warn(`[RUN_BITS] drawStep=${drawStep} offset=0x${bitsOffset.toString(16)}`);
 
     modelShapes.shapes[drawStep] = [];
     const shapes = modelShapes.shapes[drawStep];
@@ -3097,7 +3133,7 @@ if (usingDummyClr) {
       curMaterial = model.materials[num];
     };
     if (shaders.length === 0) {
-  //  console.warn(`[RUN_BITS_SKIP] no shaders parsed`);
+   // console.warn(`[RUN_BITS_SKIP] no shaders parsed`);
     return;
 }
     setShader(0);
@@ -3111,26 +3147,26 @@ if (usingDummyClr) {
       switch (opcode) {
         case Opcode.SetShader: {
           const shaderNum = bits.get(6);
-  //       console.log(`Setting shader #${shaderNum}`);
+      //   console.log(`Setting shader #${shaderNum}`);
           setShader(shaderNum);
           break;
         }
 
         case Opcode.CallDL: {
           const listNum = bits.get(fields.numListBits);
-   //       console.warn(`[CALL_DL] list=${listNum}/${dlInfos.length} step=${drawStep} numListBits(field)=${fields.numListBits}`);
+       //   console.warn(`[CALL_DL] list=${listNum}/${dlInfos.length} step=${drawStep} numListBits(field)=${fields.numListBits}`);
           if (listNum >= dlInfos.length) {
-   //         console.warn(`Can't draw display list #${listNum} (out of range)`);
+       //    console.warn(`Can't draw display list #${listNum} (out of range)`);
             continue;
           }
           const dlInfo = dlInfos[listNum];
           if (!dlInfo || dlInfo.offset === 0 || dlInfo.size === 0 || (dlInfo.offset + dlInfo.size) > data.byteLength) {
-    //        console.warn(`[DL_SKIP] list=${listNum} invalid dlInfo (offs=0x${dlInfo?.offset?.toString(16) ?? '??'} size=0x${dlInfo?.size?.toString(16) ?? '??'})`);
+       //    console.warn(`[DL_SKIP] list=${listNum} invalid dlInfo (offs=0x${dlInfo?.offset?.toString(16) ?? '??'} size=0x${dlInfo?.size?.toString(16) ?? '??'})`);
             break;
           }
 
           const displayList = dataSubarray(data, dlInfo.offset, dlInfo.size);
-    //      console.warn(`[DL] #${listNum} offs=0x${dlInfo.offset.toString(16)} size=0x${dlInfo.size.toString(16)}`);
+        //  console.warn(`[DL] #${listNum} offs=0x${dlInfo.offset.toString(16)} size=0x${dlInfo.size.toString(16)}`);
 
           if (listNum < 10) {
             try {
@@ -3146,12 +3182,12 @@ if (usingDummyClr) {
                     if (isLikelyGXOpcode(b)) candidates.push(`s=${s}->0x${b.toString(16)} @+0x${(p2-base).toString(16)}`);
                   }
                 }
-       //         console.warn(`[DL_STRIDE_GUESS] list=${listNum} prim=0x${prim.toString(16)} count=${cnt} candidates=[${candidates.join(', ')}]`);
+         //       console.warn(`[DL_STRIDE_GUESS] list=${listNum} prim=0x${prim.toString(16)} count=${cnt} candidates=[${candidates.join(', ')}]`);
               } else {
-       //         console.warn(`[DL_STRIDE_GUESS] list=${listNum} prim=0x${prim.toString(16)} (not GX draw)`);
+         //      console.warn(`[DL_STRIDE_GUESS] list=${listNum} prim=0x${prim.toString(16)} (not GX draw)`);
               }
             } catch (e) {
-       //       console.warn(`[DL_STRIDE_GUESS] list=${listNum} error: ${e instanceof Error ? e.message : String(e)}`);
+        //      console.warn(`[DL_STRIDE_GUESS] list=${listNum} error: ${e instanceof Error ? e.message : String(e)}`);
             }
 
             {
@@ -3159,7 +3195,7 @@ if (usingDummyClr) {
               const lim = Math.min(base + 16, data.byteLength);
               let s = '';
               for (let p = base; p < lim; p++) s += data.getUint8(p).toString(16).padStart(2, '0') + ' ';
-      //        console.warn(`[DL_BYTES] list=${listNum} @0x${base.toString(16)} : ${s.trim()}`);
+          //    console.warn(`[DL_BYTES] list=${listNum} @0x${base.toString(16)} : ${s.trim()}`);
             }
             {
               const base = dlInfo.offset >>> 0;
@@ -3169,18 +3205,18 @@ if (usingDummyClr) {
                 const b = data.getUint8(base + d);
                 if (isLikelyGXOpcode(b)) { firstGX = base + d; break; }
               }
-      //        console.warn(`[DL_SNIFF] list=${listNum} firstGX=${firstGX >= 0 ? '0x' + firstGX.toString(16) : 'none'} delta=${firstGX >= 0 ? '0x' + (firstGX - base).toString(16) : 'n/a'}`);
+           //   console.warn(`[DL_SNIFF] list=${listNum} firstGX=${firstGX >= 0 ? '0x' + firstGX.toString(16) : 'none'} delta=${firstGX >= 0 ? '0x' + (firstGX - base).toString(16) : 'n/a'}`);
               if (firstGX >= 0) {
                 const lim2 = Math.min(firstGX + 16, data.byteLength);
                 let s2 = '';
                 for (let p = firstGX; p < lim2; p++) s2 += data.getUint8(p).toString(16).padStart(2, '0') + ' ';
-       //         console.warn(`[DL_BYTES+] list=${listNum} @0x${firstGX.toString(16)} : ${s2.trim()}`);
+            //    console.warn(`[DL_BYTES+] list=${listNum} @0x${firstGX.toString(16)} : ${s2.trim()}`);
               }
             }
           }
 
           if ((displayList.byteLength | 0) === 0) {
-       //     console.warn('[GEOM] Empty display list -> nothing to render');
+        //    console.warn('[GEOM] Empty display list -> nothing to render');
           }
 
           // Early1/Early3: detect BP alpha-compare and OR it into the shader if necessary.
@@ -3227,7 +3263,7 @@ if (usingDummyClr) {
           };
 
           if (vcd[GX.Attr.CLR0]?.type !== GX.AttrType.NONE && clrCount === 0)
-       //     console.error('[ATTR] CLR0 requested but clrCount==0');
+        //    console.error('[ATTR] CLR0 requested but clrCount==0');
           if (vcd[GX.Attr.NRM]?.type !== GX.AttrType.NONE && !fields.hasNormals)
             console.error('[ATTR] NRM requested but hasNormals==false');
 
@@ -3281,7 +3317,7 @@ const tunedVcd = tuneVCDForDL(data, dlInfo.offset, dlInfo.size, vcd, fields, cur
                                  b(GX.Attr.TEX1) + b(GX.Attr.TEX2) + b(GX.Attr.TEX3);
                 const needed = 3 + cnt * (idxBytes + direct);
                 if (needed > dlInfo.size) {
-           //       console.warn(`[DL_TINY_SKIP] list=${listNum} cnt=${cnt} need=${needed} > size=${dlInfo.size}`);
+              //   console.warn(`[DL_TINY_SKIP] list=${listNum} cnt=${cnt} need=${needed} > size=${dlInfo.size}`);
                   break; // skip this DL only
                 }
               }
@@ -3306,17 +3342,17 @@ const tunedVcd = tuneVCDForDL(data, dlInfo.offset, dlInfo.size, vcd, fields, cur
             const msg = (e as Error)?.message ?? String(e);
 
             console.warn(
-    //          `[GEOM_FAIL:${tag}] list=${listNum}/${dlInfos.length} step=${drawStep} ` +
-    //          `offs=0x${dlInfo.offset.toString(16)} size=0x${dlInfo.size.toString(16)} ` +
-    //          `VCD{POS=${typeStr(v(GX.Attr.POS))} NRM=${typeStr(v(GX.Attr.NRM))} CLR=${typeStr(v(GX.Attr.CLR0))} ` +
-     //         `T0=${typeStr(v(GX.Attr.TEX0))} T1=${typeStr(v(GX.Attr.TEX1))} T2=${typeStr(v(GX.Attr.TEX2))} T3=${typeStr(v(GX.Attr.TEX3))} ` +
-    //          `PN=${typeStr(v(GX.Attr.PNMTXIDX))} TMX#=${(() => { let n=0; for(let i=0;i<8;i++) if (tunedVcd[GX.Attr.TEX0MTXIDX+i]?.type===GX.AttrType.DIRECT) n++; return n; })()}} ` +
-    //          `VAT5{POS.shift=${vat[5][GX.Attr.POS].compShift} NRM.compType=${vat[5][GX.Attr.NRM].compType}} ` +
-    //         `POS{offs=0 len=${posBuffer.byteLength} stride=${posStride}} ` +
-     //         `NRM{offs=0 len=${nrmBuffer?.byteLength ?? 0} stride=${nrmStride}} ` +
-    //          `CLR{offs=0 len=${clrBufferForArrays.byteLength} stride=2} ` +
-    //          `T0{offs=0 len=${texcoordBuffer.byteLength} stride=${texStride}} ` +
-    //          `msg=${msg}`
+         //     `[GEOM_FAIL:${tag}] list=${listNum}/${dlInfos.length} step=${drawStep} ` +
+         //     `offs=0x${dlInfo.offset.toString(16)} size=0x${dlInfo.size.toString(16)} ` +
+        //      `VCD{POS=${typeStr(v(GX.Attr.POS))} NRM=${typeStr(v(GX.Attr.NRM))} CLR=${typeStr(v(GX.Attr.CLR0))} ` +
+        //     `T0=${typeStr(v(GX.Attr.TEX0))} T1=${typeStr(v(GX.Attr.TEX1))} T2=${typeStr(v(GX.Attr.TEX2))} T3=${typeStr(v(GX.Attr.TEX3))} ` +
+        //      `PN=${typeStr(v(GX.Attr.PNMTXIDX))} TMX#=${(() => { let n=0; for(let i=0;i<8;i++) if (tunedVcd[GX.Attr.TEX0MTXIDX+i]?.type===GX.AttrType.DIRECT) n++; return n; })()}} ` +
+        //      `VAT5{POS.shift=${vat[5][GX.Attr.POS].compShift} NRM.compType=${vat[5][GX.Attr.NRM].compType}} ` +
+        //     `POS{offs=0 len=${posBuffer.byteLength} stride=${posStride}} ` +
+        //      `NRM{offs=0 len=${nrmBuffer?.byteLength ?? 0} stride=${nrmStride}} ` +
+        //     `CLR{offs=0 len=${clrBufferForArrays.byteLength} stride=2} ` +
+         //    `T0{offs=0 len=${texcoordBuffer.byteLength} stride=${texStride}} ` +
+         //     `msg=${msg}`
             );
           };
 
@@ -3358,7 +3394,7 @@ const vcdAlt = (version === ModelVersion.cloudtreasure && jointCount === 0) ? fo
                     !!(curShader.flags & ShaderFlags.DevGeometry)
                   );
                   shapes.push(shapeAlt);
-      //            console.warn(`[GEOM_RETRY_OK] list=${listNum} via alt stride=${s}`);
+            //     console.warn(`[GEOM_RETRY_OK] list=${listNum} via alt stride=${s}`);
                   recovered = true;
                   break;
                 } catch (errAlt) {
@@ -3368,7 +3404,7 @@ const vcdAlt = (version === ModelVersion.cloudtreasure && jointCount === 0) ? fo
               if (recovered) break;
             } else {
               console.warn(
-       //         `[CT_SKIP_ALT_RETRY] list=${listNum} skipping alt-stride retry while jointCount=0`
+            //   `[CT_SKIP_ALT_RETRY] list=${listNum} skipping alt-stride retry while jointCount=0`
               );
             }
 
@@ -3387,7 +3423,7 @@ const vcdAlt = (version === ModelVersion.cloudtreasure && jointCount === 0) ? fo
                   !!(curShader.flags & ShaderFlags.DevGeometry)
                 );
                 shapes.push(shape2);
-     //           console.warn(`[GEOM_RETRY_OK] list=${listNum} (skipped 0x20-byte DL header)`);
+            //    console.warn(`[GEOM_RETRY_OK] list=${listNum} (skipped 0x20-byte DL header)`);
                 break;
               } catch (err2) {
                 logGeomFail(err2, 'RETRY+SKIP20');
@@ -3410,7 +3446,7 @@ const vcdAlt = (version === ModelVersion.cloudtreasure && jointCount === 0) ? fo
                   !!(curShader.flags & ShaderFlags.DevGeometry)
                 );
                 shapes.push(shape);
-     //           console.warn(`[GEOM_RETRY_OK] list=${listNum} (PNMTXIDX disabled)`);
+           //     console.warn(`[GEOM_RETRY_OK] list=${listNum} (PNMTXIDX disabled)`);
                 break;
               } catch (err3) {
                 logGeomFail(err3, 'RETRY');
@@ -3431,7 +3467,7 @@ const vcdAlt = (version === ModelVersion.cloudtreasure && jointCount === 0) ? fo
                     !!(curShader.flags & ShaderFlags.DevGeometry)
                   );
                   shapes.push(shape3);
-     //             console.warn(`[GEOM_RETRY_OK] list=${listNum} (PNMTXIDX disabled + skip 0x20)`);
+            //      console.warn(`[GEOM_RETRY_OK] list=${listNum} (PNMTXIDX disabled + skip 0x20)`);
                   break;
                 } catch (err4) {
                   logGeomFail(err4, 'RETRY+PNOFF+SKIP20');
@@ -3475,8 +3511,8 @@ const vcdAlt = (version === ModelVersion.cloudtreasure && jointCount === 0) ? fo
 
           const show = (a: number) => attrTypeToStr(vcd[a]?.type ?? GX.AttrType.NONE);
           console.warn(
-      //      `[VCD] POS=${show(GX.Attr.POS)} NRM=${show(GX.Attr.NRM)} CLR=${show(GX.Attr.CLR0)} ` +
-     //       `T0=${show(GX.Attr.TEX0)} T1=${show(GX.Attr.TEX1)} T2=${show(GX.Attr.TEX2)} T3=${show(GX.Attr.TEX3)}`
+        //    `[VCD] POS=${show(GX.Attr.POS)} NRM=${show(GX.Attr.NRM)} CLR=${show(GX.Attr.CLR0)} ` +
+       //     `T0=${show(GX.Attr.TEX0)} T1=${show(GX.Attr.TEX1)} T2=${show(GX.Attr.TEX2)} T3=${show(GX.Attr.TEX3)}`
           );
 
           const b = (a: number) =>
@@ -3491,7 +3527,7 @@ const vcdAlt = (version === ModelVersion.cloudtreasure && jointCount === 0) ? fo
           for (let i = 0; i < 8; i++) {
             if (vcd[GX.Attr.TEX0MTXIDX + i]?.type === GX.AttrType.DIRECT) directBytes += 1;
           }
-     //     console.warn(`[VCD_DIRECT] directBytesPerVertex=${directBytes}`);
+        //  console.warn(`[VCD_DIRECT] directBytesPerVertex=${directBytes}`);
           break;
         }
 
@@ -3504,7 +3540,7 @@ case Opcode.SetMatrices: {
     let mapped = raw;
 
     if (version === ModelVersion.cloudtreasure && jointCount > 0 && mapped >= jointCount) {
-   //   console.warn(`[CT_PN_CLAMP] raw=${raw} max=${jointCount - 1} -> using ${jointCount - 1}`);
+    //  console.warn(`[CT_PN_CLAMP] raw=${raw} max=${jointCount - 1} -> using ${jointCount - 1}`);
       mapped = jointCount - 1;
     }
 
@@ -3525,7 +3561,7 @@ case Opcode.SetMatrices: {
           break;
 
         default:
-     //     console.warn(`Skipping unknown model bits opcode ${opcode}`);
+          console.warn(`Skipping unknown model bits opcode ${opcode}`);
           break;
       }
     }
@@ -3550,9 +3586,9 @@ case Opcode.SetMatrices: {
         runBitstream(modelShapes, bitsOffsets[i], i, modelShapes.posBuffer, modelShapes.nrmBuffer);
       } catch (err) {
         console.error(
-    //     `[RUN_BITS_CRASH] step=${i} bitsOffs=0x${bitsOffsets[i].toString(16)} ` +
-    //      `posLen=${modelShapes.posBuffer.byteLength} nrmLen=${modelShapes.nrmBuffer?.byteLength ?? 0} ` +
-     //    `msg=${(err as Error)?.message}`
+      //   `[RUN_BITS_CRASH] step=${i} bitsOffs=0x${bitsOffsets[i].toString(16)} ` +
+      //    `posLen=${modelShapes.posBuffer.byteLength} nrmLen=${modelShapes.nrmBuffer?.byteLength ?? 0} ` +
+      //  `msg=${(err as Error)?.message}`
       );
         console.error(err);
         
