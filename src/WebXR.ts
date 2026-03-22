@@ -17,6 +17,8 @@ import { GfxSwapChain } from "./gfx/platform/GfxPlatform.js";
         // Probably due to backbuffer width / height now encompassing two views, so the aspect is incorrectly calculated
         // These calculations need to take into account the current viewport size
     // Scaling up and going close causes cross eye. Probably need to move the near plane out
+const FORCE_VR_DESKTOP_TEST = true;
+(window as any).__SFA_VR_ACTIVE = false;
 
 export class WebXRContext {
     public xrSession: XRSession | null = null;
@@ -38,26 +40,40 @@ export class WebXRContext {
         this.checkIsSupported();
     }
 
-    private async checkIsSupported() {
-        const navigator = window.navigator as any;
-        if (navigator.xr === undefined)
-            return;
-        const isSupported = await navigator.xr.isSessionSupported('immersive-vr');
-        if (this.isSupported !== isSupported) {
-            this.isSupported = isSupported;
-            if (this.onsupportedchanged !== null)
-                this.onsupportedchanged();
-        }
+private async checkIsSupported() {
+    if (FORCE_VR_DESKTOP_TEST) {
+        this.isSupported = true;
+        if (this.onsupportedchanged !== null)
+            this.onsupportedchanged();
+        return;
     }
 
-    public async start() {
+    const navigator = window.navigator as any;
+    if (navigator.xr === undefined)
+        return;
+
+    const isSupported = await navigator.xr.isSessionSupported('immersive-vr');
+    if (this.isSupported !== isSupported) {
+        this.isSupported = isSupported;
+        if (this.onsupportedchanged !== null)
+            this.onsupportedchanged();
+    }
+}
+
+public async start() {
+    try {
         const xr = (window.navigator as any).xr as XRSystem;
+
+        if (!xr) {
+            console.warn('WebXR not present on this browser/device.');
+            return;
+        }
 
         this.xrSession = await xr.requestSession('immersive-vr', {
             requiredFeatures: [],
             optionalFeatures: ['viewer', 'local'],
         });
-
+(window as any).__SFA_VR_ACTIVE = true;
         this.xrSession.onend = () => { this.sessionEnded(); };
         [this.xrViewerSpace, this.xrLocalSpace] = await Promise.all([
             this.xrSession.requestReferenceSpace('viewer'),
@@ -65,34 +81,39 @@ export class WebXRContext {
         ]);
 
         const layer = await this.swapChain.createWebXRLayer(this.xrSession);
-        
-        // FIX 2: Set depthFar to 5000.0. 
-        // If this is 1000000.0, the depth buffer breaks and distant objects draw on top of close ones.
-this.xrSession.updateRenderState({ 
-    baseLayer: layer, 
-    depthNear: 0.25,   // try 0.25 or 0.3
-    depthFar: 5000.0 
-});
-        // ...
 
+this.xrSession.updateRenderState({
+    baseLayer: layer,
+    depthNear: 0.25,
+    depthFar: 10000.0,
+});
 
         if (this.onstart !== null)
             this.onstart();
 
         this.xrSession.requestAnimationFrame(this._onRequestAnimationFrame);
-    }
-
-    private sessionEnded(): void {
+    } catch (e) {
+        console.error('Failed to start WebXR session:', e);
         this.xrSession = null;
-
+        (window as any).__SFA_VR_ACTIVE = false;
         if (this.onend !== null)
             this.onend();
     }
+}
 
-    public end() {
-        if (this.xrSession !== null)
-            this.xrSession.end();
-    }
+private sessionEnded(): void {
+    this.xrSession = null;
+    (window as any).__SFA_VR_ACTIVE = false;
+
+    if (this.onend !== null)
+        this.onend();
+}
+
+public end() {
+    (window as any).__SFA_VR_ACTIVE = false;
+    if (this.xrSession !== null)
+        this.xrSession.end();
+}
 
     private _onRequestAnimationFrame = (time: number, frame: XRFrame): void => {
         const session = frame.session;

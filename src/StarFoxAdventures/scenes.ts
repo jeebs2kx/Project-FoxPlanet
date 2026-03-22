@@ -205,7 +205,7 @@ const sceneDescs = [
 
 new SFAModelExhibitSceneDesc('modelexhibit', 'Model + Animation Viewer (Final)', ModelVersion.Final),
 new SFAModelExhibitSceneDesc('modelexhibit', 'Model + Animation Viewer (Kiosk)', ModelVersion.Final, SFADEMO_GAME_INFO),
-new SFAModelExhibitSceneDesc('betamodelexhibit', 'Early 2001 Model Viewer (in progress)', ModelVersion.Beta, SFADEMO_GAME_INFO),
+new SFAModelExhibitSceneDesc('betamodelexhibit', 'Early 2001 Model Viewer (Swapcircle)', ModelVersion.Beta, SFADEMO_GAME_INFO),
 new SFAModelExhibitSceneDesc( 'cloudtreasuremodelexhibit', 'Early/Mid 2001 Models (CloudTreasure)', ModelVersion.cloudtreasure,SFADEMO_GAME_INFO, ['cloudtreasure'],),
 new SFAModelExhibitSceneDesc('demomodelexhibit_mid', 'Mid 2001 Models (Copy of Swaphol)', ModelVersion.Demo, SFADEMO_GAME_INFO, ['Copy of swaphol', 'linklevel']),
 new SFAModelExhibitSceneDesc('demomodelexhibit_gal', 'Mid/later 2001 Models (InsideGal)', ModelVersion.Demo, SFADEMO_GAME_INFO, ['insidegal']),

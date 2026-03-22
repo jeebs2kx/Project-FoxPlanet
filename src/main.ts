@@ -183,7 +183,7 @@ function ensureLandingVersion() {
   if (!version) {
     version = document.createElement('div');
     version.id = 'landing-version';
-    version.textContent = 'Version 0.8.7';
+    version.textContent = 'Version 0.8.9';
     container.appendChild(version);
   } else if (version.parentElement !== container) {
     container.appendChild(version);
@@ -529,6 +529,53 @@ body[data-game-theme="sfa"] .sfa-right-menu .selector .text,
 body[data-game-theme="sfa"] .sfa-right-menu span.text{
   font-size: 0.90em !important;
   line-height: 1.25em;
+}
+  /* Themed scrollbars for the actual scrolling list containers */
+.sfa-list-scroll{
+  scrollbar-width: thin;
+}
+
+body[data-game-theme="sfa"] .sfa-list-scroll{
+  scrollbar-color: rgba(224,181,78,.70) rgba(8,16,30,.95);
+}
+
+body[data-game-theme="dp"] .sfa-list-scroll{
+  scrollbar-color: rgba(200,138,45,.75) rgba(20,12,8,.95);
+}
+
+.sfa-list-scroll::-webkit-scrollbar{
+  width: 12px;
+  height: 12px;
+}
+
+body[data-game-theme="sfa"] .sfa-list-scroll::-webkit-scrollbar-track{
+  background: linear-gradient(180deg, rgba(10,20,34,.96), rgba(7,14,26,.96));
+  border-left: 1px solid rgba(43,43,184,.20);
+}
+
+body[data-game-theme="sfa"] .sfa-list-scroll::-webkit-scrollbar-thumb{
+  background: linear-gradient(180deg, rgba(224,181,78,.92), rgba(202,163,65,.92));
+  border-radius: 10px;
+  border: 2px solid rgba(8,16,30,.95);
+}
+
+body[data-game-theme="sfa"] .sfa-list-scroll::-webkit-scrollbar-thumb:hover{
+  background: linear-gradient(180deg, rgba(240,198,86,.98), rgba(220,176,66,.98));
+}
+
+body[data-game-theme="dp"] .sfa-list-scroll::-webkit-scrollbar-track{
+  background: linear-gradient(180deg, rgba(22,14,9,.96), rgba(12,8,6,.96));
+  border-left: 1px solid rgba(170,110,48,.24);
+}
+
+body[data-game-theme="dp"] .sfa-list-scroll::-webkit-scrollbar-thumb{
+  background: linear-gradient(180deg, rgba(211,154,58,.92), rgba(166,106,39,.92));
+  border-radius: 10px;
+  border: 2px solid rgba(20,12,8,.95);
+}
+
+body[data-game-theme="dp"] .sfa-list-scroll::-webkit-scrollbar-thumb:hover{
+  background: linear-gradient(180deg, rgba(226,170,78,.98), rgba(186,120,44,.98));
 }
   `;
 

@@ -564,15 +564,8 @@ export class StudioCameraController extends FPSCameraController {
 }
 
 export class XRCameraController {
-    // Keep explicit cameras per eye so we never depend on array order.
-    public leftCamera: Camera = new Camera();
-    public rightCamera: Camera = new Camera();
-    public monoCamera: Camera = new Camera();
-
-    // (Optional legacy array; no longer used for rendering)
     public cameras: Camera[] = [];
-
-    public offset = vec3.create();
+    public offset = vec3.create(); 
     public worldScale: number = 10; 
     public rotationOffset: number = Math.PI; 
 
@@ -584,52 +577,42 @@ export class XRCameraController {
 
     // Visual Debug Ring
     public showTeleportRing: boolean = false;
-    
     public ringPosition = vec3.create();
-public getCameraForEye(eye: 'left' | 'right' | 'none'): Camera {
-    // TEMP DEBUG / FIX: runtime reports eye labels opposite for this pipeline
-    if (eye === 'left') return this.leftCamera;
-    if (eye === 'right') return this.rightCamera;
-    return this.monoCamera;
-}
+
     public update(webXRContext: WebXRContext): boolean {
         if (!webXRContext.xrSession) return false;
         
-
-
-for (let i = 0; i < webXRContext.views.length; i++) {
-    const xrView = webXRContext.views[i];
-
-    // Keep stable camera/view pairing by XR view index (matches viewport pairing in render)
-    if (!this.cameras[i]) this.cameras[i] = new Camera();
-    const camera = this.cameras[i];
-
-    // Optional aliases for gameplay/debug code
-  //  if (xrView.eye === 'left') this.leftCamera = camera;
-   // else if (xrView.eye === 'right') this.rightCamera = camera;
-const stageMatrix = mat4.create();
-mat4.translate(stageMatrix, stageMatrix, this.offset);
-mat4.rotateY(stageMatrix, stageMatrix, this.rotationOffset);
-
-// Use WebXR eye pose exactly as provided (eye -> reference-space/world matrix).
-// Then apply your stage transform on top: appWorldFromEye = stage * xrEyeWorld
-mat4.copy(camera.worldMatrix, xrView.transform.matrix);
-mat4.mul(camera.worldMatrix, stageMatrix, camera.worldMatrix);
-
-// Derive view matrix from final world matrix.
-camera.isOrthographic = false;
-mat4.invert(camera.viewMatrix, camera.worldMatrix);
-
-// DO NOT touch projection here; renderWebXR() handles XR projection + clipSpaceNearZ.
+        // Ensure cameras exist
+        if (webXRContext.views.length !== this.cameras.length) {
+            this.cameras.length = webXRContext.views.length;
+            for (let i = 0; i < this.cameras.length; i++) this.cameras[i] = new Camera();
         }
-this.cameras.length = webXRContext.views.length;
 
-const firstCam = this.cameras[0] ?? this.monoCamera;
-this.leftCamera = firstCam;
-this.rightCamera = this.cameras[1] ?? firstCam;
+        // --- STEP 1: Update Camera Matrices (Without Movement yet) ---
+        for (let i = 0; i < this.cameras.length; i++) {
+            const camera = this.cameras[i];
+            const xrView = webXRContext.views[i];
+
+            mat4.identity(camera.worldMatrix);
+            mat4.translate(camera.worldMatrix, camera.worldMatrix, this.offset);
+            mat4.rotateY(camera.worldMatrix, camera.worldMatrix, this.rotationOffset);
+            
+            if (this.worldScale !== 1) {
+                mat4.scale(camera.worldMatrix, camera.worldMatrix, [this.worldScale, this.worldScale, this.worldScale]);
+            }
+            
+            mat4.mul(camera.worldMatrix, camera.worldMatrix, xrView.transform.matrix);
+            
+            camera.isOrthographic = false;
+            mat4.invert(camera.viewMatrix, camera.worldMatrix);
+            mat4.copy(camera.projectionMatrix, xrView.projectionMatrix);
+            camera.worldMatrixUpdated();
+        }
+
         // --- STEP 2: Process Input & Calculate Movement ---
         const inputSources = webXRContext.xrSession.inputSources;
-const mainCamera = this.leftCamera;
+        const mainCamera = this.cameras[0]; 
+
         // Extract Forward/Right vectors
         const camRight = vec3.fromValues(mainCamera.worldMatrix[0], 0, mainCamera.worldMatrix[2]);
         const camForward = vec3.fromValues(-mainCamera.worldMatrix[8], 0, -mainCamera.worldMatrix[10]); 

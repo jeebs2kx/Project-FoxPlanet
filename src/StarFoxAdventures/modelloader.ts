@@ -1297,7 +1297,16 @@ if (lightingEnabled) {
   //  console.warn(`[DP_CHAR] triBadRefs=${triBadRefs} vtxOob=${vtxOob} unknownOps=${unknownOps}`);
   //  console.warn(`[DP_CHAR] DL calls=${dlCalls} returns=${dlReturns} badTargets=${dlBadTargets} depthLeft=${returnPCStack.length} executed=${execCmdIdx}`);
   }
-
+(model as any).debugMaterialInfo = facebatches.map((fb, index) => ({
+    index,
+    texId: fb.texId,
+    texIds: fb.texId >= 0 ? [fb.texId] : [],
+    texW: fb.texW,
+    texH: fb.texH,
+    tint: [fb.tintR, fb.tintG, fb.tintB, fb.tintA],
+    renderFlags: fb.renderFlags,
+    triCount: fb.tris.length,
+}));
   // --- Buffers ---
   const finalVerts = (outPos.length / 3) | 0;
   //console.log(`[MODEL INFO] Size: ${data.byteLength} bytes | Verts: ${finalVerts}`);
@@ -1650,7 +1659,60 @@ vat[0][GX.Attr.POS]  = { compType: GX.CompType.S16,  compShift: 0,  compCnt: GX.
 vat[0][GX.Attr.CLR0] = { compType: GX.CompType.RGBA8, compShift: 0,  compCnt: GX.CompCnt.CLR_RGBA };
 vat[0][GX.Attr.TEX0] = { compType: GX.CompType.S16,  compShift: 10, compCnt: GX.CompCnt.TEX_ST };
 vat[0][GX.Attr.TEX1] = { compType: GX.CompType.S16,  compShift: 10, compCnt: GX.CompCnt.TEX_ST };
+function dpTriSpan(a: number, b: number, c: number): number {
+    return Math.max(a, b, c) - Math.min(a, b, c);
+}
 
+function dpRepairWrappedTriUV(
+    uv0: { s: number; t: number },
+    uv1: { s: number; t: number },
+    uv2: { s: number; t: number },
+): void {
+    const rawSpanS = dpTriSpan(uv0.s, uv1.s, uv2.s);
+    const rawSpanT = dpTriSpan(uv0.t, uv1.t, uv2.t);
+
+    // Only try to repair obviously broken / wrapped UV triangles.
+    if (rawSpanS < 0x4000 && rawSpanT < 0x4000)
+        return;
+
+    const shifts = [0, -0x8000, 0x8000];
+
+    let best = [uv0.s, uv0.t, uv1.s, uv1.t, uv2.s, uv2.t];
+    let bestScore = Number.POSITIVE_INFINITY;
+
+    for (const ds0 of shifts) for (const dt0 of shifts)
+    for (const ds1 of shifts) for (const dt1 of shifts)
+    for (const ds2 of shifts) for (const dt2 of shifts) {
+        const s0 = uv0.s + ds0, t0 = uv0.t + dt0;
+        const s1 = uv1.s + ds1, t1 = uv1.t + dt1;
+        const s2 = uv2.s + ds2, t2 = uv2.t + dt2;
+
+        const score =
+            dpTriSpan(s0, s1, s2) +
+            dpTriSpan(t0, t1, t2);
+
+        if (score < bestScore) {
+            bestScore = score;
+            best = [s0, t0, s1, t1, s2, t2];
+        }
+    }
+
+    uv0.s = best[0]; uv0.t = best[1];
+    uv1.s = best[2]; uv1.t = best[3];
+    uv2.s = best[4]; uv2.t = best[5];
+}
+(model as any).debugMaterialInfo = batches.map((b, index) => ({
+    index,
+    texId: b.materialId,
+    texIds: [b.materialId, b.blendMaterialId].filter((v) => v >= 0),
+    texW: b.texW,
+    texH: b.texH,
+    blendTexW: b.blendTexW,
+    blendTexH: b.blendTexH,
+    drawMode: b.drawMode,
+    pixelFormat: b.pixelFormat,
+    isOpaque: b.isOpaque,
+}));
 model.createModelShapes = () => {
     const shapes = new ModelShapes(model, new DataView(posAB), undefined);
     shapes.shapes[0] = [];
@@ -1771,42 +1833,75 @@ if (DP_FORWARD_SCROLL_TEXIDS.has(b.materialId)) {
 
             const material = materialFactory.buildMapMaterial(shader, texFetcher);
 
-            const tex0DV = new DataView(new ArrayBuffer(totalVerts * 4));
-            const tex1DV = new DataView(new ArrayBuffer(totalVerts * 4));
-            for (let ti = b.tStart; ti < b.tEnd; ti++) {
-                let { i0, i1, i2 } = tris[ti];
-                for (const idx of [b.vStart + i0, b.vStart + i1, b.vStart + i2]) {
-                    const vo = vtxOff + idx * 16;
-                    const s = data.getInt16(vo + 8, false), t = data.getInt16(vo + 10, false);
-                    tex0DV.setInt16(idx * 4 + 0, Math.round(s * (32.0 / b.texW)), false);
-                    tex0DV.setInt16(idx * 4 + 2, Math.round(t * (32.0 / b.texH)), false);
-                    tex1DV.setInt16(idx * 4 + 0, Math.round(s * (32.0 / b.blendTexW)), false);
-                    tex1DV.setInt16(idx * 4 + 2, Math.round(t * (32.0 / b.blendTexH)), false);
-                }
-            }
+const vtxCountOut = (b.tEnd - b.tStart) * 3;
 
-            const batchVtxArrays: GX_Array[] = [];
-            batchVtxArrays[GX.Attr.POS]  = { buffer: ArrayBufferSlice.fromView(new DataView(posAB)), offs: 0, stride: 6 };
-            batchVtxArrays[GX.Attr.CLR0] = { buffer: ArrayBufferSlice.fromView(new DataView(clrAB)), offs: 0, stride: 4 };
-            batchVtxArrays[GX.Attr.TEX0] = { buffer: ArrayBufferSlice.fromView(tex0DV), offs: 0, stride: 4 };
-            batchVtxArrays[GX.Attr.TEX1] = { buffer: ArrayBufferSlice.fromView(tex1DV), offs: 0, stride: 4 };
+const batchPosDV = new DataView(new ArrayBuffer(vtxCountOut * 6));
+const batchClrDV = new DataView(new ArrayBuffer(vtxCountOut * 4));
+const tex0DV = new DataView(new ArrayBuffer(vtxCountOut * 4));
+const tex1DV = new DataView(new ArrayBuffer(vtxCountOut * 4));
 
-            const vtxCountOut = (b.tEnd - b.tStart) * 3;
-            const out = new Uint8Array(3 + vtxCountOut * 8);
-            let p = 0;
-            out[p++] = 0x90;
-            out[p++] = (vtxCountOut >>> 8) & 0xFF;
-            out[p++] = (vtxCountOut >>> 0) & 0xFF;
-            for (let ti = b.tStart; ti < b.tEnd; ti++) {
-                let { flip, i0, i1, i2 } = tris[ti];
-                if (flip) { const tmp = i1; i1 = i2; i2 = tmp; }
-                for (const idx of [b.vStart + i0, b.vStart + i1, b.vStart + i2]) {
-                    out[p++] = (idx >>> 8) & 0xFF; out[p++] = idx & 0xFF;
-                    out[p++] = (idx >>> 8) & 0xFF; out[p++] = idx & 0xFF;
-                    out[p++] = (idx >>> 8) & 0xFF; out[p++] = idx & 0xFF;
-                    out[p++] = (idx >>> 8) & 0xFF; out[p++] = idx & 0xFF;
-                }
-            }
+const out = new Uint8Array(3 + vtxCountOut * 8);
+let p = 0;
+out[p++] = 0x90;
+out[p++] = (vtxCountOut >>> 8) & 0xFF;
+out[p++] = (vtxCountOut >>> 0) & 0xFF;
+
+let localIdx = 0;
+
+for (let ti = b.tStart; ti < b.tEnd; ti++) {
+    let { flip, i0, i1, i2 } = tris[ti];
+    if (flip) { const tmp = i1; i1 = i2; i2 = tmp; }
+
+    const srcIdx = [b.vStart + i0, b.vStart + i1, b.vStart + i2];
+
+    const triUV = srcIdx.map((idx) => {
+        const vo = vtxOff + idx * 16;
+        return {
+            s: data.getInt16(vo + 8, false),
+            t: data.getInt16(vo + 10, false),
+        };
+    });
+
+    // Fix wrapped / exporter-broken UVs per triangle.
+    dpRepairWrappedTriUV(triUV[0], triUV[1], triUV[2]);
+
+    for (let k = 0; k < 3; k++) {
+        const idx = srcIdx[k];
+        const vo = vtxOff + idx * 16;
+
+        // position
+        batchPosDV.setInt16(localIdx * 6 + 0, data.getInt16(vo + 0, false), false);
+        batchPosDV.setInt16(localIdx * 6 + 2, data.getInt16(vo + 2, false), false);
+        batchPosDV.setInt16(localIdx * 6 + 4, data.getInt16(vo + 4, false), false);
+
+        // color
+        batchClrDV.setUint8(localIdx * 4 + 0, data.getUint8(vo + 0x0C));
+        batchClrDV.setUint8(localIdx * 4 + 1, data.getUint8(vo + 0x0D));
+        batchClrDV.setUint8(localIdx * 4 + 2, data.getUint8(vo + 0x0E));
+        batchClrDV.setUint8(localIdx * 4 + 3, data.getUint8(vo + 0x0F));
+
+        // texcoords
+        tex0DV.setInt16(localIdx * 4 + 0, Math.round(triUV[k].s * (32.0 / b.texW)), false);
+        tex0DV.setInt16(localIdx * 4 + 2, Math.round(triUV[k].t * (32.0 / b.texH)), false);
+
+        tex1DV.setInt16(localIdx * 4 + 0, Math.round(triUV[k].s * (32.0 / b.blendTexW)), false);
+        tex1DV.setInt16(localIdx * 4 + 2, Math.round(triUV[k].t * (32.0 / b.blendTexH)), false);
+
+        // display list indices now point to local deindexed verts
+        out[p++] = (localIdx >>> 8) & 0xFF; out[p++] = localIdx & 0xFF;
+        out[p++] = (localIdx >>> 8) & 0xFF; out[p++] = localIdx & 0xFF;
+        out[p++] = (localIdx >>> 8) & 0xFF; out[p++] = localIdx & 0xFF;
+        out[p++] = (localIdx >>> 8) & 0xFF; out[p++] = localIdx & 0xFF;
+
+        localIdx++;
+    }
+}
+
+const batchVtxArrays: GX_Array[] = [];
+batchVtxArrays[GX.Attr.POS]  = { buffer: ArrayBufferSlice.fromView(batchPosDV), offs: 0, stride: 6 };
+batchVtxArrays[GX.Attr.CLR0] = { buffer: ArrayBufferSlice.fromView(batchClrDV), offs: 0, stride: 4 };
+batchVtxArrays[GX.Attr.TEX0] = { buffer: ArrayBufferSlice.fromView(tex0DV), offs: 0, stride: 4 };
+batchVtxArrays[GX.Attr.TEX1] = { buffer: ArrayBufferSlice.fromView(tex1DV), offs: 0, stride: 4 };
 
             const geom = new ShapeGeometry(batchVtxArrays, vcd, vat, new DataView(out.buffer), false);
             geom.setPnMatrixMap(nArray(10, () => 0), false, false);
@@ -2611,7 +2706,13 @@ for (let i = 0; i < shaderCount; i++) {
     );
     offs += shaderStride;
 }
-
+(model as any).debugMaterialInfo = shaders.map((shader, index) => ({
+    index,
+    texIds: shader.layers.map((layer) => layer.texId),
+    tevModes: shader.layers.map((layer) => layer.tevMode),
+    flags: shader.flags,
+    attrFlags: shader.attrFlags,
+}));
   model.materials = [];
 
 const dlInfos: DisplayListInfo[] = [];

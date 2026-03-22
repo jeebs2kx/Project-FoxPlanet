@@ -292,14 +292,20 @@ protected mainDepthDesc = new GfxrRenderTargetDescription(GfxFormat.D24_S8);
     protected addHeatShimmerRenderInsts(device: GfxDevice, renderInstManager: GfxRenderInstManager, renderLists: SFARenderLists, sceneCtx: SceneRenderContext) {
     }
 
-    public render(device: GfxDevice, viewerInput: Viewer.ViewerRenderInput) {
-        // viewerInput.camera.setClipPlanes(2.5, 10000); // Set near and far planes as in the original game in order to support heat shimmer (TODO: use depth resampler instead)
+public render(device: GfxDevice, viewerInput: Viewer.ViewerRenderInput) {
+    // viewerInput.camera.setClipPlanes(2.5, 10000); // Set near and far planes as in the original game in order to support heat shimmer (TODO: use depth resampler instead)
 
-        this.update(viewerInput);
-viewerInput.camera.setClipPlanes(2.5, 20000000);
+    this.update(viewerInput);
 
-        this.renderHelper.pushTemplateRenderInst();
+this.update(viewerInput);
 
+const isVR = (window as any).__SFA_VR_ACTIVE === true;
+
+
+if (!isVR)
+    viewerInput.camera.setClipPlanes(2.5, 20000000);
+
+this.renderHelper.pushTemplateRenderInst();
         const renderInstManager = this.renderHelper.renderInstManager;
 
         const sceneCtx: SceneRenderContext = {

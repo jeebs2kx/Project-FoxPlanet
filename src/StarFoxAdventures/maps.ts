@@ -58,7 +58,7 @@ const MAP_MUSIC: Record<string, string> = {
 
     // --- Dinosaur Planet Specific Tracks ---
     'dp_2':  'dp_dragrock.mp3',     
-    'dp_3':  'dp_Krazoapalace.mp3',
+    'dp_3':  'dp_krazoapalace.mp3',
     'dp_4':  'dp_vfp.mp3',
     'dp_5': 'dp_rolling.mp3',
     'dp_6': 'dp_discovery.mp3',
@@ -123,6 +123,10 @@ const DP_DEV_NAME_KEYWORDS = [
 ];
 
 const DP_ENV_DEFAULT = { timeOfDay: 6, envfxIndex: 95 };
+const DP_LABEL_NAME_OVERRIDES: Record<number, string> = {
+    0x001C: 'Fishingnet', 0x05B4: 'KPspellstone',0x05B5: 'KPlift',0x05B9: 'IceBlastspell',
+   
+};
 export interface BlockInfo {
     mod: number;
     sub: number;
@@ -131,7 +135,7 @@ export interface BlockInfo {
 const DP_SCALE_MULT_BY_TYPE: Record<number, number> = {
      0x03FA: 0.15, 0x0071: 0.05, 0x036A: 0.15, 0x008A: 0.10, 0x03A4: 0.50,
      0x0178: 0.10, 0x0524: 0.30, 0x0523: 0.30, 0x020D: 0.30, 0x0076: 0.10,
-     0x0358: 0.30, 0x0488: 10,
+     0x0358: 0.30, 0x0488: 10,0x0414: 1.5,
 };
 
 const DP_SCALE_MULT_BY_MODEL: Record<number, number> = {
@@ -473,7 +477,6 @@ if ((realType + 1) * 4 + 4 <= objTab.byteLength)
 
 let defSize = 0;
 
-// Validate start offset before any reads/slices
 if (startOffs === 0xFFFFFFFF || startOffs >= objBin.byteLength) {
     objType.scale = 1.0;
     objType.modelNums = [];
@@ -518,7 +521,6 @@ if (!(objType as any)._dpNameFixed) {
                 else if (dll_id >= 0x1000) objClass = (dll_id - 0x1000) + 104;
                 objType.objClass = objClass;
 
-                // 3. Extract ALL model IDs (supports duplicate/variant objects)
 objType.modelNums = [];
 
 let models = dpExtractModelNumsByPtrCount(objBin, startOffs, defSize);
@@ -552,7 +554,6 @@ if (origCreate) {
 
 const rId = ((ot as any)._dpRomId ?? -1) & 0xFFFF;
 
-        // 2) Fallback: SCN_ID position (Duplicates)
         const romId: number | undefined = (ot as any)._dpRomId;
         const romToScn: Map<number, number[]> | undefined = (this as any)._dpRomToScn;
         if (romId !== undefined && romToScn && models.length > 1) {
@@ -574,7 +575,6 @@ const rId = ((ot as any)._dpRomId ?? -1) & 0xFFFF;
             }
         }
 
-        // 3) Standard Run
         try {
             return origCreate(typeNum, objParams, pos, mountNow);
         } catch (e) {
@@ -602,11 +602,9 @@ export class PreloadingDPModelFetcher {
 public constructor(private gameInfo: GameInfo, private dataFetcher: DataFetcher, private texFetcher: TextureFetcher, private materialFactory: MaterialFactory) {
         const dummyModel = new Model(ModelVersion.DinosaurPlanet);
         dummyModel.hasFineSkinning = false;
-        // FIX: Provide a blank Shapes object to prevent the 'getAmap' crash
         dummyModel.sharedModelShapes = new ModelShapes(dummyModel, new DataView(new ArrayBuffer(0)));
         this.dummyModelInst = new ModelInstance(dummyModel);
         
-        // FIX: Add these dummy functions so the engine doesn't crash on missing data
         (this.dummyModelInst as any).setAmap = () => { };
         (this.dummyModelInst as any).getAmap = () => null;
     }
@@ -664,6 +662,113 @@ interface BlockIter {
 
 const scratchMtx0 = mat4.create();
 const scratchObjMtx0 = mat4.create();
+const scratchVec3a = vec3.create();
+
+function dpHex(v: number, width: number = 4): string {
+    return (v >>> 0).toString(16).padStart(width, '0');
+}
+async function loadDPExternalObjectNames(
+    dataFetcher: DataFetcher,
+    gameInfo: GameInfo,
+): Promise<Map<number, string>> {
+    const out = new Map<number, string>();
+
+    try {
+        const buf = await dataFetcher.fetchData(`${gameInfo.pathBase}/DPObjects2.txt`, { allow404: true });
+        const text = new TextDecoder('utf-8').decode(buf.arrayBuffer as ArrayBuffer);
+
+        const lines = text.split(/\r?\n/);
+        for (const line of lines) {
+            const s = line.trim();
+            if (!s) continue;
+
+            const parts = s.split(/\s+/);
+            if (parts.length < 3) continue;
+
+            const idHex = parts[0];
+            const id = Number.parseInt(idHex, 16);
+            if (!Number.isFinite(id)) continue;
+            if (out.has(id)) continue; // keep first entry only
+
+            const name = parts.slice(2).join(' ').trim();
+            if (!name) continue;
+
+            out.set(id & 0xFFFF, name);
+        }
+    } catch (e) {
+        console.warn('Failed to load DPObjects2.txt', e);
+    }
+
+    return out;
+}
+function getModelDebugMaterials(modelInst: ModelInstance | undefined): any[] {
+    return (((modelInst as any)?.model as any)?.debugMaterialInfo ?? []) as any[];
+}
+
+function getFirstDebugTexId(modelInst: ModelInstance | undefined): number | null {
+    const mats = getModelDebugMaterials(modelInst);
+    for (const m of mats) {
+        const ids: number[] = Array.isArray(m?.texIds)
+            ? m.texIds
+            : (typeof m?.texId === 'number' ? [m.texId] : []);
+        for (const id of ids) {
+            if (typeof id === 'number' && id >= 0)
+                return id | 0;
+        }
+    }
+    return null;
+}
+function getModelDebugTriangleCount(modelInst: ModelInstance | undefined): number | null {
+    const mats = getModelDebugMaterials(modelInst);
+    let total = 0;
+    let found = false;
+
+    for (const m of mats) {
+        if (typeof m?.triCount === 'number' && Number.isFinite(m.triCount)) {
+            total += (m.triCount | 0);
+            found = true;
+        }
+    }
+
+    return found ? total : null;
+}
+function getClipFromWorldMatrix(viewerInput: Viewer.ViewerRenderInput): mat4 | null {
+    const cam: any = viewerInput.camera;
+    if (cam?.clipFromWorldMatrix)
+        return cam.clipFromWorldMatrix as mat4;
+    if (cam?.viewProjectionMatrix)
+        return cam.viewProjectionMatrix as mat4;
+    return null;
+}
+
+function projectWorldToCanvas(
+    clipFromWorld: mat4,
+    canvas: HTMLCanvasElement,
+    x: number,
+    y: number,
+    z: number,
+): { x: number; y: number; depth: number } | null {
+    const cx = clipFromWorld[0] * x + clipFromWorld[4] * y + clipFromWorld[8]  * z + clipFromWorld[12];
+    const cy = clipFromWorld[1] * x + clipFromWorld[5] * y + clipFromWorld[9]  * z + clipFromWorld[13];
+    const cz = clipFromWorld[2] * x + clipFromWorld[6] * y + clipFromWorld[10] * z + clipFromWorld[14];
+    const cw = clipFromWorld[3] * x + clipFromWorld[7] * y + clipFromWorld[11] * z + clipFromWorld[15];
+
+    if (cw <= 0.0001)
+        return null;
+
+    const ndcX = cx / cw;
+    const ndcY = cy / cw;
+    const ndcZ = cz / cw;
+
+    if (ndcX < -1.2 || ndcX > 1.2 || ndcY < -1.2 || ndcY > 1.2 || ndcZ < -1.2 || ndcZ > 1.2)
+        return null;
+
+    return {
+        x: (ndcX * 0.5 + 0.5) * canvas.width,
+        y: (-ndcY * 0.5 + 0.5) * canvas.height,
+        depth: ndcZ,
+    };
+}
 export class MapInstance {
     public setBlockFetcher(blockFetcher: BlockFetcher) {
         this.blockFetcher = blockFetcher;
@@ -708,13 +813,23 @@ const objParams = dataSubarray(objData, offset, size);
                         const objInst = this.mapOpts.objectManager.createObjectInstance(typeNum, objParams, [0, 0, 0], false);
                         
                         (objInst as any)._dpTypeNum = typeNum;
-                        
+                        (objInst as any)._dpRawParams = objParams;
                         const trueX = objParams.byteLength >= 0x0C ? objParams.getFloat32(0x08) : 0;
                         const trueY = objParams.byteLength >= 0x10 ? objParams.getFloat32(0x0C) : 0;
                         const trueZ = objParams.byteLength >= 0x14 ? objParams.getFloat32(0x10) : 0;
 const otDbg = this.mapOpts.objectManager.getObjectType(typeNum, false);
 const rIdDbg = ((otDbg as any)._dpRomId ?? -1) & 0xFFFF;
-const nameDbg = String((otDbg as any).name ?? (otDbg as any).objName ?? '');
+
+const extNameMap: Map<number, string> | undefined =
+    (this.mapOpts.objectManager as any)._dpExternalNameMap;
+
+const extName = extNameMap?.get(typeNum & 0xFFFF) ?? '';
+const fallbackName = String((otDbg as any).name ?? (otDbg as any).objName ?? '');
+const nameDbg = extName || fallbackName;
+
+const cleanNameDbg = (nameDbg && nameDbg !== 'NULL') ? nameDbg : '';
+const forcedName = DP_LABEL_NAME_OVERRIDES[typeNum & 0xFFFF];
+(objInst as any)._dpLabelName = forcedName ?? cleanNameDbg;
 const modelDbg = ((otDbg as any).modelNums ?? []).map((n: number) => `0x${n.toString(16)}`).join(', ');
 const dbgCount = ((window as any).__dpDbgCount ?? 0);
 
@@ -925,7 +1040,16 @@ this.objects.push(objInst);
         const block = this.blocks[bz][bx];
         return block === undefined ? null : block;
     }
+public getObjectWorldPosition(obj: ObjectInstance, dst: vec3 = vec3.create()): vec3 {
+    const x = obj.position[0];
+    const y = obj.position[1];
+    const z = obj.position[2];
 
+    dst[0] = this.matrix[0] * x + this.matrix[4] * y + this.matrix[8]  * z + this.matrix[12];
+    dst[1] = this.matrix[1] * x + this.matrix[5] * y + this.matrix[9]  * z + this.matrix[13];
+    dst[2] = this.matrix[2] * x + this.matrix[6] * y + this.matrix[10] * z + this.matrix[14];
+    return dst;
+}
     public addRenderInsts(
         device: GfxDevice,
         renderInstManager: GfxRenderInstManager,
@@ -1055,6 +1179,7 @@ if (key.startsWith('early1_') || key.startsWith('dup_')) {
 class MapSceneRenderer extends SFARenderer {
     public showDevObjects = false;
     public showAllObjects = true;
+    public isDPMapScene = false;
     public mapNum: string | number = -1;
 public textureHolder: UI.TextureListHolder = { viewerTextures: [], onnewtextures: null };
     private blockFetcherFactory?: () => Promise<BlockFetcher>;
@@ -1086,6 +1211,282 @@ private rebuildSky(texFetcher: any, gameInfo: GameInfo): void {
     private timeSelect?: UI.Slider;
     private envSelect?: UI.Slider;
     private sky: Sky | null = null;
+        public showObjectLabels = false;
+    private selectedObject: ObjectInstance | null = null;
+private projectedObjectLabels: Array<{
+    obj: ObjectInstance;
+    x: number;
+    y: number;
+    label: string;
+    lines: string[];
+    w: number;
+    h: number;
+}> = [];    private debugOverlayCanvas: HTMLCanvasElement | null = null;
+
+    public clearSelectedDebugObject(): void {
+        this.selectedObject = null;
+    }
+
+private debugMouseDownX = 0;
+private debugMouseDownY = 0;
+private debugMouseDownActive = false;
+
+private pickDebugObjectAtClientPos(clientX: number, clientY: number): ObjectInstance | null {
+    if (!this.showObjectLabels || this.projectedObjectLabels.length === 0)
+        return null;
+
+    const canvas = this.debugOverlayCanvas;
+    if (!canvas)
+        return null;
+
+    const rect = canvas.getBoundingClientRect();
+    const mx = (clientX - rect.left) * (canvas.width / rect.width);
+    const my = (clientY - rect.top) * (canvas.height / rect.height);
+
+    let best: { obj: ObjectInstance; score: number } | null = null;
+
+    for (const e of this.projectedObjectLabels) {
+        const dx = e.x - mx;
+        const dy = e.y - my;
+        const markerD2 = dx * dx + dy * dy;
+        const hitMarker = markerD2 <= (18 * 18);
+
+        const textX0 = e.x + 6;
+        const textY0 = e.y - (e.h * 0.5) - 4;
+        const textX1 = textX0 + e.w + 8;
+        const textY1 = textY0 + e.h + 8;
+        const hitText = mx >= textX0 && mx <= textX1 && my >= textY0 && my <= textY1;
+
+        if (!hitMarker && !hitText)
+            continue;
+
+        const score = hitMarker ? markerD2 : 0;
+        if (!best || score < best.score)
+            best = { obj: e.obj, score };
+    }
+
+    return best ? best.obj : null;
+}
+
+private readonly onDebugOverlayMouseDown = (ev: MouseEvent) => {
+    if (ev.button !== 0)
+        return;
+
+    this.debugMouseDownX = ev.clientX;
+    this.debugMouseDownY = ev.clientY;
+    this.debugMouseDownActive = true;
+};
+
+private readonly onDebugOverlayMouseUp = (ev: MouseEvent) => {
+    if (ev.button !== 0)
+        return;
+    if (!this.debugMouseDownActive)
+        return;
+
+    this.debugMouseDownActive = false;
+
+    const dx = ev.clientX - this.debugMouseDownX;
+    const dy = ev.clientY - this.debugMouseDownY;
+    if ((dx * dx + dy * dy) > (5 * 5))
+        return;
+
+    this.selectedObject = this.pickDebugObjectAtClientPos(ev.clientX, ev.clientY);
+};
+
+    private readonly onDebugOverlayContextMenu = (ev: MouseEvent) => {
+        if (!this.selectedObject)
+            return;
+        ev.preventDefault();
+        this.selectedObject = null;
+    };
+
+private installObjectDebugPicking(): void {
+    if (this.debugOverlayCanvas)
+        return;
+
+    const ctx = getDebugOverlayCanvas2D() as CanvasRenderingContext2D | null;
+    if (!ctx)
+        return;
+
+    this.debugOverlayCanvas = ctx.canvas;
+
+    window.addEventListener('mousedown', this.onDebugOverlayMouseDown, true);
+    window.addEventListener('mouseup', this.onDebugOverlayMouseUp, true);
+    window.addEventListener('contextmenu', this.onDebugOverlayContextMenu, true);
+}
+
+private buildObjectDebugLines(obj: ObjectInstance): string[] {
+    const typeNum = ((((obj as any)._dpTypeNum ?? -1) as number) & 0xFFFF);
+    const ot = this.map.mapOpts?.objectManager?.getObjectType?.(typeNum, false);
+    const romId = ((((ot as any)?._dpRomId ?? -1) as number) & 0xFFFF);
+
+    const objName =
+        String((obj as any)._dpLabelName ?? '').trim() ||
+        String((ot as any)?.name ?? '').trim();
+
+    const title =
+        objName !== ''
+            ? `Object 0x${dpHex(typeNum).toUpperCase()} ${objName}`
+            : `Object 0x${dpHex(typeNum).toUpperCase()}`;
+
+    const modelNums: number[] = Array.isArray((ot as any)?.modelNums) ? (ot as any).modelNums : [];
+    const modelText = modelNums.length
+        ? modelNums.slice(0, 6).map((n: number) => `0x${dpHex(n)}`).join(', ')
+        : 'none';
+
+    const mi = (obj as any).modelInst as ModelInstance | undefined;
+    const mats = getModelDebugMaterials(mi);
+    const triCount = getModelDebugTriangleCount(mi);
+const activeModelId =
+    (((mi as any)?.model as any)?.modelId ?? modelNums[0] ?? -1) as number;
+
+const objClass =
+    (((ot as any)?.objClass ?? -1) as number);
+
+const scale =
+    ((((obj as any)._dpScale ?? 1.0) as number));
+
+const yawDeg =
+    ((obj.yaw * 180 / Math.PI) % 360 + 360) % 360;
+
+const rawParams =
+    ((obj as any)._dpRawParams as DataView | undefined);
+    const texIds: number[] = [];
+    for (const m of mats) {
+        const ids: number[] = Array.isArray(m?.texIds)
+            ? m.texIds
+            : (typeof m?.texId === 'number' ? [m.texId] : []);
+        for (const id of ids) {
+            if (typeof id === 'number' && id >= 0 && texIds.indexOf(id) < 0)
+                texIds.push(id);
+            if (texIds.length >= 8)
+                break;
+        }
+        if (texIds.length >= 8)
+            break;
+    }
+
+const lines: string[] = [
+    title,
+    `scn=0x${dpHex(typeNum).toUpperCase()} rom=0x${dpHex(romId).toUpperCase()} class=${objClass >= 0 ? objClass : 'n/a'}`,
+    `activeModel=${activeModelId >= 0 ? `0x${dpHex(activeModelId).toUpperCase()}` : 'none'}`,
+    `models=${modelText}`,
+    `materials=${mats.length} scale=${scale.toFixed(3)} yaw=${yawDeg.toFixed(1)}°`,
+    `textures=${texIds.length ? texIds.map((n) => `0x${dpHex(n).toUpperCase()}`).join(', ') : 'none'}`,
+    `pos=(${obj.position[0].toFixed(1)}, ${obj.position[1].toFixed(1)}, ${obj.position[2].toFixed(1)})`,
+];
+
+    if (triCount !== null)
+        lines.splice(4, 0, `tris=${triCount}`);
+if (rawParams && rawParams.byteLength >= 0x1C) {
+    lines.push(
+        `u04=0x${rawParams.getUint16(0x04).toString(16)} u06=0x${rawParams.getUint16(0x06).toString(16)} u18=0x${rawParams.getUint16(0x18).toString(16)} u1A=0x${rawParams.getUint16(0x1A).toString(16)}`
+    );
+}
+    for (let i = 0; i < Math.min(4, mats.length); i++) {
+        const m = mats[i];
+        const ids: number[] = Array.isArray(m?.texIds)
+            ? m.texIds
+            : (typeof m?.texId === 'number' ? [m.texId] : []);
+        const flags = (((m?.flags ?? m?.renderFlags ?? 0) as number) >>> 0);
+        lines.push(`mat${i}: tex=${ids.length ? ids.map((n) => `0x${dpHex(n)}`).join('/') : 'none'} flags=0x${flags.toString(16)}`);
+    }
+
+    return lines;
+}
+
+    private drawObjectDebugOverlay(viewerInput: Viewer.ViewerRenderInput): void {
+        const ctx = getDebugOverlayCanvas2D() as CanvasRenderingContext2D | null;
+        if (!ctx)
+            return;
+
+        const canvas = ctx.canvas;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        this.projectedObjectLabels = [];
+        ctx.save();
+        ctx.font = '12px sans-serif';
+        ctx.textBaseline = 'middle';
+        ctx.lineWidth = 3;
+        if (!this.isDPMapScene)
+            return;
+        if (!this.showObjectLabels && !this.selectedObject)
+            return;
+
+        const clipFromWorld = getClipFromWorldMatrix(viewerInput);
+        if (!clipFromWorld)
+            return;
+
+        for (const obj of this.map.objects) {
+            if ((obj as any)._isDevDP && !this.showDevObjects)
+                continue;
+
+            const mi = (obj as any).modelInst as ModelInstance | undefined;
+            const firstTexId = getFirstDebugTexId(mi);
+            const lines = this.buildObjectDebugLines(obj);
+            const label = firstTexId !== null ? `${lines[0]} [tex 0x${dpHex(firstTexId)}]` : lines[0];
+
+            const worldPos = this.map.getObjectWorldPosition(obj, scratchVec3a);
+            const screen = projectWorldToCanvas(clipFromWorld, canvas, worldPos[0], worldPos[1] + 20, worldPos[2]);
+            if (!screen)
+                continue;
+
+this.projectedObjectLabels.push({
+    obj,
+    x: screen.x,
+    y: screen.y,
+    label,
+    lines,
+    w: Math.ceil(ctx.measureText(label).width),
+    h: 16,
+});
+        }
+
+        if (this.showObjectLabels) {
+            for (const e of this.projectedObjectLabels) {
+                const selected = e.obj === this.selectedObject;
+
+                ctx.beginPath();
+                ctx.fillStyle = selected ? '#ffeb3b' : 'rgba(255,255,255,0.9)';
+                ctx.arc(e.x, e.y, selected ? 4 : 2, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+                ctx.strokeText(e.label, e.x + 8, e.y);
+
+                ctx.fillStyle = selected ? '#ffeb3b' : '#ffffff';
+                ctx.fillText(e.label, e.x + 8, e.y);
+            }
+        }
+
+        if (this.selectedObject) {
+            const selectedEntry =
+                this.projectedObjectLabels.find((e) => e.obj === this.selectedObject) ??
+                { obj: this.selectedObject, x: 0, y: 0, label: '', lines: this.buildObjectDebugLines(this.selectedObject) };
+
+            const lines = selectedEntry.lines;
+            const lineH = 16;
+            let boxW = 220;
+            for (const line of lines)
+                boxW = Math.max(boxW, Math.ceil(ctx.measureText(line).width) + 16);
+
+            const boxH = 10 + lines.length * lineH + 8;
+            const boxX = 8;
+            const boxY = canvas.height - boxH - 8;
+
+            ctx.fillStyle = 'rgba(0,0,0,0.78)';
+            ctx.fillRect(boxX, boxY, boxW, boxH);
+
+            ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+            ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+            for (let i = 0; i < lines.length; i++) {
+                ctx.fillStyle = (i === 0) ? '#ffeb3b' : '#ffffff';
+                ctx.fillText(lines[i], boxX + 8, boxY + 12 + i * lineH);
+            }
+        }
+
+        ctx.restore();
+    }
     private playMusic(mapNum: number) {
         const musicState = (window as any).musicState;
         if (musicState.audio) {
@@ -1167,8 +1568,13 @@ private rebuildSky(texFetcher: any, gameInfo: GameInfo): void {
         await this.map.reloadBlocks(this.dataFetcher);
     }
 
-public async create(info: MapSceneInfo, gameInfo: GameInfo, dataFetcher: DataFetcher, blockFetcher: BlockFetcher, mapOpts?: MapInstanceOptions): Promise<Viewer.SceneGfx> {        this.dataFetcher = dataFetcher; 
-        this.map = new MapInstance(info, blockFetcher, mapOpts);
+public async create(info: MapSceneInfo, gameInfo: GameInfo, dataFetcher: DataFetcher, blockFetcher: BlockFetcher, mapOpts?: MapInstanceOptions): Promise<Viewer.SceneGfx> {
+    this.dataFetcher = dataFetcher; 
+    this.isDPMapScene = !!mapOpts?.dpMapScene;
+    this.map = new MapInstance(info, blockFetcher, mapOpts);
+
+    if (this.isDPMapScene)
+        this.installObjectDebugPicking();
         await this.map.reloadBlocks(dataFetcher);
 
         const texFetcher = (blockFetcher as any).texFetcher;
@@ -1249,23 +1655,17 @@ envPanel.contents.append(this.envSelect.elem);
         this.map.setMatrix(matrix);
     }
 
-    protected override update(viewerInput: Viewer.ViewerRenderInput) {
-        super.update(viewerInput);
-        this.materialFactory.update(this.animController);
+protected override update(viewerInput: Viewer.ViewerRenderInput) {
+    super.update(viewerInput);
+    this.materialFactory.update(this.animController);
 
-        if (this.envfxMan) {
-            this.envfxMan.update(this.context.device, { viewerInput });
-        }
+    if (this.envfxMan) {
+        this.envfxMan.update(this.context.device, { viewerInput });
     }
-protected override addSkyRenderInsts(
-    device: GfxDevice,
-    renderInstManager: GfxRenderInstManager,
-    renderLists: SFARenderLists,
-    sceneCtx: SceneRenderContext
-) {
-    if (this.sky)
-        this.sky.addSkyRenderInsts(device, renderInstManager, renderLists, sceneCtx);
+
+    this.drawObjectDebugOverlay(viewerInput);
 }
+
 
 protected override addSkyRenderPasses(
     device: GfxDevice,
@@ -1298,28 +1698,83 @@ protected override addSkyRenderPasses(
             colorCopy(scratchColor0, White);
         }
 
+const forceHideDPObjectsInVR = this.isDPMapScene && !!sceneCtx.viewerInput.isVR;
+
 const modelCtx = {
-            sceneCtx,
-            showDevGeometry: false,
-            ambienceIdx: 0,
-            showMeshes: true,
-            outdoorAmbientColor: scratchColor0,
-            setupLights: () => {},
+    sceneCtx,
+    showDevGeometry: false,
+    ambienceIdx: 0,
+    showMeshes: true,
+    outdoorAmbientColor: scratchColor0,
+    setupLights: () => {},
     animController: this.animController,
     showDevObjects: this.showDevObjects,
-    showAllObjects: this.showAllObjects,
-        };
+    showAllObjects: this.showAllObjects && !forceHideDPObjectsInVR,
+};
 
         this.map.addRenderInsts(device, renderInstManager, renderLists, modelCtx as any);
         renderInstManager.popTemplateRenderInst();
     }
 
 public override destroy(device: GfxDevice) {
+    if (this.isDPMapScene)
+        cleanupDPUI();
+
+    if (this.debugOverlayCanvas) {
+        window.removeEventListener('mousedown', this.onDebugOverlayMouseDown, true);
+        window.removeEventListener('mouseup', this.onDebugOverlayMouseUp, true);
+        window.removeEventListener('contextmenu', this.onDebugOverlayContextMenu, true);
+        this.debugOverlayCanvas = null;
+    }
+
     super.destroy(device);
     if (this.sky) { this.sky.destroy(device); this.sky = null; }
     if (this.envfxMan) this.envfxMan.destroy(device);
     this.map.destroy(device);
 }
+}
+function cleanupDPUI(): void {
+    stopDPMPEGVoicePreview();
+
+    document.getElementById('dp-mpeg-voice-ui')?.remove();
+    document.getElementById('dp-mpeg-voice-toggle')?.remove();
+    document.getElementById('dp-top-toggle-bar')?.remove();
+
+    (window as any).__dpObjectsToggle = undefined;
+    (window as any).__dpDevObjectsToggle = undefined;
+    (window as any).__dpObjectLabelsToggle = undefined;
+}
+function cleanupTextureToggleUI(): void {
+    const state = (window as any).__sfaTextureToggle as {
+        wrap?: HTMLDivElement;
+        cb?: HTMLInputElement;
+        handler?: ((e: Event) => void) | null;
+    } | undefined;
+
+    if (state?.handler && state?.cb)
+        state.cb.removeEventListener('change', state.handler);
+
+    state?.wrap?.remove();
+    (window as any).__sfaTextureToggle = undefined;
+}
+
+function getDPTopToggleBar(): HTMLDivElement {
+    let bar = document.getElementById('dp-top-toggle-bar') as HTMLDivElement | null;
+
+    if (!bar) {
+        bar = document.createElement('div');
+        bar.id = 'dp-top-toggle-bar';
+        bar.style.position = 'fixed';
+        bar.style.top = '2px';
+        bar.style.right = '2px';
+        bar.style.zIndex = '10000';
+        bar.style.display = 'flex';
+        bar.style.alignItems = 'center';
+        bar.style.gap = '4px';
+        document.body.appendChild(bar);
+    }
+
+    return bar;
 }
 
 
@@ -1338,28 +1793,30 @@ function ensureDPObjectsUI(
 
   if (!state) {
     const wrap = document.createElement('div');
-    wrap.style.position = 'fixed';
-    wrap.style.top = '2px';// below Dev objects toggle
-    wrap.style.right = '2px';
-    wrap.style.zIndex = '10000';
-    wrap.style.padding = '2px 4px';
+ 
+    wrap.style.padding = '1px 3px';
     wrap.style.background = 'rgba(0,0,0,0.5)';
     wrap.style.color = '#fff';
-    wrap.style.font = '12px sans-serif';
+    wrap.style.font = '11px sans-serif';
     wrap.style.borderRadius = '2px';
-
+wrap.style.display = 'flex';
+wrap.style.alignItems = 'center';
+wrap.style.height = '20px';
+wrap.style.boxSizing = 'border-box';
+wrap.style.order = '2';
     const label = document.createElement('label');
     label.style.cursor = 'pointer';
-
+label.style.display = 'flex';
+label.style.alignItems = 'center';
+label.style.lineHeight = '1';
     const cb = document.createElement('input');
     cb.type = 'checkbox';
-    cb.style.marginRight = '2px';
+    cb.style.marginRight = '1px';
 
     label.appendChild(cb);
     label.appendChild(document.createTextNode('Objects'));
     wrap.appendChild(label);
-    document.body.appendChild(wrap);
-
+getDPTopToggleBar().appendChild(wrap);
     state = { wrap, cb, handler: null, last: true };
     (window as any).__dpObjectsToggle = state;
   }
@@ -1392,33 +1849,90 @@ function ensureDPDevObjectsUI(
 
   if (!state) {
     const wrap = document.createElement('div');
-    wrap.style.position = 'fixed';
-    wrap.style.top = '24px';// below texture toggle
-    wrap.style.right = '2px';
-    wrap.style.zIndex = '10000';
-    wrap.style.padding = '2px 4px';
+    wrap.style.padding = '1px 3px';
     wrap.style.background = 'rgba(0,0,0,0.5)';
     wrap.style.color = '#fff';
-    wrap.style.font = '12px sans-serif';
+    wrap.style.font = '11px sans-serif';
     wrap.style.borderRadius = '2px';
-
+wrap.style.display = 'flex';
+wrap.style.alignItems = 'center';
+wrap.style.height = '20px';
+wrap.style.boxSizing = 'border-box';
+wrap.style.order = '3';
     const label = document.createElement('label');
     label.style.cursor = 'pointer';
-
+label.style.display = 'flex';
+label.style.alignItems = 'center';
+label.style.lineHeight = '1';
     const cb = document.createElement('input');
     cb.type = 'checkbox';
-    cb.style.marginRight = '2px';
+    cb.style.marginRight = '1px';
 
     label.appendChild(cb);
     label.appendChild(document.createTextNode('Dev objects'));
     wrap.appendChild(label);
-    document.body.appendChild(wrap);
-
+getDPTopToggleBar().appendChild(wrap);
     state = { wrap, cb, handler: null, last: false };
     (window as any).__dpDevObjectsToggle = state;
   }
 
   if (state.handler) state.cb.removeEventListener('change', state.handler);
+
+  const desired = (typeof initial === 'boolean') ? initial : (state.last ?? false);
+  state.cb.checked = desired;
+
+  state.handler = async () => {
+    state!.last = state!.cb.checked;
+    await onChange(state!.cb.checked);
+  };
+
+  state.cb.addEventListener('change', state.handler);
+}
+
+function ensureDPObjectLabelsUI(
+  onChange: (enabled: boolean) => void | Promise<void>,
+  initial?: boolean
+): void {
+  type ToggleState = {
+    wrap: HTMLDivElement;
+    cb: HTMLInputElement;
+    handler: ((e: Event) => void) | null;
+    last?: boolean;
+  };
+
+  let state = (window as any).__dpObjectLabelsToggle as ToggleState | undefined;
+
+  if (!state) {
+    const wrap = document.createElement('div');
+    wrap.style.padding = '1px 3px';
+    wrap.style.background = 'rgba(0,0,0,0.5)';
+    wrap.style.color = '#fff';
+    wrap.style.font = '11px sans-serif';
+    wrap.style.borderRadius = '2px';
+wrap.style.display = 'flex';
+wrap.style.alignItems = 'center';
+wrap.style.height = '20px';
+wrap.style.boxSizing = 'border-box';
+wrap.style.order = '4';
+    const label = document.createElement('label');
+    label.style.cursor = 'pointer';
+label.style.display = 'flex';
+label.style.alignItems = 'center';
+label.style.lineHeight = '1';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.style.marginRight = '1px';
+
+    label.appendChild(cb);
+    label.appendChild(document.createTextNode('Object labels'));
+    wrap.appendChild(label);
+getDPTopToggleBar().appendChild(wrap);
+    state = { wrap, cb, handler: null, last: false };
+    (window as any).__dpObjectLabelsToggle = state;
+  }
+
+  if (state.handler)
+    state.cb.removeEventListener('change', state.handler);
 
   const desired = (typeof initial === 'boolean') ? initial : (state.last ?? false);
   state.cb.checked = desired;
@@ -2507,11 +3021,506 @@ texFetcher.setPngOverride(3610, 'textures/wcbluehead.png');
 }
 
 const ZERO_ENVFX_MAPS = [2, 3, 11, 15, 16, 21, 27, 28, 30, 31, 32, 33, 34, 39, 40, 41, 42, 48, 50, 51, 52, 53, 54];
+type DPMPEGClipInfo = {
+    index: number;
+    start: number;
+    end: number;
+    size: number;
+};
+
+type DPMPEGLoadResult = {
+    bin: DataView;
+    clips: DPMPEGClipInfo[];
+    mode: string;
+};
+
+function dpBuildMPEGClipsFromOffsets(tab: DataView, binSize: number, littleEndian: boolean): DPMPEGClipInfo[] {
+    const clips: DPMPEGClipInfo[] = [];
+
+    for (let i = 0, index = 0; i + 4 <= tab.byteLength; i += 4, index++) {
+        const start = tab.getUint32(i, littleEndian);
+        if (start >= binSize)
+            continue;
+
+        let end = binSize;
+        for (let j = i + 4; j + 4 <= tab.byteLength; j += 4) {
+            const next = tab.getUint32(j, littleEndian);
+            if (next > start && next <= binSize) {
+                end = next;
+                break;
+            }
+        }
+
+        if (end > start) {
+            clips.push({
+                index,
+                start,
+                end,
+                size: end - start,
+            });
+        }
+    }
+
+    return clips.filter((c) => c.size > 0);
+}
+
+async function loadDPMPEGVoiceData(dataFetcher: DataFetcher, pathBase: string): Promise<DPMPEGLoadResult> {
+    const cached = (window as any).__dpMpegVoiceCache as { pathBase: string; result: DPMPEGLoadResult } | undefined;
+    if (cached && cached.pathBase === pathBase)
+        return cached.result;
+
+    const [tabBuf, binBuf] = await Promise.all([
+        dataFetcher.fetchData(`${pathBase}/MPEG.tab`),
+        dataFetcher.fetchData(`${pathBase}/MPEG.bin`),
+    ]);
+
+    const tab = tabBuf.createDataView();
+    const bin = binBuf.createDataView();
+    const binSize = bin.byteLength;
+
+    const be = dpBuildMPEGClipsFromOffsets(tab, binSize, false);
+    const le = dpBuildMPEGClipsFromOffsets(tab, binSize, true);
+
+    const result: DPMPEGLoadResult = (be.length >= le.length)
+        ? { bin, clips: be, mode: 'u32 offsets BE' }
+        : { bin, clips: le, mode: 'u32 offsets LE' };
+
+    (window as any).__dpMpegVoiceCache = { pathBase, result };
+   // console.log(`[DP MPEG] mode=${result.mode} clips=${result.clips.length} binSize=${binSize}`);
+
+    return result;
+}
+
+function stopDPMPEGVoicePreview(): void {
+    const state = ((window as any).__dpMpegVoicePreview ??= {
+        audio: null as HTMLAudioElement | null,
+        url: null as string | null,
+    });
+
+    if (state.audio) {
+        state.audio.pause();
+        state.audio.currentTime = 0;
+        state.audio = null;
+    }
+
+    if (state.url) {
+        URL.revokeObjectURL(state.url);
+        state.url = null;
+    }
+}
+
+async function ensureDPMPEGVoiceUI(dataFetcher: DataFetcher, gameInfo: GameInfo): Promise<void> {
+    stopDPMPEGVoicePreview();
+
+    document.getElementById('dp-mpeg-voice-toggle')?.remove();
+    document.getElementById('dp-mpeg-voice-ui')?.remove();
+
+    const uiState = ((window as any).__dpMpegVoiceUIState ??= {
+        open: false,
+    });
+
+    // Top checkbox/toggle
+    const toggleWrap = document.createElement('div');
+    toggleWrap.id = 'dp-mpeg-voice-toggle';
+    toggleWrap.style.height = '20px';
+toggleWrap.style.boxSizing = 'border-box';
+toggleWrap.style.order = '5';
+    toggleWrap.style.padding = '1px 3px';
+    toggleWrap.style.background = 'rgba(0,0,0,0.5)';
+    toggleWrap.style.color = '#fff';
+    toggleWrap.style.font = '11px sans-serif';
+    toggleWrap.style.borderRadius = '2px';
+    toggleWrap.style.display = 'flex';
+    toggleWrap.style.alignItems = 'center';
+
+    const toggleLabel = document.createElement('label');
+    toggleLabel.style.cursor = 'pointer';
+    toggleLabel.style.display = 'flex';
+    toggleLabel.style.alignItems = 'center';
+
+    const toggleCb = document.createElement('input');
+    toggleCb.type = 'checkbox';
+    toggleCb.style.marginRight = '1px';
+    toggleCb.checked = !!uiState.open;
+
+    toggleLabel.appendChild(toggleCb);
+    toggleLabel.appendChild(document.createTextNode('Voice'));
+    toggleWrap.appendChild(toggleLabel);
+getDPTopToggleBar().appendChild(toggleWrap);
+    // Drawer panel
+    const wrap = document.createElement('div');
+    wrap.id = 'dp-mpeg-voice-ui';
+    wrap.style.position = 'fixed';
+    wrap.style.right = '8px';
+    wrap.style.top = '28px';
+    wrap.style.width = '340px';
+    wrap.style.zIndex = '10000';
+    wrap.style.background = 'rgba(0,0,0,0.88)';
+    wrap.style.color = '#fff';
+    wrap.style.font = '12px monospace';
+    wrap.style.padding = '8px';
+    wrap.style.border = '1px solid rgba(255,255,255,0.18)';
+    wrap.style.borderRadius = '8px';
+    wrap.style.display = uiState.open ? 'grid' : 'none';
+    wrap.style.gap = '8px';
+
+    const title = document.createElement('div');
+    title.textContent = 'DP MPEG Voice Player';
+    title.style.fontWeight = 'bold';
+    wrap.appendChild(title);
+
+    const status = document.createElement('div');
+    status.textContent = 'Loading MPEG.tab / MPEG.bin...';
+    status.style.color = '#aaa';
+    wrap.appendChild(status);
+
+    const row1 = document.createElement('div');
+    row1.style.display = 'grid';
+    row1.style.gridTemplateColumns = '80px 1fr';
+    row1.style.alignItems = 'center';
+    row1.style.gap = '6px';
+    wrap.appendChild(row1);
+
+    const lineLabel = document.createElement('div');
+    lineLabel.textContent = 'Line #';
+    row1.appendChild(lineLabel);
+
+    const lineInput = document.createElement('input');
+    lineInput.type = 'number';
+    lineInput.value = '0';
+    lineInput.min = '0';
+    lineInput.step = '1';
+    lineInput.style.width = '100%';
+    lineInput.style.boxSizing = 'border-box';
+    row1.appendChild(lineInput);
+
+    const row2 = document.createElement('div');
+    row2.style.display = 'grid';
+    row2.style.gridTemplateColumns = '1fr 1fr 1fr 1fr';
+    row2.style.gap = '6px';
+    wrap.appendChild(row2);
+
+    const prevBtn = document.createElement('button');
+    prevBtn.textContent = 'Prev';
+    row2.appendChild(prevBtn);
+
+    const playBtn = document.createElement('button');
+    playBtn.textContent = 'Play';
+    row2.appendChild(playBtn);
+
+    const stopBtn = document.createElement('button');
+    stopBtn.textContent = 'Stop';
+    row2.appendChild(stopBtn);
+
+    const nextBtn = document.createElement('button');
+    nextBtn.textContent = 'Next';
+    row2.appendChild(nextBtn);
+const row3 = document.createElement('div');
+row3.style.display = 'grid';
+row3.style.gridTemplateColumns = '42px 1fr 42px';
+row3.style.alignItems = 'center';
+row3.style.gap = '6px';
+wrap.appendChild(row3);
+
+const timeNow = document.createElement('div');
+timeNow.textContent = '0:00';
+timeNow.style.color = '#ddd';
+timeNow.style.textAlign = 'right';
+row3.appendChild(timeNow);
+
+const progress = document.createElement('input');
+progress.type = 'range';
+progress.min = '0';
+progress.max = '1';
+progress.step = 'any';
+progress.value = '0';
+progress.style.width = '100%';
+progress.style.margin = '0';
+row3.appendChild(progress);
+
+const timeEnd = document.createElement('div');
+timeEnd.textContent = '0:00';
+timeEnd.style.color = '#ddd';
+timeEnd.style.textAlign = 'left';
+row3.appendChild(timeEnd);
+    const info = document.createElement('div');
+    info.style.whiteSpace = 'pre-wrap';
+    info.style.color = '#ddd';
+    wrap.appendChild(info);
+
+    document.body.appendChild(wrap);
+
+    const applyOpenState = () => {
+        uiState.open = toggleCb.checked;
+        wrap.style.display = uiState.open ? 'grid' : 'none';
+    };
+
+    toggleCb.onchange = () => {
+        applyOpenState();
+
+        if (!toggleCb.checked) {
+            stopProgressRAF();
+            stopDPMPEGVoicePreview();
+
+            const musicState = (window as any).musicState;
+            const bgm = musicState?.audio as HTMLAudioElement | null;
+
+            if (bgm && !musicState?.muted) {
+                bgm.play().catch(() => {});
+            }
+
+            status.textContent = 'Closed';
+            resetProgress();
+        }
+    };
+
+    let result: DPMPEGLoadResult;
+    try {
+        result = await loadDPMPEGVoiceData(dataFetcher, gameInfo.pathBase);
+    } catch (e) {
+        status.textContent = 'Failed to load MPEG.tab / MPEG.bin';
+        info.textContent = String(e);
+        return;
+    }
+
+    if (result.clips.length === 0) {
+        status.textContent = `Loaded MPEG files, but found no clips (${result.mode})`;
+        info.textContent = 'Try checking MPEG.tab parsing.';
+        return;
+    }
+
+    lineInput.max = String(result.clips.length - 1);
+const formatTime = (secs: number): string => {
+    if (!Number.isFinite(secs) || secs < 0)
+        return '0:00';
+
+    const s = Math.floor(secs);
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    return `${m}:${r.toString().padStart(2, '0')}`;
+};
+
+const resetProgress = () => {
+    progress.max = '1';
+    progress.value = '0';
+    timeNow.textContent = '0:00';
+    timeEnd.textContent = '0:00';
+};
+
+const updateProgressFromAudio = (audio: HTMLAudioElement | null) => {
+    if (!audio) {
+        resetProgress();
+        return;
+    }
+
+    const dur = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : 0;
+    const cur = Number.isFinite(audio.currentTime) && audio.currentTime > 0 ? audio.currentTime : 0;
+
+    progress.max = String(dur > 0 ? dur : 1);
+    progress.value = String(Math.min(cur, dur > 0 ? dur : 1));
+    timeNow.textContent = formatTime(cur);
+    timeEnd.textContent = formatTime(dur);
+};
+let scrubActive = false;
+
+progress.oninput = () => {
+    const t = Number(progress.value) || 0;
+    scrubActive = true;
+    timeNow.textContent = formatTime(t);
+};
+
+progress.onchange = () => {
+    const state = (window as any).__dpMpegVoicePreview;
+    const audio = state?.audio as HTMLAudioElement | null;
+    if (!audio) return;
+
+    const t = Number(progress.value) || 0;
+    try {
+        audio.currentTime = t;
+    } catch (e) {
+    }
+
+    scrubActive = false;
+    updateProgressFromAudio(audio);
+};
+let progressRAF = 0;
+
+const stopProgressRAF = () => {
+    if (progressRAF !== 0) {
+        cancelAnimationFrame(progressRAF);
+        progressRAF = 0;
+    }
+};
+
+const tickProgress = () => {
+    const state = (window as any).__dpMpegVoicePreview;
+    const audio = state?.audio as HTMLAudioElement | null;
+
+    if (!audio) {
+        progressRAF = 0;
+        return;
+    }
+
+    if (!scrubActive)
+        updateProgressFromAudio(audio);
+
+    if (!audio.paused && !audio.ended) {
+        progressRAF = requestAnimationFrame(tickProgress);
+    } else {
+        progressRAF = 0;
+    }
+};
+
+const startProgressRAF = () => {
+    stopProgressRAF();
+    progressRAF = requestAnimationFrame(tickProgress);
+};
+    const clampIndex = (): number => {
+        let i = Number(lineInput.value) | 0;
+        if (!Number.isFinite(i)) i = 0;
+        if (i < 0) i = 0;
+        if (i >= result.clips.length) i = result.clips.length - 1;
+        lineInput.value = String(i);
+        return i;
+    };
+
+    const syncInfo = () => {
+        const i = clampIndex();
+        const clip = result.clips[i];
+        if (!clip) {
+            info.textContent = `clip ${i}\ninvalid`;
+            return;
+        }
+
+        info.textContent =
+            `clip ${clip.index} / ${result.clips.length - 1}\n` +
+            `start: 0x${clip.start.toString(16)}\n` +
+            `end:   0x${clip.end.toString(16)}\n` +
+            `size:  ${clip.size} bytes`;
+    };
+
+    const playIndex = (requestedIndex: number) => {
+        let i = requestedIndex | 0;
+        if (i < 0) i = 0;
+        if (i >= result.clips.length) i = result.clips.length - 1;
+        lineInput.value = String(i);
+
+        const clip = result.clips[i];
+if (!clip || clip.size <= 0) {
+    resetProgress();
+    status.textContent = `Clip ${i} is empty`;
+    syncInfo();
+    return;
+}
+
+        stopProgressRAF();
+        stopDPMPEGVoicePreview();
+        const musicState = (window as any).musicState;
+        if (musicState?.audio)
+            musicState.audio.pause();
+
+        const src = new Uint8Array(result.bin.buffer, result.bin.byteOffset + clip.start, clip.size);
+        const copy = new Uint8Array(clip.size);
+        copy.set(src);
+
+        const blob = new Blob([copy], { type: 'audio/mpeg' });
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+audio.volume = 0.75;
+        const state = ((window as any).__dpMpegVoicePreview ??= {
+            audio: null as HTMLAudioElement | null,
+            url: null as string | null,
+        });
+
+        state.audio = audio;
+        state.url = url;
+resetProgress();
+
+audio.addEventListener('loadedmetadata', () => {
+    updateProgressFromAudio(audio);
+});
+
+audio.addEventListener('durationchange', () => {
+    updateProgressFromAudio(audio);
+});
+
+audio.addEventListener('play', () => {
+    startProgressRAF();
+});
+
+audio.addEventListener('pause', () => {
+    stopProgressRAF();
+    if (!scrubActive)
+        updateProgressFromAudio(audio);
+});
+
+audio.addEventListener('ended', () => {
+    scrubActive = false;
+    stopProgressRAF();
+    updateProgressFromAudio(audio);
+});
+        audio.onended = () => {
+            if (state.audio === audio)
+                state.audio = null;
+            if (state.url === url) {
+                URL.revokeObjectURL(url);
+                state.url = null;
+            }
+        };
+
+        audio.onerror = () => {
+            status.textContent = `Playback failed for clip ${clip.index}`;
+        };
+
+        audio.play().then(() => {
+            status.textContent = `Playing clip ${clip.index}`;
+            startProgressRAF();
+        }).catch((e) => {
+            status.textContent = `Playback failed for clip ${clip.index}`;
+            console.error(e);
+        });
+
+        syncInfo();
+    };
+
+    prevBtn.onclick = () => {
+        playIndex(clampIndex() - 1);
+    };
+
+    playBtn.onclick = () => {
+        playIndex(clampIndex());
+    };
+
+stopBtn.onclick = () => {
+    stopProgressRAF();
+    stopDPMPEGVoicePreview();
+    resetProgress();
+    status.textContent = 'Stopped';
+};
+
+    nextBtn.onclick = () => {
+        playIndex(clampIndex() + 1);
+    };
+
+    lineInput.oninput = () => {
+        syncInfo();
+    };
+
+    lineInput.onchange = () => {
+        syncInfo();
+    };
+
+    status.textContent = `Loaded ${result.clips.length} clips (${result.mode})`;
+    syncInfo();
+    applyOpenState();
+
+}
 export class DPMapSceneDesc implements Viewer.SceneDesc {
     constructor(public mapNum: number, public id: string, public name: string, private gameInfo?: GameInfo) {}
 
- public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
-        const gInfo = this.gameInfo ?? DP_GAME_INFO;
+public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+    cleanupTextureToggleUI();
+    const gInfo = this.gameInfo ?? DP_GAME_INFO;
         const animController = new SFAAnimationController();
         const materialFactory = new MaterialFactory(device);
         const mapSceneInfo = await loadMap(gInfo, context.dataFetcher, this.mapNum);
@@ -2551,11 +3560,12 @@ const fakeWorld: any = {
         const objTab = (await context.dataFetcher.fetchData(`${gInfo.pathBase}/OBJECTS.tab`)).createDataView();
         const objBin = (await context.dataFetcher.fetchData(`${gInfo.pathBase}/OBJECTS.bin`)).createDataView();
         const objIdx = (await context.dataFetcher.fetchData(`${gInfo.pathBase}/OBJINDEX.bin`)).createDataView();
+       const dpExternalNameMap = await loadDPExternalObjectNames(context.dataFetcher, gInfo);
         let modelInd: DataView | null = null; 
         try { modelInd = (await context.dataFetcher.fetchData(`${gInfo.pathBase}/MODELIND.bin`)).createDataView(); } catch(e) {}
         
         applyDPObjectManagerPatch(objectManager, objTab, objBin, objIdx, modelInd);
-
+(objectManager as any)._dpExternalNameMap = dpExternalNameMap;
 
         const objData = mapSceneInfo.getObjectsData?.();
         if (objData) {
@@ -2641,6 +3651,7 @@ await mapRenderer.create(mapSceneInfo, gInfo, context.dataFetcher, blockFetcher,
     dpMapScene: true,
     
 });
+await ensureDPMPEGVoiceUI(context.dataFetcher, gInfo);
 //ensureTextureToggleUI(async (enabled: boolean) => {
     //texFetcher.setTexturesEnabled(enabled);
     //(materialFactory as any).texturesEnabled = enabled;
@@ -2652,10 +3663,18 @@ mapRenderer.showDevObjects = false;
 ensureDPDevObjectsUI(async (enabled: boolean) => {
     mapRenderer.showDevObjects = enabled;
 }, false);
+
 mapRenderer.showAllObjects = true;
 ensureDPObjectsUI(async (enabled: boolean) => {
     mapRenderer.showAllObjects = enabled;
 }, true);
+
+mapRenderer.showObjectLabels = false;
+ensureDPObjectLabelsUI(async (enabled: boolean) => {
+    mapRenderer.showObjectLabels = enabled;
+    if (!enabled)
+        mapRenderer.clearSelectedDebugObject();
+}, false);
 setTimeout(async () => {
             const mr = mapRenderer as any;
             if (mr.envSelect && mr.envfxMan) {
@@ -2858,6 +3877,7 @@ export class DPFullWorldSceneDesc implements Viewer.SceneDesc {
     constructor(public id: string, public name: string, private gameInfo: GameInfo = DP_GAME_INFO) {}
 
     public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+       cleanupTextureToggleUI();
         const gInfo = this.gameInfo;
         const dataFetcher = context.dataFetcher;
 
@@ -2932,6 +3952,7 @@ export class CombinedOldIceMtSceneDesc implements Viewer.SceneDesc {
     ) {}
 
     public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+       cleanupTextureToggleUI();
         const musicState = (window as any).musicState;
         if (musicState.audio) {
             musicState.audio.pause();
@@ -3024,7 +4045,6 @@ export class CombinedOldIceMtSceneDesc implements Viewer.SceneDesc {
         } catch (e) {
             console.warn("Failed to load ENVFXACT.bin for Combined Map", e);
         }
-        // --------------------------------------
 
         const blockFetcher = await DPBlockFetcher.create(
             this.gameInfo, context.dataFetcher, materialFactory, Promise.resolve(texFetcher)
@@ -3062,6 +4082,7 @@ export class YetiSceneDesc implements Viewer.SceneDesc {
     ) {}
 
     public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+       cleanupTextureToggleUI();
         const musicState = (window as any).musicState;
         if (musicState.audio) { musicState.audio.pause(); musicState.audio.currentTime = 0; musicState.audio = null; }
 

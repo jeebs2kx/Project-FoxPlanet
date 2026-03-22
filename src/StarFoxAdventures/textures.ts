@@ -308,36 +308,37 @@ type OverrideOpts = {
 
 export class SFATexture {
     public viewerTexture?: Viewer.Texture;
-    public mappings: TextureMapping[] = []; 
+    public mappings: TextureMapping[] = [];
+    public lodBias: number = 0.0;
 
     constructor(public gfxTexture: GfxTexture, public gfxSampler: GfxSampler, public width: number, public height: number) {}
-    
-   public static create(cache: GfxRenderCache, width: number, height: number) {
-    const device = cache.device;
-    const gfxTexture = device.createTexture(makeTextureDescriptor2D(GfxFormat.U8_RGBA_NORM, width, height, 1));
-    const gfxSampler = cache.createSampler({
-        wrapS: GfxWrapMode.Clamp, 
-        wrapT: GfxWrapMode.Clamp, 
-        minFilter: GfxTexFilterMode.Bilinear,
-        magFilter: GfxTexFilterMode.Bilinear,
-        mipFilter: GfxMipFilterMode.Nearest,
-        minLOD: 0,
-        maxLOD: 100,
-    });
 
-    return new SFATexture(gfxTexture, gfxSampler, width, height);
-}
-    
+    public static create(cache: GfxRenderCache, width: number, height: number) {
+        const device = cache.device;
+        const gfxTexture = device.createTexture(makeTextureDescriptor2D(GfxFormat.U8_RGBA_NORM, width, height, 1));
+        const gfxSampler = cache.createSampler({
+            wrapS: GfxWrapMode.Clamp,
+            wrapT: GfxWrapMode.Clamp,
+            minFilter: GfxTexFilterMode.Bilinear,
+            magFilter: GfxTexFilterMode.Bilinear,
+            mipFilter: GfxMipFilterMode.Nearest,
+            minLOD: 0,
+            maxLOD: 100,
+        });
+
+        return new SFATexture(gfxTexture, gfxSampler, width, height);
+    }
+
     public destroy(device: GfxDevice) { device.destroyTexture(this.gfxTexture); }
-    
+
     public setOnTextureMapping(mapping: TextureMapping) {
         mapping.reset();
         mapping.gfxTexture = this.gfxTexture;
         mapping.gfxSampler = this.gfxSampler;
         mapping.width = this.width;
         mapping.height = this.height;
-        mapping.lodBias = 0.0;
-        this.mappings.push(mapping); 
+        mapping.lodBias = this.lodBias;
+        this.mappings.push(mapping);
     }
 
     public updateTextureAndNotify(newTex: GfxTexture, newWidth: number, newHeight: number, newSampler?: GfxSampler) {
@@ -349,6 +350,7 @@ export class SFATexture {
             m.gfxTexture = newTex;
             m.width = newWidth;
             m.height = newHeight;
+            m.lodBias = this.lodBias;
             if (newSampler) m.gfxSampler = newSampler;
         }
     }
@@ -376,23 +378,42 @@ function loadTexture(cache: GfxRenderCache, texData: ArrayBufferSlice, isBeta: b
         width: dv.getUint16(0x0A),
         height: dv.getUint16(0x0C),
         format: dv.getUint8(0x16),
-        mipCount: dv.getUint16(0x1c) + 1,
+        mipCount: dv.getUint16(0x1C) + 1,
         data: texData.slice(isBeta ? 0x20 : 0x60),
     };
+
     const fields = {
-        wrapS: dv.getUint8(0x17), wrapT: dv.getUint8(0x18),
-        minFilt: dv.getUint8(0x19), magFilt: dv.getUint8(0x1A),
+        wrapS: dv.getUint8(0x17),
+        wrapT: dv.getUint8(0x18),
+        minFilt: dv.getUint8(0x19),
+        magFilt: dv.getUint8(0x1A),
     };
+
     const mipChain = GX_Texture.calcMipChain(textureInput, textureInput.mipCount);
     const loadedTexture = loadTextureFromMipChain(cache.device, mipChain);
     const [minFilter, mipFilter] = translateTexFilterGfx(fields.minFilt);
+
     const gfxSampler = cache.createSampler({
-        wrapS: translateWrapModeGfx(fields.wrapS), wrapT: translateWrapModeGfx(fields.wrapT),
-        minFilter: minFilter, magFilter: translateTexFilterGfx(fields.magFilt)[0],
-        mipFilter: mipFilter, minLOD: 0, maxLOD: 100,
+        wrapS: translateWrapModeGfx(fields.wrapS),
+        wrapT: translateWrapModeGfx(fields.wrapT),
+        minFilter: minFilter,
+        magFilter: translateTexFilterGfx(fields.magFilt)[0],
+        mipFilter: mipFilter,
+        minLOD: 0,
+        maxLOD: 100,
     });
-    const texture = new SFATexture(loadedTexture.gfxTexture, gfxSampler, textureInput.width, textureInput.height);
+
+    const texture = new SFATexture(
+        loadedTexture.gfxTexture,
+        gfxSampler,
+        textureInput.width,
+        textureInput.height,
+    );
+
     texture.viewerTexture = loadedTexture.viewerTexture;
+
+    texture.lodBias = -1.0;
+
     return texture;
 }
 

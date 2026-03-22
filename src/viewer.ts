@@ -47,6 +47,7 @@ export interface ViewerRenderInput {
     antialiasingMode: AntialiasingMode;
     mouseLocation: MouseLocation;
     debugConsole: DebugConsole;
+    isVR: boolean;
 }
 
 export interface SceneGfx {
@@ -55,6 +56,7 @@ export interface SceneGfx {
     createCameraController?(): CameraController;
     adjustCameraController?(c: CameraController): void;
     getDefaultWorldMatrix?(dst: mat4): void;
+    
     serializeSaveState?(dst: ArrayBuffer, offs: number): number;
     deserializeSaveState?(src: ArrayBuffer, offs: number, byteLength: number): number;
     onstatechanged?: () => void;
@@ -118,17 +120,18 @@ export class Viewer {
 
         // GfxDevice.
         this.gfxDevice = this.gfxSwapChain.getDevice();
-        this.viewerRenderInput = {
-            camera: this.camera,
-            time: this.sceneTime,
-            deltaTime: 0,
-            backbufferWidth: 0,
-            backbufferHeight: 0,
-            onscreenTexture: null!,
-            antialiasingMode: AntialiasingMode.None,
-            mouseLocation: this.inputManager,
-            debugConsole: this.renderStatisticsTracker,
-        };
+this.viewerRenderInput = {
+    camera: this.camera,
+    time: this.sceneTime,
+    deltaTime: 0,
+    backbufferWidth: 0,
+    backbufferHeight: 0,
+    onscreenTexture: null!,
+    antialiasingMode: AntialiasingMode.None,
+    mouseLocation: this.inputManager,
+    debugConsole: this.renderStatisticsTracker,
+    isVR: false,
+};
 
         GlobalSaveManager.addSettingListener('AntialiasingMode', (saveManager, key) => {
             const antialiasingMode = saveManager.loadSetting<AntialiasingMode>(key, AntialiasingMode.FXAA);
@@ -158,6 +161,7 @@ export class Viewer {
     }
 
     private render(): void {
+            this.viewerRenderInput.isVR = false;
         this.viewerRenderInput.camera = this.camera;
         this.viewerRenderInput.time = this.sceneTime;
         this.viewerRenderInput.backbufferWidth = this.canvas.width;
@@ -198,12 +202,13 @@ export class Viewer {
         return this.xrTempRT!;
     }
 
-    private renderWebXR(webXRContext: WebXRContext) {
-        if (webXRContext.xrSession === null) return;
-        const baseLayer = webXRContext.xrSession.renderState.baseLayer;
-        if (baseLayer === undefined) return;
+private renderWebXR(webXRContext: WebXRContext) {
+    if (webXRContext.xrSession === null) return;
+    const baseLayer = webXRContext.xrSession.renderState.baseLayer;
+    if (baseLayer === undefined) return;
 
-        this.viewerRenderInput.time = this.sceneTime;
+    this.viewerRenderInput.isVR = true;
+    this.viewerRenderInput.time = this.sceneTime;
 
         // Use the SwapChain texture the engine already created
         this.gfxSwapChain.configureSwapChain(baseLayer.framebufferWidth, baseLayer.framebufferHeight, baseLayer.framebuffer);
@@ -216,42 +221,47 @@ export class Viewer {
         this.gfxDevice.pushStatisticsGroup(this.statisticsGroup);
 
 for (let i = 0; i < webXRContext.views.length; i++) {
-const xrView: XRView = webXRContext.views[i];
-this.viewerRenderInput.camera = this.xrCameraController.cameras[i];
-const cam = this.viewerRenderInput.camera;
-if (!cam) continue;
+            // CRITICAL CHANGE: Use the camera from XRCameraController
+            this.viewerRenderInput.camera = this.xrCameraController.cameras[i];
+            const xrView: XRView = webXRContext.views[i];
+            const cam = this.viewerRenderInput.camera;
+
+            // ---> THE FIX <---
+            // Noclip's Frustum Culling will crash and hide all geometry if these are undefined.
+            // Copying them from the desktop camera forces the math to work.
+            cam.clipSpaceNearZ = this.camera.clipSpaceNearZ;
+            cam.near = this.camera.near || 0.1;
+            cam.far = this.camera.far || 999999;
+            cam.fovY = this.camera.fovY;
+            cam.aspect = this.camera.aspect;
+            cam.left = this.camera.left;
+            cam.right = this.camera.right;
+            cam.top = this.camera.top;
+            cam.bottom = this.camera.bottom;
+
+            // Apply Reverse-Z fix for depth (Using the new valid 'near' plane)
+            const n = cam.near;
+            cam.projectionMatrix[10] = 0.0;
+            cam.projectionMatrix[14] = n;
+            cam.projectionMatrix[11] = -1.0;
+            cam.projectionMatrix[15] = 0.0;
+            
+            // Recalculate culling planes now that we don't have NaNs
+            cam.worldMatrixUpdated();
+
             const viewport: XRViewport = baseLayer.getViewport(xrView);
             if (!viewport) continue;
 
-cam.clipSpaceNearZ = this.camera.clipSpaceNearZ;
-cam.near = 0.25;
-cam.far = 5000.0;
-cam.isOrthographic = false;
+            // Render the viewport to our temp RT.
+            this.viewerRenderInput.backbufferWidth = viewport.width;
+            this.viewerRenderInput.backbufferHeight = viewport.height;
+            const tempRT = this.getXRTempRT(viewport.width, viewport.height);
+            this.viewerRenderInput.onscreenTexture = tempRT;
+            this.renderViewport();
 
-cam.aspect = viewport.width / viewport.height;
-cam.fovY = 2.0 * Math.atan(1.0 / xrView.projectionMatrix[5]);
+            // Now composite into the backbuffer.
+            this.gfxDevice.copySubTexture2D(swapChainTex, viewport.x, viewport.y, tempRT, 0, 0);
 
-// XR projection exactly as provided.
-mat4.copy(cam.projectionMatrix, xrView.projectionMatrix as unknown as mat4);
-
-// cam.viewMatrix / cam.worldMatrix were already built in XRCameraController.update()
-// using this same frame's XR view + your movement/teleport stage transform.
-cam.worldMatrixUpdated();
-
-// Render the viewport to our temp RT.
-// Render directly into XR swapchain texture for this eye (test)
-// Render eye into a temp RT first (engine expects a standalone target)
-this.viewerRenderInput.backbufferWidth = viewport.width;
-this.viewerRenderInput.backbufferHeight = viewport.height;
-
-const tempRT = this.getXRTempRT(viewport.width, viewport.height);
-this.viewerRenderInput.onscreenTexture = tempRT;
-
-this.renderViewport();
-
-// Copy into THE SAME eye's viewport (not the other eye!)
-this.gfxDevice.copySubTexture2D(swapChainTex, viewport.x, viewport.y, tempRT, 0, 0);
-// Cleanup temp RT
             // Reset the delta time so we don't advance time next render.
             this.viewerRenderInput.deltaTime = 0;
         }
@@ -343,10 +353,9 @@ if (!(this as any).__xrSynced) {
             this.xrCameraController.offset[1] = this.camera.worldMatrix[13];
             this.xrCameraController.offset[2] = this.camera.worldMatrix[14];
             
-            // Sync Rotation (so you don't spawn facing backward)
-            const fwdX = -this.camera.worldMatrix[8];
-            const fwdZ = -this.camera.worldMatrix[10];
-            this.xrCameraController.rotationOffset = Math.atan2(fwdX, fwdZ);
+const fwdX = -this.camera.worldMatrix[8];
+const fwdZ = -this.camera.worldMatrix[10];
+this.xrCameraController.rotationOffset = Math.atan2(-fwdX, -fwdZ);
             
             (this as any).__xrSynced = true;
         }

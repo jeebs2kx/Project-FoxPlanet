@@ -21,6 +21,11 @@ import logoURL from './assets/logo.png';
 import sfaLogoURL from './assets/SFA_logo.png';
 // @ts-ignore
 import dpLogoURL from './assets/logoDP.png';
+// @ts-ignore
+import sfaEmblemURL from './assets/sfaemblem.png';
+// @ts-ignore
+import dpCapyEmblemURL from './assets/DPcapyemblem.png';
+
 import { AntialiasingMode } from './gfx/helpers/RenderGraphHelpers.js';
 // Global music state
 if (!(window as any).musicState) {
@@ -32,10 +37,10 @@ if (!(window as any).musicState) {
 
 type GameTheme = {
     id: 'sfa' | 'dp';
-    highlight: string;  // headers, progress, slider thumbs, etc.
-    coolBlue: string;   // layer panel header color
-    panelBg: string;    // deep background color for gradients
-    panelGlass: string; // semi-transparent panel fill
+    highlight: string;  
+    coolBlue: string;   
+    panelBg: string;    
+    panelGlass: string; 
     landingBorder: string;
     landingGlow: string;
 };
@@ -43,18 +48,18 @@ type GameTheme = {
 const THEMES: Record<'sfa' | 'dp', GameTheme> = {
     sfa: {
         id: 'sfa',
-        highlight: '#ad8d03ff',      // SFA gold
-        coolBlue: '#2B2BB8',         // SFA royal blue/purple
-        panelBg: '#0B1124',          // deep navy
+        highlight: '#ad8d03ff',      
+        coolBlue: '#2B2BB8',         
+        panelBg: '#0B1124',          
         panelGlass: 'rgba(0, 0, 0, 0.8)',
         landingBorder: 'rgba(43,43,184,.26)',
         landingGlow: '0 18px 48px rgba(0,0,0,.6), inset 0 0 1px rgba(255,255,255,.04)',
     },
     dp: {
         id: 'dp',
-        highlight: '#C88A2D',        // N64-ish bronze/orange
-        coolBlue: '#2F6B4A',         // moss green (layer header accent)
-        panelBg: '#12100C',          // dark stone/brown
+        highlight: '#C88A2D',        
+        coolBlue: '#2F6B4A',         
+        panelBg: '#12100C',          
         panelGlass: 'rgba(10, 8, 6, 0.86)',
         landingBorder: 'rgba(200,138,45,.28)',
         landingGlow: '0 18px 48px rgba(0,0,0,.70), inset 0 0 1px rgba(255,220,160,.05)',
@@ -101,19 +106,14 @@ const FRUSTUM_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 1
 const STATISTICS_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="5 0 55 60" height="16" fill="white"><g><polygon points="6.9,11.5 6.9,56 55.4,56 55.4,53 9.9,53 9.9,11.5"/><path d="M52.7,15.8c-2.7,0-4.9,2.2-4.9,4.9c0,1,0.3,1.8,0.8,2.6l-5,6.8c-0.4-0.1-0.9-0.2-1.3-0.2c-1.5,0-2.9,0.7-3.8,1.8l-5.6-2.8   c0-0.2,0.1-0.5,0.1-0.8c0-2.7-2.2-4.9-4.9-4.9s-4.9,2.2-4.9,4.9c0,1.1,0.3,2,0.9,2.8l-3.9,5.1c-0.5-0.2-1.1-0.3-1.7-0.3   c-2.7,0-4.9,2.2-4.9,4.9s2.2,4.9,4.9,4.9s4.9-2.2,4.9-4.9c0-1-0.3-2-0.8-2.7l4-5.2c0.5,0.2,1.1,0.3,1.6,0.3c1.4,0,2.6-0.6,3.5-1.5   l5.8,2.9c0,0.1,0,0.2,0,0.3c0,2.7,2.2,4.9,4.9,4.9c2.7,0,4.9-2.2,4.9-4.9c0-1.2-0.4-2.2-1.1-3.1l4.8-6.5c0.6,0.2,1.2,0.4,1.9,0.4   c2.7,0,4.9-2.2,4.9-4.9S55.4,15.8,52.7,15.8z"/></g></svg>`;
 const ABOUT_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" height="16" fill="white"><path d="M50,1.1C23,1.1,1.1,23,1.1,50S23,98.9,50,98.9C77,98.9,98.9,77,98.9,50S77,1.1,50,1.1z M55.3,77.7c0,1.7-1.4,3.1-3.1,3.1  h-7.9c-1.7,0-3.1-1.4-3.1-3.1v-5.1c0-1.7,1.4-3.1,3.1-3.1h7.9c1.7,0,3.1,1.4,3.1,3.1V77.7z M67.8,47.3c-2.1,2.9-4.7,5.2-7.9,6.9  c-1.8,1.2-3,2.4-3.6,3.8c-0.4,0.9-0.7,2.1-0.9,3.5c-0.1,1.1-1.1,1.9-2.2,1.9h-9.7c-1.3,0-2.3-1.1-2.2-2.3c0.2-2.7,0.9-4.8,2-6.4  c1.4-1.9,3.9-4.2,7.5-6.7c1.9-1.2,3.3-2.6,4.4-4.3c1.1-1.7,1.6-3.7,1.6-6c0-2.3-0.6-4.2-1.9-5.6c-1.3-1.4-3-2.1-5.3-2.1  c-1.9,0-3.4,0.6-4.7,1.7c-0.8,0.7-1.3,1.6-1.6,2.8c-0.4,1.4-1.7,2.3-3.2,2.3l-9-0.2c-1.1,0-2-1-1.9-2.1c0.3-4.8,2.2-8.4,5.5-11  c3.8-2.9,8.7-4.4,14.9-4.4c6.6,0,11.8,1.7,15.6,5c3.8,3.3,5.7,7.8,5.7,13.5C70.9,41.2,69.8,44.4,67.8,47.3z"/></svg>`;
 const DICE_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="18" height="18" fill="white"><path d="M 12.161286,0.33596185 C 9.1715371,-0.03245869 6.4678746,2.0779729 6.099454,5.0677219 L 0.33596183,51.838714 c -0.36842076,2.989751 1.74201117,5.693411 4.73176007,6.061832 l 46.7709931,5.763492 c 2.98975,0.368421 5.69341,-1.742009 6.061831,-4.73176 L 63.664038,12.161286 C 64.032459,9.171537 61.922029,6.4678748 58.932279,6.0994541 Z M 20.047281,10.438667 a 5.4374807,5.4374806 7.0250241 0 1 4.731761,6.061832 5.4374807,5.4374806 7.0250241 0 1 -6.061833,4.73176 5.4374807,5.4374806 7.0250241 0 1 -4.73176,-6.061832 5.4374807,5.4374806 7.0250241 0 1 6.061832,-4.73176 z m 28.782293,3.546782 a 5.4374807,5.4374806 7.0250241 0 1 4.731295,6.061775 5.4374807,5.4374806 7.0250241 0 1 -6.061367,4.731817 5.4374807,5.4374806 7.0250241 0 1 -4.731761,-6.061832 5.4374807,5.4374806 7.0250241 0 1 6.061833,-4.73176 z M 32.665036,26.603204 a 5.4374807,5.4374806 7.0250241 0 1 4.731295,6.061775 5.4374807,5.4374806 7.0250241 0 1 -6.06131,4.731351 5.4374807,5.4374806 7.0250241 0 1 -4.731817,-6.061366 5.4374807,5.4374806 7.0250241 0 1 6.061832,-4.73176 z M 16.500499,39.220959 a 5.4374807,5.4374806 7.0250241 0 1 4.731761,6.061833 5.4374807,5.4374806 7.0250241 0 1 -6.061776,4.731295 5.4374807,5.4374806 7.0250241 0 1 -4.731817,-6.061367 5.4374807,5.4374806 7.0250241 0 1 6.061832,-4.731761 z m 28.782293,3.546782 a 5.4374807,5.4374806 7.0250241 0 1 4.731295,6.061776 5.4374807,5.4374806 7.0250241 0 1 -6.06131,4.731353 5.4374807,5.4374806 7.0250241 0 1 -4.731818,-6.061368 5.4374807,5.4374806 7.0250241 0 1 6.061833,-4.731761 z"/></svg>`;
-
-// Custom icons used by game-specific panels.
 export const LAYER_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" height="20" fill="white"><g transform="translate(0,-1036.3622)"><path d="m 8,1039.2486 -0.21875,0.125 -4.90625,2.4375 5.125,2.5625 5.125,-2.5625 L 8,1039.2486 z m -3,4.5625 -2.125,0.9688 5.125,2.5625 5.125,-2.5625 -2.09375,-0.9688 -3.03125,1.5 -1,-0.5 -0.90625,-0.4375 L 5,1043.8111 z m 0,3 -2.125,0.9688 5.125,2.5625 5.125,-2.5625 -2.09375,-0.9688 -3.03125,1.5 -1,-0.5 -0.90625,-0.4375 L 5,1046.8111 z"/></g></svg>`;
 export const TIME_OF_DAY_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" height="20" fill="white"><path d="M50,93.4C74,93.4,93.4,74,93.4,50C93.4,26,74,6.6,50,6.6C26,6.6,6.6,26,6.6,50C6.6,74,26,93.4,50,93.4z M37.6,22.8  c-0.6,2.4-0.9,5-0.9,7.6c0,18.2,14.7,32.9,32.9,32.9c2.6,0,5.1-0.3,7.6-0.9c-4.7,10.3-15.1,17.4-27.1,17.4  c-16.5,0-29.9-13.4-29.9-29.9C20.3,37.9,27.4,27.5,37.6,22.8z"/></svg>`;
 export const RENDER_HACKS_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 110 105" height="20" fill="white"><path d="M95,5v60H65c0-16.6-13.4-30-30-30V5H95z"/><path d="M65,65c0,16.6-13.4,30-30,30C18.4,95,5,81.6,5,65c0-16.6,13.4-30,30-30v30H65z"/></svg>`;
 export const SAND_CLOCK_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" height="20" fill="white"><g><path d="M79.3,83.3h-6.2H24.9h-6.2c-1.7,0-3,1.3-3,3s1.3,3,3,3h60.6c1.7,0,3-1.3,3-3S81,83.3,79.3,83.3z"/><path d="M18.7,14.7h6.2h48.2h6.2c1.7,0,3-1.3,3-3s-1.3-3-3-3H18.7c-1.7,0-3,1.3-3,3S17,14.7,18.7,14.7z"/><path d="M73.1,66c0-0.9-0.4-1.8-1.1-2.4L52.8,48.5L72,33.4c0.7-0.6,1.1-1.4,1.1-2.4V20.7H24.9V31c0,0.9,0.4,1.8,1.1,2.4l19.1,15.1   L26,63.6c-0.7,0.6-1.1,1.4-1.1,2.4v11.3h48.2V66z"/></g></svg>';
 export const VR_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" height="20" fill="white"><g><path d="M29,8H3A1,1,0,0,0,2,9V23a1,1,0,0,0,1,1H13a1,1,0,0,0,1-.83l.66-4A1.36,1.36,0,0,1,16,18a1.38,1.38,0,0,1,1.36,1.26L18,23.17A1,1,0,0,0,19,24H29a1,1,0,0,0,1-1V9A1,1,0,0,0,29,8ZM8.5,19A3.5,3.5,0,1,1,12,15.5,3.5,3.5,0,0,1,8.5,19Zm15,0A3.5,3.5,0,1,1,27,15.5,3.5,3.5,0,0,1,23.5,19Z"/></g></svg>`;
-
+const FORCE_VR_DESKTOP_TEST = true;
 export function setChildren(parent: Element, children: Element[]): void {
-    // We want to swap children around without removing them, since removing them will cause
-    // a relayout and possibly break scroll positions.
 
-    // Go through and add any new children.
     for (let i = 0; i < children.length; i++)
         if (children[i].parentNode !== parent)
             parent.appendChild(children[i]);
@@ -946,7 +946,6 @@ setElementHighlighted(this.header, !!this.expanded, HIGHLIGHT_COLOR());        }
         this.autoClosed = v;
         const changed = this.syncExpanded();
         if (changed && this.expanded) {
-            // If we're coming back from auto-closing, then start a timeout to ignore clicks during this time.
             this.ignoreAutoCloseTimeout = window.setTimeout(() => {
                 this.ignoreAutoCloseTimeout = 0;
             }, 250);
@@ -964,7 +963,6 @@ function searchRegExps(S: string): RegExp[] {
 }
 
 function matchRegExps(n: RegExp[], S: string): boolean {
-    // Empty list matches everything.
     if (n.length === 0)
         return true;
     return n.every((re) => {
@@ -978,31 +976,28 @@ function randomChoice<T>(L: T[]): T {
 }
 
 class SceneSelect extends Panel {
+    private sfaGroupEmblem!: HTMLElement;
     private onGameLogoClicked(gameId: 'sfa' | 'dp'): void {
    // console.log('[SceneSelect] game logo clicked:', gameId);
 
-    // Theme immediately (local module state + local panel repaint)
     setCurrentTheme(gameId);
     this.applyTheme();
 
-    // Try global app switch if available
     const mainAny = (window as any).main;
    // console.log('[SceneSelect] window.main =', mainAny);
 
-    mainAny?.ui?.applyGameTheme?.(gameId);   // safe if available
-    mainAny?.setActiveGame?.(gameId);        // safe if available
+    mainAny?.ui?.applyGameTheme?.(gameId);   
+    mainAny?.setActiveGame?.(gameId);        
 }
 private topBox!: HTMLElement;
 private landingPanel!: HTMLElement;
 private landingMode: boolean = false;
 
 private gameLanding!: HTMLElement;
-
-// ADD THESE TWO (important!)
+private landingBlurb!: HTMLElement;
 private gameRow!: HTMLElement;
 private gameMiniIcons!: HTMLElement;
 
-// ALSO make searchEntry definite because you use it
 private searchEntry!: TextEntry;
 
     private sceneGroups: (string | SceneGroup)[] = [];
@@ -1097,7 +1092,57 @@ musicCheckbox.onchanged = () => {
 };
 
 this.contents.prepend(musicCheckbox.elem);
+this.landingBlurb = document.createElement('div');
+this.landingBlurb.style.marginTop = '18px';
+this.landingBlurb.style.padding = '18px';
+this.landingBlurb.style.minHeight = '220px';
+this.landingBlurb.style.display = 'block';
+this.landingBlurb.style.lineHeight = '1.6';
+this.landingBlurb.style.color = 'rgba(255,255,255,.92)';
+this.landingBlurb.style.font = '16px monospace';
+this.landingBlurb.style.borderRadius = '16px';
+this.landingBlurb.style.border = '1px solid rgba(43,43,184,.26)';
+this.landingBlurb.style.background = 'linear-gradient(180deg, rgba(17,37,64,.72), rgba(11,24,44,.52))';
+this.landingBlurb.style.boxShadow = '0 14px 28px rgba(0,0,0,.35), inset 0 0 1px rgba(255,255,255,.05)';
 
+const intro = document.createElement('div');
+intro.textContent = 'Explore released and development material from Star Fox Adventures and Dinosaur Planet';
+intro.style.marginBottom = '16px';
+intro.style.fontWeight = 'bold';
+intro.style.color = 'rgba(255,255,255,.96)';
+
+const featuresTitle = document.createElement('div');
+featuresTitle.textContent = 'Features';
+featuresTitle.style.marginBottom = '10px';
+featuresTitle.style.fontWeight = 'bold';
+featuresTitle.style.letterSpacing = '1px';
+featuresTitle.style.textTransform = 'uppercase';
+featuresTitle.style.color = HIGHLIGHT_COLOR();
+
+const featuresList = document.createElement('div');
+featuresList.style.display = 'grid';
+featuresList.style.gap = '6px';
+
+const features = [
+    'Released and beta maps',
+    'Full model viewer + beta models',
+    'Animation viewer',
+    'Texture viewer',
+    'VR support',
+    'And more',
+];
+
+for (const feature of features) {
+    const row = document.createElement('div');
+    row.textContent = `• ${feature}`;
+    row.style.color = 'rgba(255,255,255,.9)';
+    featuresList.appendChild(row);
+}
+
+this.landingBlurb.appendChild(intro);
+this.landingBlurb.appendChild(featuresTitle);
+this.landingBlurb.appendChild(featuresList);
+this.contents.appendChild(this.landingBlurb);
         this.topBox = document.createElement('div');
         this.topBox.style.display = 'grid';
         this.topBox.style.gridTemplateColumns = '1fr 40px';
@@ -1120,17 +1165,50 @@ this.contents.prepend(musicCheckbox.elem);
         this.syncRandomButtonVisible();
         this.topBox.appendChild(this.randomButton);
 
-        this.sceneGroupList = new SingleSelect();
-        this.sceneGroupList.setHeight('400px');
-        this.contents.appendChild(this.sceneGroupList.elem);
+this.sceneGroupList = new SingleSelect();
+this.sceneGroupList.setHeight('400px');
 
+const sceneGroupListRoot = this.sceneGroupList.elem as HTMLElement;
+sceneGroupListRoot.style.position = 'relative';
+sceneGroupListRoot.style.overflow = 'hidden';
+
+const sceneGroupScroll = sceneGroupListRoot.firstElementChild as HTMLElement | null;
+if (sceneGroupScroll) {
+    sceneGroupScroll.classList.add('sfa-list-scroll');
+    sceneGroupScroll.style.position = 'relative';
+    sceneGroupScroll.style.zIndex = '1';
+    sceneGroupScroll.style.background = 'transparent';
+}
+
+this.sfaGroupEmblem = document.createElement('div');
+this.sfaGroupEmblem.style.position = 'absolute';
+this.sfaGroupEmblem.style.left = '50%';
+this.sfaGroupEmblem.style.bottom = '60px';
+this.sfaGroupEmblem.style.transform = 'translateX(-50%)';
+this.sfaGroupEmblem.style.width = '130%';
+this.sfaGroupEmblem.style.height = '130%';
+this.sfaGroupEmblem.style.pointerEvents = 'none';
+this.sfaGroupEmblem.style.zIndex = '0';
+
+this.sfaGroupEmblem.style.backgroundImage = `url(${sfaEmblemURL})`;
+this.sfaGroupEmblem.style.backgroundRepeat = 'no-repeat';
+this.sfaGroupEmblem.style.backgroundPosition = 'center bottom';
+this.sfaGroupEmblem.style.backgroundSize = 'contain';
+this.sfaGroupEmblem.style.opacity = '0.08';
+this.sfaGroupEmblem.style.filter = 'drop-shadow(0 0 10px rgba(0,0,0,.35))';
+sceneGroupListRoot.appendChild(this.sfaGroupEmblem);
+this.contents.appendChild(sceneGroupListRoot);
         this.sceneDescList = new SingleSelect();
         this.sceneDescList.setHighlightFlair = false;
         this.sceneDescList.elem.style.backgroundColor = 'rgba(0, 0, 0, 0.8)';
         this.sceneDescList.elem.style.width = '440px';
         this.sceneDescList.setHeight('472px');
 
-        // ---------- RIGHT PANEL: "SELECT GAME" landing (BIG LOGOS) ----------
+const sceneDescScroll = this.sceneDescList.elem.firstElementChild as HTMLElement | null;
+if (sceneDescScroll) {
+    sceneDescScroll.classList.add('sfa-list-scroll');
+}
+
         this.gameLanding = document.createElement('div');
         this.gameLanding.style.width = '440px';
         this.gameLanding.style.height = '472px';
@@ -1244,6 +1322,8 @@ public showGameLanding(v: boolean): void {
     (this.topBox as HTMLElement).style.display = v ? 'none' : 'grid';
     (this.sceneGroupList.elem as HTMLElement).style.display = v ? 'none' : 'block';
 
+    // Landing text
+this.landingBlurb.style.display = v ? 'block' : 'none';
     // Mini icons ONLY after a game is chosen
     this.gameMiniIcons.style.display = v ? 'none' : 'flex';
 }
@@ -1255,19 +1335,36 @@ public applyTheme(): void {
     this.gameRow.style.background = t.panelGlass;
     this.topBox.style.background = t.panelGlass;
 
+    // Landing blurb
+    this.landingBlurb.style.border = `1px solid ${t.landingBorder}`;
+    this.landingBlurb.style.background = `linear-gradient(180deg, ${t.panelGlass}, rgba(0,0,0,.38))`;
+    this.landingBlurb.style.boxShadow = t.landingGlow;
+
     // Right-side surfaces
     this.sceneDescList.elem.style.backgroundColor = t.panelGlass;
     this.gameLanding.style.backgroundColor = t.panelGlass;
     this.gameLanding.style.border = `1px solid ${t.landingBorder}`;
     this.gameLanding.style.boxShadow = t.landingGlow;
 
-    // If the landing title exists, make it use accent color
     const landingTitle = this.gameLanding.firstElementChild as HTMLElement | null;
     if (landingTitle) {
         landingTitle.style.color = HIGHLIGHT_COLOR();
     }
+this.sfaGroupEmblem.style.display = 'block';
 
-    // Re-sync panel header progress/gradient colors
+if (t.id === 'sfa') {
+    this.sfaGroupEmblem.style.backgroundImage = `url(${sfaEmblemURL})`;
+    this.sfaGroupEmblem.style.bottom = '60px';
+    this.sfaGroupEmblem.style.width = '130%';
+    this.sfaGroupEmblem.style.height = '130%';
+    this.sfaGroupEmblem.style.opacity = '0.08';
+} else {
+    this.sfaGroupEmblem.style.backgroundImage = `url(${dpCapyEmblemURL})`;
+    this.sfaGroupEmblem.style.bottom = '60px';
+    this.sfaGroupEmblem.style.width = '60%';
+    this.sfaGroupEmblem.style.height = '60%';
+    this.sfaGroupEmblem.style.opacity = '0.08';
+}
     this.syncHeaderStyle();
     this.syncFlairs();
 }
@@ -1387,12 +1484,14 @@ public applyTheme(): void {
         this.syncHeaderStyle();
     }
 
-    private selectSceneDesc(sceneDesc: SceneDesc) {
+private selectSceneDesc(sceneDesc: SceneDesc) {
     const ui = (window.main?.ui as any);
     ui?.forcePanelsMouseOutState?.();
 
-        this.onscenedescselected(this.selectedSceneGroup, sceneDesc);
-    }
+    this.setExpanded(false, false);
+
+    this.onscenedescselected(this.selectedSceneGroup, sceneDesc);
+}
 
 
 
@@ -2002,6 +2101,13 @@ this.detectXRSupport();
         this.contents.appendChild(this.scaleSlider.elem);
     }
 private async detectXRSupport(): Promise<void> {
+    if (FORCE_VR_DESKTOP_TEST) {
+        this.enableXRCheckBox.setLabel('Enable VR');
+        this.enableXRCheckBox.elem.style.opacity = '1';
+        this.enableXRCheckBox.elem.style.pointerEvents = 'auto';
+        return;
+    }
+
     if (!('xr' in navigator)) {
         this.enableXRCheckBox.setLabel('WebXR Not Supported');
         this.enableXRCheckBox.elem.style.opacity = '0.5';
@@ -2015,16 +2121,23 @@ private async detectXRSupport(): Promise<void> {
             this.enableXRCheckBox.setLabel('VR Not Available');
             this.enableXRCheckBox.elem.style.opacity = '0.5';
             this.enableXRCheckBox.elem.style.pointerEvents = 'none';
+        } else {
+            this.enableXRCheckBox.setLabel('Enable VR');
+            this.enableXRCheckBox.elem.style.opacity = '1';
+            this.enableXRCheckBox.elem.style.pointerEvents = 'auto';
         }
     } catch {
         this.enableXRCheckBox.setLabel('XR Error');
+        this.enableXRCheckBox.elem.style.opacity = '0.5';
+        this.enableXRCheckBox.elem.style.pointerEvents = 'none';
     }
 }
 //keep this here?
-    private enableXRChecked() {
-        const enableXR = this.enableXRCheckBox.checked;
-        this.onWebXRStateRequested(enableXR);
-    }
+private enableXRChecked() {
+    const enableXR = this.enableXRCheckBox.checked;
+    (window as any).__SFA_VR_ACTIVE = enableXR;
+    this.onWebXRStateRequested(enableXR);
+}
 
 
 }
@@ -3228,7 +3341,6 @@ public applyGameTheme(gameId: 'sfa' | 'dp'): void {
     }
 
     public enableStudioMode(): void {
-        // Switch to the FPS Camera Controller (so the UI shows the correct controller highlighted).
         this.viewerSettings.setCameraControllerIndex(0);
         this.studioPanel.initStudio();
         this.studioPanel.show();
