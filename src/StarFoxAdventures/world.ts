@@ -70,6 +70,119 @@ const scratchVec0 = vec3.create();
 const scratchMtx0 = mat4.create();
 const scratchMtx1 = mat4.create();
 const scratchColor0 = colorNewFromRGBA(1, 1, 1, 1);
+function getClipFromWorldMatrix(viewerInput: Viewer.ViewerRenderInput): mat4 | null {
+    const cam: any = viewerInput.camera;
+    if (cam?.clipFromWorldMatrix)
+        return cam.clipFromWorldMatrix as mat4;
+    if (cam?.viewProjectionMatrix)
+        return cam.viewProjectionMatrix as mat4;
+    return null;
+}
+
+function projectWorldToCanvas(
+    clipFromWorld: mat4,
+    canvas: HTMLCanvasElement,
+    x: number,
+    y: number,
+    z: number,
+): { x: number; y: number; depth: number } | null {
+    const cx = clipFromWorld[0] * x + clipFromWorld[4] * y + clipFromWorld[8]  * z + clipFromWorld[12];
+    const cy = clipFromWorld[1] * x + clipFromWorld[5] * y + clipFromWorld[9]  * z + clipFromWorld[13];
+    const cz = clipFromWorld[2] * x + clipFromWorld[6] * y + clipFromWorld[10] * z + clipFromWorld[14];
+    const cw = clipFromWorld[3] * x + clipFromWorld[7] * y + clipFromWorld[11] * z + clipFromWorld[15];
+
+    if (cw <= 0.0001)
+        return null;
+
+    const ndcX = cx / cw;
+    const ndcY = cy / cw;
+    const ndcZ = cz / cw;
+
+    if (ndcX < -1.2 || ndcX > 1.2 || ndcY < -1.2 || ndcY > 1.2 || ndcZ < -1.2 || ndcZ > 1.2)
+        return null;
+
+    return {
+        x: (ndcX * 0.5 + 0.5) * canvas.width,
+        y: (-ndcY * 0.5 + 0.5) * canvas.height,
+        depth: ndcZ,
+    };
+}
+
+function transformMapPoint(m: mat4, x: number, y: number, z: number): vec3 {
+    return vec3.fromValues(
+        m[0] * x + m[4] * y + m[8]  * z + m[12],
+        m[1] * x + m[5] * y + m[9]  * z + m[13],
+        m[2] * x + m[6] * y + m[10] * z + m[14],
+    );
+}
+function cleanupSFAHitsToggleUI(): void {
+    const state = (window as any).__sfaHitsToggle as {
+        wrap?: HTMLDivElement;
+        cb?: HTMLInputElement;
+        handler?: ((e: Event) => void) | null;
+    } | undefined;
+
+    if (state?.handler && state?.cb)
+        state.cb.removeEventListener('change', state.handler);
+
+    state?.wrap?.remove();
+    (window as any).__sfaHitsToggle = undefined;
+}
+
+function ensureSFAHitsToggleUI(
+    onChange: (enabled: boolean) => void | Promise<void>,
+    initial?: boolean
+): void {
+    type ToggleState = {
+        wrap: HTMLDivElement;
+        cb: HTMLInputElement;
+        handler: ((e: Event) => void) | null;
+        last?: boolean;
+    };
+
+    let state = (window as any).__sfaHitsToggle as ToggleState | undefined;
+
+    if (!state) {
+        const wrap = document.createElement('div');
+        wrap.style.position = 'fixed';
+        wrap.style.top = '2px';
+        wrap.style.right = '2px';
+        wrap.style.zIndex = '10000';
+        wrap.style.padding = '2px 4px';
+        wrap.style.background = 'rgba(0,0,0,0.5)';
+        wrap.style.color = '#fff';
+        wrap.style.font = '12px sans-serif';
+        wrap.style.borderRadius = '2px';
+
+        const label = document.createElement('label');
+        label.style.cursor = 'pointer';
+
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.style.marginRight = '2px';
+
+        label.appendChild(cb);
+        label.appendChild(document.createTextNode('HITS'));
+        wrap.appendChild(label);
+        document.body.appendChild(wrap);
+
+        state = { wrap, cb, handler: null, last: false };
+        (window as any).__sfaHitsToggle = state;
+    }
+
+    if (state.handler)
+        state.cb.removeEventListener('change', state.handler);
+
+    const desired = (typeof initial === 'boolean') ? initial : (state.last ?? false);
+    state.cb.checked = desired;
+
+    state.handler = async () => {
+        state!.last = state!.cb.checked;
+        await onChange(state!.cb.checked);
+    };
+
+    state.cb.addEventListener('change', state.handler);
+}
 
 export class World {
     public mapNum: number | null = null;
@@ -293,13 +406,13 @@ class WorldRenderer extends SFARenderer {
     private enableAmbient: boolean = true;
     private enableFog: boolean = true;
     private layerSelect: UI.Slider;
-    private showObjects: boolean;
-    private showDevGeometry: boolean = false;
-    private showDevObjects: boolean = false;
-    private enableLights: boolean = true;
-    private sky: Sky;
-    private sphereMapMan: SphereMapManager;
-
+private showObjects: boolean;
+private showDevGeometry: boolean = false;
+private showDevObjects: boolean = false;
+public showHits: boolean = false;
+private enableLights: boolean = true;
+private sky: Sky;
+private sphereMapMan: SphereMapManager;
     constructor(protected override world: World, materialFactory: MaterialFactory, defaultShowObjects: boolean = true) {
         super(world.context, world.animController, materialFactory);
         this.showObjects = defaultShowObjects;
@@ -382,7 +495,49 @@ renderHacksPanel.customHeaderBackgroundColor = UI.COOL_BLUE_COLOR();
     public setEnvfx(envfxactNum: number) {
         this.world.envfxMan.loadEnvfx(envfxactNum);
     }
+private drawHitOverlay(viewerInput: Viewer.ViewerRenderInput): void {
+    const ctx = getDebugOverlayCanvas2D() as CanvasRenderingContext2D | null;
+    if (!ctx)
+        return;
 
+    const canvas = ctx.canvas;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    if (!this.showHits)
+        return;
+
+    const map = this.world.mapInstance;
+    if (!map || !map.hitLines || map.hitLines.length === 0)
+        return;
+
+    const clipFromWorld = getClipFromWorldMatrix(viewerInput);
+    if (!clipFromWorld)
+        return;
+
+    const mapMtx = map.getMapMatrix();
+
+    ctx.save();
+    ctx.strokeStyle = 'rgba(0,255,255,0.95)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+
+    for (const l of map.hitLines) {
+        const a = transformMapPoint(mapMtx, l.x0, l.y0, l.z0);
+        const b = transformMapPoint(mapMtx, l.x1, l.y1, l.z1);
+
+        const p0 = projectWorldToCanvas(clipFromWorld, canvas, a[0], a[1], a[2]);
+        const p1 = projectWorldToCanvas(clipFromWorld, canvas, b[0], b[1], b[2]);
+
+        if (!p0 || !p1)
+            continue;
+
+        ctx.moveTo(p0.x, p0.y);
+        ctx.lineTo(p1.x, p1.y);
+    }
+
+    ctx.stroke();
+    ctx.restore();
+}
     // XXX: for testing
     public enableFineAnims(enable: boolean = true) {
         this.animController.enableFineSkinAnims = enable;
@@ -413,9 +568,10 @@ renderHacksPanel.customHeaderBackgroundColor = UI.COOL_BLUE_COLOR();
 
         for (let i = 0; i < this.world.objectInstances.length; i++) {
             const obj = this.world.objectInstances[i];
-
             obj.update(updateCtx);
         }
+
+        this.drawHitOverlay(viewerInput);
     }
     
     protected override addSkyRenderInsts(device: GfxDevice, renderInstManager: GfxRenderInstManager, renderLists: SFARenderLists, sceneCtx: SceneRenderContext) {
@@ -493,12 +649,13 @@ renderHacksPanel.customHeaderBackgroundColor = UI.COOL_BLUE_COLOR();
         this.sphereMapMan.resolveLateSamplerBindings(renderList, scope, this.renderHelper.renderCache);
     }
 
-    public override destroy(device: GfxDevice) {
-        super.destroy(device);
-        this.world.destroy(device);
-        this.sky.destroy(device);
-        this.sphereMapMan.destroy(device);
-    }
+public override destroy(device: GfxDevice) {
+    cleanupSFAHitsToggleUI();
+    super.destroy(device);
+    this.world.destroy(device);
+    this.sky.destroy(device);
+    this.sphereMapMan.destroy(device);
+}
 }
 
 export class SFAWorldSceneDesc implements Viewer.SceneDesc {
@@ -517,9 +674,9 @@ export class SFAWorldSceneDesc implements Viewer.SceneDesc {
             this.subdirs = [subdir_];
     }
 
-   public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
-        console.log(`Creating scene for world ${this.name} (ID ${this.id}) ...`);
-
+public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+    cleanupSFAHitsToggleUI();
+    console.log(`Creating scene for world ${this.name} (ID ${this.id}) ...`);
         const pathBase = this.gameInfo.pathBase;
         const dataFetcher = context.dataFetcher;
         const materialFactory = new MaterialFactory(device);
@@ -598,6 +755,12 @@ export class SFAWorldSceneDesc implements Viewer.SceneDesc {
 
 const defaultShowObjects = this.gameInfo.pathBase !== 'StarFoxAdventuresDemo';
 const renderer = new WorldRenderer(world, materialFactory, defaultShowObjects);
+
+renderer.showHits = false;
+ensureSFAHitsToggleUI(async (enabled: boolean) => {
+    renderer.showHits = enabled;
+}, false);
+
 return renderer;
     }
 }
@@ -617,9 +780,9 @@ export class SFAMapSceneDesc implements Viewer.SceneDesc {
             this.subdirs = [subdir_];
     }
 
-   public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
-        console.log(`Creating scene for world ${this.name} (ID ${this.id}) ...`);
-
+public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+    cleanupSFAHitsToggleUI();
+    console.log(`Creating scene for world ${this.name} (ID ${this.id}) ...`);
         const pathBase = this.gameInfo.pathBase;
         const dataFetcher = context.dataFetcher;
         const materialFactory = new MaterialFactory(device);
@@ -699,8 +862,14 @@ export class SFAMapSceneDesc implements Viewer.SceneDesc {
            // console.log(`[ShowAllTextures] Bank=${useTex1 ? 'TEX1' : 'TEX0/TEXPRE'} attempted=${attempted} registered=${shown}`);
         };
 
-        const renderer = new WorldRenderer(world, materialFactory);
-        return renderer;
+const renderer = new WorldRenderer(world, materialFactory);
+
+renderer.showHits = false;
+ensureSFAHitsToggleUI(async (enabled: boolean) => {
+    renderer.showHits = enabled;
+}, false);
+
+return renderer;
     }
 }
 export class SFAFullFinalWorldSceneDesc implements Viewer.SceneDesc {

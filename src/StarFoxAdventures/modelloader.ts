@@ -246,9 +246,9 @@ const FIELDS: any = {
     texCount: 0xaa,
     jointCount: 0xab,
     posFineSkinningConfig: 0x64,
-    posFineSkinningPieces: 0x80,
+   posFineSkinningPieces: 0x80,
     posFineSkinningWeights: 0x84,
-    // nrmFineSkinningConfig: 0xac, // ???
+     nrmFineSkinningConfig: 0xaa, // ???
     weightCount: 0xad,
     shaderCount: 0xae,
     texMtxCount: 0xaf,
@@ -2683,7 +2683,6 @@ if (version === ModelVersion.cloudtreasure && model.hasFineSkinning) {
     texMtxCount = data.getUint8(fields.texMtxCount);
  // console.warn(`[TEXMTX] texMtxCount=${texMtxCount}`);
 
-  // Debug dump bytes in a range (adjust range as needed)
   for (let off = 0x00; off < 0x150; off++) {
    // console.log(`0x${off.toString(16)}: 0x${data.getUint8(off).toString(16)}`);
   }
@@ -2692,18 +2691,36 @@ if (version === ModelVersion.cloudtreasure && model.hasFineSkinning) {
 
 const shaders: Shader[] = [];
 let offs = shaderOffset;
+
+const CLOUDTREASURE_FORCE_OPAQUE_EYE_TEXIDS = new Set<number>([
+    1878, 775,2522,2627,2493,2394, 1568, 2679
+]);
+
 for (let i = 0; i < shaderCount; i++) {
     const shaderBin = dataSubarray(data, offs, shaderStride);
-    shaders.push(
-        parseShader(
-            shaderBin,
-            fields.shaderFields,
-            texIds,
-            normalFlags,
-            model.lightFlags,
-            texMtxCount,
-        ),
+    const shader = parseShader(
+        shaderBin,
+        fields.shaderFields,
+        texIds,
+        normalFlags,
+        model.lightFlags,
+        texMtxCount,
     );
+
+    if (version === ModelVersion.cloudtreasure) {
+        const ids = shader.layers
+            .map((l) => l.texId)
+            .filter((id): id is number => id !== null);
+
+        console.warn(
+          //  `[CT SHADER ${i}] texIds=[${ids.join(',')}] layers=${shader.layers.length} flags=0x${shader.flags.toString(16)}`
+        );
+
+        if (ids.some((id) => CLOUDTREASURE_FORCE_OPAQUE_EYE_TEXIDS.has(id)))
+            shader.forceOpaqueNoAlphaTest = true;
+    }
+
+    shaders.push(shader);
     offs += shaderStride;
 }
 (model as any).debugMaterialInfo = shaders.map((shader, index) => ({

@@ -256,30 +256,43 @@ if (fields.isAncient) {
   if (shader.attrFlags === 0)          shader.attrFlags |= ATTR_CLR;
 
   const first  = shader.layers[0];
-  const lowNib = flags8 & 0x0F;
+const texId0 = first?.texId ?? null;
+const tev0   = (first?.tevMode ?? 0) & 0x7f;
+const lowNib = flags8 & 0x0F;
 
-  const looksWater =
-    ((lowNib === 0x0D || lowNib === 0x0C) && (first?.texId != null)) ||
-    (first?.texId === 1392 || first?.texId === 24 || first?.texId === 1234 || first?.texId === 5678|| first?.texId === 1391
-    ) ||
-    (first?.texId != null && KNOWN_ANCIENT_WATER_TEXIDS.has(first.texId));
+const looksWater =
+  ((lowNib === 0x0D || lowNib === 0x0C) && texId0 != null) ||
+  texId0 === 1392 || texId0 === 24 || texId0 === 1391 ||
+  (texId0 != null && KNOWN_ANCIENT_WATER_TEXIDS.has(texId0));
 
-  if (looksWater) shader.flags |= ShaderFlags.Water;
-  const singleLayer = shader.layers.length === 1;
-  const hasTex      = first?.texId != null;
-  const tevPlain    = first && (first.tevMode === 0x00 || first.tevMode === 0x01 || first.tevMode === 0x02);
+if (looksWater)
+  shader.flags |= ShaderFlags.Water;
 
-  const isCutoutTex =
-    (first?.texId ===  928  || first?.texId === 791 || first?.texId === 430|| first?.texId === 573|| first?.texId === 575||
-         first?.texId === 576|| first?.texId === 577 || first?.texId === 2882|| first?.texId === 44) || first?.texId === 2046||
-    first?.texId === 2228||first?.texId === 2467||first?.texId === 2538|| first?.texId === 1798  || first?.texId === 2791
-   ||first?.texId === 574|| first?.texId === 684||  first?.texId === 96|| first?.texId === 740||first?.texId === 0|| 
-   first?.texId === 595||first?.texId === 596|| first?.texId === 593||first?.texId === 594||first?.texId === 592||
-   first?.texId === 589||      (first?.texId != null && KNOWN_CUTOUT_TEXIDS_ANCIENT.has(first.texId));
+const singleLayer = shader.layers.length === 1;
+const hasTex      = texId0 != null;
+const tevPlain    = (tev0 === 0x00 || tev0 === 0x01 || tev0 === 0x02);
 
-   if (singleLayer && hasTex && !looksWater && tevPlain && isCutoutTex) {
+const isCutoutTex =
+  texId0 === 928 || texId0 === 791 || texId0 === 430 || texId0 === 573 ||
+  texId0 === 575 || texId0 === 576 || texId0 === 577 || texId0 === 2882 ||
+  texId0 === 44  || texId0 === 2046 || texId0 === 2228 || texId0 === 2467 ||
+  texId0 === 2538 || texId0 === 1798 || texId0 === 2791 || texId0 === 574 ||
+  texId0 === 684 || texId0 === 96 || texId0 === 740 || texId0 === 0 ||
+  texId0 === 595 || texId0 === 596 || texId0 === 593 || texId0 === 594 ||
+  texId0 === 592 || texId0 === 589 ||
+  (texId0 != null && KNOWN_CUTOUT_TEXIDS_ANCIENT.has(texId0));
+
+const ancientAttrHi = attr & 0x18;
+const wantsAncientCutout = ancientAttrHi === 0x10; // 0x16-style
+const wantsAncientBlend  = ancientAttrHi === 0x18; // 0x1e-style
+
+if (!looksWater) {
+  if (wantsAncientBlend) {
+    shader.flags |= 0x40000000; // true translucent path used by your materials.ts
+  } else if (singleLayer && hasTex && tevPlain && (isCutoutTex || wantsAncientCutout)) {
     shader.flags |= ShaderFlags.AlphaCompare;
   }
+}
 
 
   return shader;

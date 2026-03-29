@@ -28,7 +28,7 @@ export interface Shader {
     layers: ShaderLayer[],
     flags: number;
     attrFlags: number;
-
+forceOpaqueNoAlphaTest?: boolean;
     hasHemisphericProbe: boolean;
 
     hasReflectiveProbe: boolean;
@@ -299,7 +299,12 @@ const isCutout    = !!(this.shader.flags & ShaderFlags.AlphaCompare) || this.sha
 const twoSidedCutout = isCutout && !isTrueTrans;
 const doCullBack     = (this.shader.flags & ShaderFlags.CullBackface) && !twoSidedCutout;
 this.mb.setCullMode(doCullBack ? GX.CullMode.BACK : GX.CullMode.NONE);
-
+if (this.shader.forceOpaqueNoAlphaTest) {
+  this.mb.setBlendMode(GX.BlendMode.NONE, GX.BlendFactor.ONE, GX.BlendFactor.ZERO, GX.LogicOp.NOOP);
+  this.mb.setZMode(true, GX.CompareType.LEQUAL, true);
+  this.mb.setAlphaCompare(GX.CompareType.ALWAYS, 0, GX.AlphaOp.AND, GX.CompareType.ALWAYS, 0);
+  return;
+}
 if (isTrueTrans) {
 
   this.mb.setBlendMode(GX.BlendMode.BLEND, GX.BlendFactor.SRCALPHA, GX.BlendFactor.INVSRCALPHA, GX.LogicOp.NOOP);

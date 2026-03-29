@@ -17,7 +17,7 @@ import { SFA_GAME_INFO, SFADEMO_GAME_INFO, DP_GAME_INFO, GameInfo } from './scen
 import { MaterialFactory } from './materials.js';
 import { SFAAnimationController, ModanimCollection, AmapCollection, AnimCollection } from './animation.js';import { SFATextureFetcher, FakeTextureFetcher, TextureFetcher } from './textures.js';import { Model, ModelRenderContext, ModelInstance, ModelFetcher, ModelShapes } from './models.js';import { World } from './world.js';
 import { EnvfxManager } from './envfx.js';
-
+import { drawDPMinimap } from './dp_minimap.js';
 import { AABB } from '../Geometry.js';
 import { LightType, WorldLights } from './WorldLights.js';
 import { computeViewMatrix } from '../Camera.js';
@@ -56,7 +56,6 @@ const MAP_MUSIC: Record<string, string> = {
     [-998]: 'dfpt.mp3',
     [-999]: 'swapcircle.mp3',
 
-    // --- Dinosaur Planet Specific Tracks ---
     'dp_2':  'dp_dragrock.mp3',     
     'dp_3':  'dp_krazoapalace.mp3',
     'dp_4':  'dp_vfp.mp3',
@@ -139,7 +138,6 @@ const DP_SCALE_MULT_BY_TYPE: Record<number, number> = {
 };
 
 const DP_SCALE_MULT_BY_MODEL: Record<number, number> = {
-    // modelId (first model in objType.modelNums)
     0x0195: 0.25, 
 };
 
@@ -172,7 +170,273 @@ export interface MapInfo {
     objectsOffset?: number;
     objectsSize?: number;
 }
+interface DPHitsDB {
+    tab: DataView;
+    bin: DataView;
+    trkblk: DataView;
+}
 
+interface DPHitLineLocal {
+    x0: number;
+    y0: number;
+    z0: number;
+    x1: number;
+    y1: number;
+    z1: number;
+    blockId: number;
+    rawTypeSettings: number;
+}
+
+function dpGetAbsoluteBlockNum(trkblk: DataView, blockInfo: BlockInfo): number | null {
+    const mod = blockInfo.mod | 0;
+    const sub = blockInfo.sub | 0;
+
+    const offs = mod * 2;
+    if (offs < 0 || offs + 2 > trkblk.byteLength)
+        return null;
+
+    const blockBase = trkblk.getUint16(offs, false);
+    return blockBase + sub;
+}
+
+function dpGetHitsRangeForBlock(
+    hitsTab: DataView,
+    hitsBin: DataView,
+    blockNum: number,
+): { start: number; end: number } | null {
+    const entryCount = hitsTab.byteLength >>> 2;
+
+    if (blockNum < 0 || blockNum + 1 >= entryCount)
+        return null;
+
+    const start = hitsTab.getUint32(blockNum * 4, false);
+    const end   = hitsTab.getUint32((blockNum + 1) * 4, false);
+
+    if (start === 0xFFFFFFFF || end === 0xFFFFFFFF)
+        return null;
+
+    if (start > hitsBin.byteLength || end > hitsBin.byteLength || end < start)
+        return null;
+
+    return { start, end };
+}
+
+function dpParseHitLinesForBlock(
+    hitsTab: DataView,
+    hitsBin: DataView,
+    blockNum: number,
+    blockBaseX: number,
+    blockBaseZ: number,
+): DPHitLineLocal[] {
+    const range = dpGetHitsRangeForBlock(hitsTab, hitsBin, blockNum);
+    if (!range)
+        return [];
+
+    const out: DPHitLineLocal[] = [];
+    const LINE_SIZE = 0x14;
+
+    for (let offs = range.start; offs + LINE_SIZE <= range.end; offs += LINE_SIZE) {
+        const ax = hitsBin.getInt16(offs + 0x00, false);
+        const bx = hitsBin.getInt16(offs + 0x02, false);
+        const ay = hitsBin.getInt16(offs + 0x04, false);
+        const by = hitsBin.getInt16(offs + 0x06, false);
+        const az = hitsBin.getInt16(offs + 0x08, false);
+        const bz = hitsBin.getInt16(offs + 0x0A, false);
+
+        const settingsA = hitsBin.getUint8(offs + 0x0E);
+        let settingsB   = hitsBin.getUint8(offs + 0x0F);
+
+        if (ax < 0 || bx < 0 || ax > 640 || bx > 640)
+            settingsB = 0x40;
+        if (az < 0 || bz < 0 || az > 640 || bz > 640)
+            settingsB = 0x40;
+
+        if (settingsB === 0x40)
+            continue;
+
+        out.push({
+            x0: blockBaseX + ax,
+            y0: ay,
+            z0: blockBaseZ + az,
+            x1: blockBaseX + bx,
+            y1: by,
+            z1: blockBaseZ + bz,
+            blockId: blockNum,
+            rawTypeSettings: (settingsA << 8) | settingsB,
+        });
+    }
+
+    return out;
+}
+interface DPHitLineRawLocal {
+    ax: number;
+    ay: number;
+    az: number;
+    bx: number;
+    by: number;
+    bz: number;
+    rawTypeSettings: number;
+}
+
+function dpReadRawHitLinesForRange(
+    hitsBin: DataView,
+    start: number,
+    end: number,
+): DPHitLineRawLocal[] {
+    const out: DPHitLineRawLocal[] = [];
+    const LINE_SIZE = 0x14;
+
+    for (let offs = start; offs + LINE_SIZE <= end; offs += LINE_SIZE) {
+        let allZero = true;
+        for (let i = 0; i < LINE_SIZE; i++) {
+            if (hitsBin.getUint8(offs + i) !== 0) {
+                allZero = false;
+                break;
+            }
+        }
+        if (allZero)
+            continue;
+
+        out.push({
+            ax: hitsBin.getInt16(offs + 0x00, false),
+            bx: hitsBin.getInt16(offs + 0x02, false),
+            ay: hitsBin.getInt16(offs + 0x04, false),
+            by: hitsBin.getInt16(offs + 0x06, false),
+            az: hitsBin.getInt16(offs + 0x08, false),
+            bz: hitsBin.getInt16(offs + 0x0A, false),
+            rawTypeSettings: hitsBin.getUint16(offs + 0x0E, false),
+        });
+    }
+
+    return out;
+}
+
+function dpOverflow1D(v: number, min: number, max: number): number {
+    if (v < min) return min - v;
+    if (v > max) return v - max;
+    return 0;
+}
+
+function dpGetBlockLocalXZBounds(inst: ModelInstance | null): { minX: number; maxX: number; minZ: number; maxZ: number } | null {
+    if (!inst)
+        return null;
+
+    const model: any = (inst as any).model;
+    const bbox: any = model?.bbox ?? model?.aabb ?? model?.modelBounds ?? null;
+    if (!bbox)
+        return null;
+
+    if (
+        typeof bbox.minX === 'number' &&
+        typeof bbox.maxX === 'number' &&
+        typeof bbox.minZ === 'number' &&
+        typeof bbox.maxZ === 'number'
+    ) {
+        return {
+            minX: bbox.minX,
+            maxX: bbox.maxX,
+            minZ: bbox.minZ,
+            maxZ: bbox.maxZ,
+        };
+    }
+
+    return null;
+}
+
+function dpScoreSharedHitsAgainstBlock(
+    rawLines: DPHitLineRawLocal[],
+    inst: ModelInstance | null,
+): number {
+    const bounds = dpGetBlockLocalXZBounds(inst);
+    if (!bounds)
+        return Number.POSITIVE_INFINITY;
+
+    const PAD = 4;
+
+    const minX = bounds.minX - PAD;
+    const maxX = bounds.maxX + PAD;
+    const minZ = bounds.minZ - PAD;
+    const maxZ = bounds.maxZ + PAD;
+
+    let overflow = 0;
+
+    let lineMinX = Number.POSITIVE_INFINITY;
+    let lineMaxX = Number.NEGATIVE_INFINITY;
+    let lineMinZ = Number.POSITIVE_INFINITY;
+    let lineMaxZ = Number.NEGATIVE_INFINITY;
+
+    for (const l of rawLines) {
+        overflow += dpOverflow1D(l.ax, minX, maxX);
+        overflow += dpOverflow1D(l.az, minZ, maxZ);
+        overflow += dpOverflow1D(l.bx, minX, maxX);
+        overflow += dpOverflow1D(l.bz, minZ, maxZ);
+
+        if (l.ax < lineMinX) lineMinX = l.ax;
+        if (l.bx < lineMinX) lineMinX = l.bx;
+        if (l.ax > lineMaxX) lineMaxX = l.ax;
+        if (l.bx > lineMaxX) lineMaxX = l.bx;
+
+        if (l.az < lineMinZ) lineMinZ = l.az;
+        if (l.bz < lineMinZ) lineMinZ = l.bz;
+        if (l.az > lineMaxZ) lineMaxZ = l.az;
+        if (l.bz > lineMaxZ) lineMaxZ = l.bz;
+    }
+
+    const boundsW = Math.max(0, maxX - minX);
+    const boundsD = Math.max(0, maxZ - minZ);
+    const linesW  = Math.max(0, lineMaxX - lineMinX);
+    const linesD  = Math.max(0, lineMaxZ - lineMinZ);
+
+    // Prefer tighter-fitting blocks when overflow ties.
+    const slackX = Math.max(0, boundsW - linesW);
+    const slackZ = Math.max(0, boundsD - linesD);
+
+    const lineCenterX = (lineMinX + lineMaxX) * 0.5;
+    const lineCenterZ = (lineMinZ + lineMaxZ) * 0.5;
+    const blockCenterX = (minX + maxX) * 0.5;
+    const blockCenterZ = (minZ + maxZ) * 0.5;
+
+    const centerDist =
+        Math.abs(lineCenterX - blockCenterX) +
+        Math.abs(lineCenterZ - blockCenterZ);
+
+    const boundsArea = boundsW * boundsD;
+
+    // Lower is better.
+    return (
+        overflow * 1000000 +
+        (slackX + slackZ) * 64 +
+        centerDist * 4 +
+        boundsArea * 0.001
+    );
+}
+function dpScoreHitLinesForCellLocal(lines: DPHitLineLocal[]): number {
+    let score = 0;
+
+    for (const l of lines) {
+        const pts: [number, number][] = [
+            [l.x0, l.z0],
+            [l.x1, l.z1],
+        ];
+
+        for (const [x, z] of pts) {
+            const overX = x < 0 ? -x : (x > 640 ? x - 640 : 0);
+            const overZ = z < 0 ? -z : (z > 640 ? z - 640 : 0);
+            score -= (overX + overZ) * 16;
+            if (overX === 0) score += 4;
+            if (overZ === 0) score += 4;
+        }
+    }
+
+    return score;
+}
+function transformMapPoint(m: mat4, x: number, y: number, z: number): vec3 {
+    return vec3.fromValues(
+        m[0] * x + m[4] * y + m[8]  * z + m[12],
+        m[1] * x + m[5] * y + m[9]  * z + m[13],
+        m[2] * x + m[6] * y + m[10] * z + m[14],
+    );
+}
 export function getBlockInfo(mapsBin: DataView, mapInfo: MapInfo, x: number, y: number): BlockInfo | null {
     const blockIndex = y * mapInfo.blockCols + x;
     const blockInfo = mapsBin.getUint32(mapInfo.blockTableOffset + 4 * blockIndex);
@@ -263,7 +527,9 @@ interface MapSceneInfo {
     getBlockInfoAt(col: number, row: number): BlockInfo | null;
     getOrigin(): number[];
     getObjectsData?(): DataView | null;
+    getDPHitsDB?(): DPHitsDB | null;
 }
+
 interface MapInstanceOptions {
     objectManager?: ObjectManager;
     worldOffsetX?: number;
@@ -336,11 +602,9 @@ type DPPositionVariantOverride = {
 };
 
 const DP_POSITION_VARIANT_OVERRIDES: DPPositionVariantOverride[] = [
-    // CBeacon exact model IDs from your OBJECTS.bin dump
     { x: -8850.365, y: -793.250, z: -6652.035, modelId: 0x03B1 }, // sun
     { x: -7150.133, y: -793.250, z: -8068.040, modelId: 0x03B2 }, // moon
 
-    // White mushrooms only
     { x: -7321.163, y:  -718.000, z: -3094.313, modelId: DP_WHITE_MUSHROOM_MODEL_ID },
     { x: -6529.629, y:  -809.000, z: -2214.204, modelId: DP_WHITE_MUSHROOM_MODEL_ID },
     { x: -6787.717, y:  -707.172, z: -2438.862, modelId: DP_WHITE_MUSHROOM_MODEL_ID },
@@ -428,7 +692,6 @@ if (!skipObjindex) {
                 realType = 0;
         }
     } else {
-        // Out of OBJINDEX range entirely
         if (typeNum > dpMaxRomType)
             realType = 0;
     }
@@ -667,6 +930,45 @@ const scratchVec3a = vec3.create();
 function dpHex(v: number, width: number = 4): string {
     return (v >>> 0).toString(16).padStart(width, '0');
 }
+function logUniqueTextureRequest(tag: string, mapId: string | number, id: number, useTex1: boolean): void {
+    const w = window as any;
+    const root = (w.__sfaTexReqLog ??= {});
+
+    const bucketKey = `${tag}:${String(mapId)}`;
+    let bucket = root[bucketKey] as {
+        tag: string;
+        mapId: string | number;
+        seen: Set<string>;
+        requests: Array<{ id: number; hex: string; bank: 'TEX0' | 'TEX1' }>;
+    } | undefined;
+
+    if (!bucket) {
+        bucket = root[bucketKey] = {
+            tag,
+            mapId,
+            seen: new Set<string>(),
+            requests: [],
+        };
+    }
+
+    const texId = id >>> 0;
+    const bank: 'TEX0' | 'TEX1' = useTex1 ? 'TEX1' : 'TEX0';
+    const dedupeKey = `${bank}:${texId}`;
+
+    if (bucket.seen.has(dedupeKey))
+        return;
+
+    bucket.seen.add(dedupeKey);
+    bucket.requests.push({
+        id: texId,
+        hex: `0x${texId.toString(16).toUpperCase()}`,
+        bank,
+    });
+
+    console.warn(
+       // `[${tag} TEX REQ] map=${mapId} id=${texId} hex=0x${texId.toString(16).toUpperCase()} bank=${bank}`
+    );
+}
 async function loadDPExternalObjectNames(
     dataFetcher: DataFetcher,
     gameInfo: GameInfo,
@@ -688,7 +990,7 @@ async function loadDPExternalObjectNames(
             const idHex = parts[0];
             const id = Number.parseInt(idHex, 16);
             if (!Number.isFinite(id)) continue;
-            if (out.has(id)) continue; // keep first entry only
+            if (out.has(id)) continue; 
 
             const name = parts.slice(2).join(' ').trim();
             if (!name) continue;
@@ -773,18 +1075,19 @@ export class MapInstance {
     public setBlockFetcher(blockFetcher: BlockFetcher) {
         this.blockFetcher = blockFetcher;
     }
-    private matrix: mat4 = mat4.create(); // map-to-world
-    private invMatrix: mat4 = mat4.create(); // world-to-map
+    private matrix: mat4 = mat4.create(); 
+    private invMatrix: mat4 = mat4.create();
     private numRows: number;
     private numCols: number;
-    private blockInfoTable: (BlockInfo | null)[][] = []; // Addressed by blockInfoTable[z][x]
-    private blocks: (ModelInstance | null)[][] = []; // Addressed by blocks[z][x]
-    public objects: ObjectInstance[] = []; // NEW: Array to store character and prop models
-
+    private blockInfoTable: (BlockInfo | null)[][] = []; 
+    private blocks: (ModelInstance | null)[][] = []; 
+    public objects: ObjectInstance[] = []; 
+    public hitLines: DPHitLineLocal[] = [];
+    private dpHitsDB: DPHitsDB | null = null;
     constructor(public info: MapSceneInfo, private blockFetcher: BlockFetcher, public mapOpts?: MapInstanceOptions, public world?: World) {
         this.numRows = info.getNumRows();
         this.numCols = info.getNumCols();
-
+        this.dpHitsDB = info.getDPHitsDB?.() ?? null;
         for (let y = 0; y < this.numRows; y++) {
             const row: (BlockInfo | null)[] = [];
             for (let x = 0; x < this.numCols; x++) {
@@ -1018,7 +1321,15 @@ this.objects.push(objInst);
         mat4.copy(this.matrix, matrix);
         mat4.invert(this.invMatrix, matrix);
     }
-
+    public getMapMatrix(): mat4 {
+        return this.matrix;
+    }
+    public worldToMapPoint(x: number, y: number, z: number, dst: vec3 = vec3.create()): vec3 {
+    dst[0] = this.invMatrix[0] * x + this.invMatrix[4] * y + this.invMatrix[8]  * z + this.invMatrix[12];
+    dst[1] = this.invMatrix[1] * x + this.invMatrix[5] * y + this.invMatrix[9]  * z + this.invMatrix[13];
+    dst[2] = this.invMatrix[2] * x + this.invMatrix[6] * y + this.invMatrix[10] * z + this.invMatrix[14];
+    return dst;
+}
     public getNumDrawSteps(): number {
         return 3;
     }
@@ -1070,10 +1381,9 @@ public getObjectWorldPosition(obj: ObjectInstance, dst: vec3 = vec3.create()): v
             b.block.addRenderInsts(device, renderInstManager, modelCtx, renderLists, scratchMtx0);
         }
 
-        const showAllObjects = (modelCtx as any).showAllObjects !== false;
-        if (showAllObjects) {
+const showAllObjects = (modelCtx as any).showAllObjects === true;
+if (showAllObjects) {
 for (let obj of this.objects) {
-                // Use the pre-calculated flag to save CPU cycles
                 if ((obj as any)._isDevDP && !(modelCtx as any).showDevObjects)
                     continue;
 
@@ -1103,6 +1413,7 @@ for (let obj of this.objects) {
 
     public async reloadBlocks(dataFetcher: DataFetcher) {
         this.clearBlocks();
+                this.hitLines = [];
         for (let z = 0; z < this.numRows; z++) {
             this.blocks[z] = new Array(this.numCols).fill(null);
         }
@@ -1123,6 +1434,43 @@ for (let obj of this.objects) {
             }
         }
         await Promise.all(tasks);
+if (this.dpHitsDB) {
+    this.hitLines = [];
+
+    for (let z = 0; z < this.numRows; z++) {
+        for (let x = 0; x < this.numCols; x++) {
+            const blockInfo = this.blockInfoTable[z][x];
+            if (!blockInfo)
+                continue;
+
+            const blockNum = dpGetAbsoluteBlockNum(this.dpHitsDB.trkblk, blockInfo);
+            if (blockNum === null)
+                continue;
+
+            const blockBaseX = x * 640;
+            const blockBaseZ = z * 640;
+
+            const lines = dpParseHitLinesForBlock(
+                this.dpHitsDB.tab,
+                this.dpHitsDB.bin,
+                blockNum,
+                blockBaseX,
+                blockBaseZ,
+            );
+
+            if (lines.length > 0) {
+                console.warn(
+                  //  `[DP HITS] cell=(${x},${z}) mod=${blockInfo.mod} sub=${blockInfo.sub} ` +
+                 //   `blockNum=${blockNum} lines=${lines.length}`
+                );
+            }
+
+            this.hitLines.push(...lines);
+        }
+    }
+
+  //  console.warn(`[DP HITS] parsed ${this.hitLines.length} line segments for current map`);
+}
     }
 
     public destroy(device: GfxDevice) {
@@ -1145,6 +1493,35 @@ export async function loadMap(gameInfo: GameInfo, dataFetcher: DataFetcher, mapN
 
     const mapInfo = getMapInfo(mapsTab.createDataView(), mapsBin.createDataView(), mapNum);
     const blockTable = getBlockTable(mapInfo);
+    let dpHitsDB: DPHitsDB | null = null;
+    const isDPPath = pathBase.toLowerCase().includes('dinosaurplanet');
+
+    try {
+        const trkblkName = isDPPath ? 'TRKBLK.bin' : 'TRKBLK.tab';
+
+        const [hitsTabBuf, hitsBinBuf, trkblkBuf] = await Promise.all([
+            dataFetcher.fetchData(`${pathBase}/HITS.tab`, { allow404: true }),
+            dataFetcher.fetchData(`${pathBase}/HITS.bin`, { allow404: true }),
+            dataFetcher.fetchData(`${pathBase}/${trkblkName}`, { allow404: true }),
+        ]);
+
+        const hitsTab = hitsTabBuf.createDataView();
+        const hitsBin = hitsBinBuf.createDataView();
+        const trkblk  = trkblkBuf.createDataView();
+
+        if (hitsTab.byteLength > 0 && hitsBin.byteLength > 0 && trkblk.byteLength > 0) {
+            dpHitsDB = {
+                tab: hitsTab,
+                bin: hitsBin,
+                trkblk,
+            };
+
+          //  console.warn(`[MAP HITS] enabled for ${pathBase} map ${mapNum} using ${trkblkName}`);
+        }
+    } catch (e) {
+        console.warn(`Failed to load map HITS for ${pathBase} map ${mapNum}`, e);
+    
+    }
 return {
         getNumCols() { return mapInfo.blockCols; },
         getNumRows() { return mapInfo.blockRows; },
@@ -1154,12 +1531,14 @@ return {
         getOrigin(): number[] {
             return [mapInfo.originX, mapInfo.originZ];
         },
-        // ADD THIS BLOCK
         getObjectsData(): DataView | null {
             if (mapInfo.objectsOffset !== undefined && mapInfo.objectsSize !== undefined && mapInfo.objectsSize > 0) {
                 return dataSubarray(mapInfo.mapsBin, mapInfo.objectsOffset, mapInfo.objectsSize);
             }
             return null;
+        },
+        getDPHitsDB(): DPHitsDB | null {
+            return dpHitsDB;
         }
     };
 }
@@ -1181,12 +1560,38 @@ class MapSceneRenderer extends SFARenderer {
     public showAllObjects = true;
     public isDPMapScene = false;
     public mapNum: string | number = -1;
+    public dpMinimapMapId: number = -1;
+public showMinimap = true;
 public textureHolder: UI.TextureListHolder = { viewerTextures: [], onnewtextures: null };
     private blockFetcherFactory?: () => Promise<BlockFetcher>;
     private map: MapInstance;
     private dataFetcher!: DataFetcher;
 private currentGameInfo!: GameInfo;
 private currentTexFetcher: any;
+private dpOverlayUIHidden = false;
+
+private readonly onDPOverlayHideHotkey = (ev: KeyboardEvent) => {
+    if (!this.isDPMapScene)
+        return;
+
+    if (ev.repeat)
+        return;
+
+    const tag = (ev.target as HTMLElement | null)?.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT')
+        return;
+
+    if (ev.key === 'z' || ev.key === 'Z') {
+        this.dpOverlayUIHidden = !this.dpOverlayUIHidden;
+
+        const topBar = document.getElementById('dp-top-toggle-bar') as HTMLDivElement | null;
+        if (topBar)
+            topBar.style.display = this.dpOverlayUIHidden ? 'none' : 'flex';
+
+        if (this.dpOverlayUIHidden)
+            this.clearSelectedDebugObject();
+    }
+};
 private pendingSkyRebuild = false;
 private rebuildSky(texFetcher: any, gameInfo: GameInfo): void {
     if (!this.envfxMan) return;
@@ -1210,9 +1615,10 @@ private rebuildSky(texFetcher: any, gameInfo: GameInfo): void {
     public worldLights: WorldLights = new WorldLights();
     private timeSelect?: UI.Slider;
     private envSelect?: UI.Slider;
-    private sky: Sky | null = null;
-        public showObjectLabels = false;
-    private selectedObject: ObjectInstance | null = null;
+private sky: Sky | null = null;
+public showObjectLabels = false;
+public showHits = false;
+private selectedObject: ObjectInstance | null = null;
 private projectedObjectLabels: Array<{
     obj: ObjectInstance;
     x: number;
@@ -1394,19 +1800,113 @@ if (rawParams && rawParams.byteLength >= 0x1C) {
 
     return lines;
 }
+private drawDPHitOverlay(viewerInput: Viewer.ViewerRenderInput): void {
+if (this.dpOverlayUIHidden)
+    return;
 
-    private drawObjectDebugOverlay(viewerInput: Viewer.ViewerRenderInput): void {
-        const ctx = getDebugOverlayCanvas2D() as CanvasRenderingContext2D | null;
-        if (!ctx)
-            return;
+    if (!this.isDPMapScene)
+        return;
 
-        const canvas = ctx.canvas;
+    if (!this.showHits)
+        return;
+
+    if (!this.map.hitLines || this.map.hitLines.length === 0)
+        return;
+
+    const ctx = getDebugOverlayCanvas2D() as CanvasRenderingContext2D | null;
+    if (!ctx)
+        return;
+
+    const canvas = ctx.canvas;
+    const clipFromWorld = getClipFromWorldMatrix(viewerInput);
+    if (!clipFromWorld)
+        return;
+
+    const mapMtx = this.map.getMapMatrix();
+
+    ctx.save();
+    ctx.strokeStyle = 'rgba(0,255,255,0.95)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+
+    for (const l of this.map.hitLines) {
+        const a = transformMapPoint(mapMtx, l.x0, l.y0, l.z0);
+        const b = transformMapPoint(mapMtx, l.x1, l.y1, l.z1);
+
+        const p0 = projectWorldToCanvas(clipFromWorld, canvas, a[0], a[1], a[2]);
+        const p1 = projectWorldToCanvas(clipFromWorld, canvas, b[0], b[1], b[2]);
+
+        if (!p0 || !p1)
+            continue;
+
+        ctx.moveTo(p0.x, p0.y);
+        ctx.lineTo(p1.x, p1.y);
+    }
+
+    ctx.stroke();
+    ctx.restore();
+}
+private drawDPMinimapOverlay(viewerInput: Viewer.ViewerRenderInput): void {
+    if (this.dpOverlayUIHidden)
+        return;
+
+    if (!this.isDPMapScene)
+        return;
+    if (!this.showMinimap)
+        return;
+    if (this.dpMinimapMapId < 0)
+        return;
+
+    const ctx = getDebugOverlayCanvas2D() as CanvasRenderingContext2D | null;
+    if (!ctx)
+        return;
+
+    const cache = ((this.materialFactory as any).cache ?? (this.materialFactory as any).getCache?.()) as any;
+    if (!cache)
+        return;
+
+    const texFetcher = this.currentTexFetcher as any;
+    if (!texFetcher || typeof texFetcher.getTextureByTextable !== 'function')
+        return;
+
+    drawDPMinimap({
+        ctx,
+        mapID: this.dpMinimapMapId,
+        cameraWorldMatrix: viewerInput.camera.worldMatrix,
+        worldToMapPoint: (x: number, y: number, z: number) => this.map.worldToMapPoint(x, y, z),
+        origin: this.map.info.getOrigin() as [number, number],
+        numCols: this.map.info.getNumCols(),
+        numRows: this.map.info.getNumRows(),
+        texFetcher,
+        cache,
+    });
+}
+
+private drawObjectDebugOverlay(viewerInput: Viewer.ViewerRenderInput): void {
+    const ctx = getDebugOverlayCanvas2D() as CanvasRenderingContext2D | null;
+    if (!ctx)
+        return;
+
+    const canvas = ctx.canvas;
+
+    if (this.dpOverlayUIHidden) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         this.projectedObjectLabels = [];
-        ctx.save();
-        ctx.font = '12px sans-serif';
-        ctx.textBaseline = 'middle';
-        ctx.lineWidth = 3;
+        return;
+    }
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    this.projectedObjectLabels = [];
+    ctx.save();
+
+const labelFontPx = 20;
+const labelLineH = 24;
+
+const infoFontPx = 16;
+const infoLineH = 20;
+ctx.textBaseline = 'middle';
+ctx.lineWidth = 3;
+ctx.font = `${labelFontPx}px sans-serif`;
         if (!this.isDPMapScene)
             return;
         if (!this.showObjectLabels && !this.selectedObject)
@@ -1421,10 +1921,8 @@ if (rawParams && rawParams.byteLength >= 0x1C) {
                 continue;
 
             const mi = (obj as any).modelInst as ModelInstance | undefined;
-            const firstTexId = getFirstDebugTexId(mi);
-            const lines = this.buildObjectDebugLines(obj);
-            const label = firstTexId !== null ? `${lines[0]} [tex 0x${dpHex(firstTexId)}]` : lines[0];
-
+const lines = this.buildObjectDebugLines(obj);
+const label = lines[0];
             const worldPos = this.map.getObjectWorldPosition(obj, scratchVec3a);
             const screen = projectWorldToCanvas(clipFromWorld, canvas, worldPos[0], worldPos[1] + 20, worldPos[2]);
             if (!screen)
@@ -1437,7 +1935,7 @@ this.projectedObjectLabels.push({
     label,
     lines,
     w: Math.ceil(ctx.measureText(label).width),
-    h: 16,
+    h: labelLineH,
 });
         }
 
@@ -1457,7 +1955,7 @@ this.projectedObjectLabels.push({
                 ctx.fillText(e.label, e.x + 8, e.y);
             }
         }
-
+ctx.font = `${infoFontPx}px monospace`;
         if (this.selectedObject) {
             const selectedEntry =
                 this.projectedObjectLabels.find((e) => e.obj === this.selectedObject) ??
@@ -1469,9 +1967,9 @@ this.projectedObjectLabels.push({
             for (const line of lines)
                 boxW = Math.max(boxW, Math.ceil(ctx.measureText(line).width) + 16);
 
-            const boxH = 10 + lines.length * lineH + 8;
-            const boxX = 8;
-            const boxY = canvas.height - boxH - 8;
+const boxH = 10 + lines.length * lineH + 8;
+const boxX = (this.isDPMapScene && this.showMinimap) ? 400 : 8;
+const boxY = canvas.height - boxH - 8;
 
             ctx.fillStyle = 'rgba(0,0,0,0.78)';
             ctx.fillRect(boxX, boxY, boxW, boxH);
@@ -1573,11 +2071,14 @@ public async create(info: MapSceneInfo, gameInfo: GameInfo, dataFetcher: DataFet
     this.isDPMapScene = !!mapOpts?.dpMapScene;
     this.map = new MapInstance(info, blockFetcher, mapOpts);
 
-    if (this.isDPMapScene)
+    if (this.isDPMapScene) {
         this.installObjectDebugPicking();
-        await this.map.reloadBlocks(dataFetcher);
+        window.addEventListener('keydown', this.onDPOverlayHideHotkey, true);
+    }
 
-        const texFetcher = (blockFetcher as any).texFetcher;
+    await this.map.reloadBlocks(dataFetcher);
+
+    const texFetcher = (blockFetcher as any).texFetcher;
         this.currentGameInfo = gameInfo;
         this.currentTexFetcher = texFetcher;
         if (texFetcher?.textureHolder)
@@ -1663,7 +2164,9 @@ protected override update(viewerInput: Viewer.ViewerRenderInput) {
         this.envfxMan.update(this.context.device, { viewerInput });
     }
 
-    this.drawObjectDebugOverlay(viewerInput);
+this.drawObjectDebugOverlay(viewerInput);
+this.drawDPHitOverlay(viewerInput);
+this.drawDPMinimapOverlay(viewerInput);
 }
 
 
@@ -1719,6 +2222,7 @@ const modelCtx = {
 public override destroy(device: GfxDevice) {
     if (this.isDPMapScene)
         cleanupDPUI();
+    window.removeEventListener('keydown', this.onDPOverlayHideHotkey, true);
 
     if (this.debugOverlayCanvas) {
         window.removeEventListener('mousedown', this.onDebugOverlayMouseDown, true);
@@ -1743,6 +2247,7 @@ function cleanupDPUI(): void {
     (window as any).__dpObjectsToggle = undefined;
     (window as any).__dpDevObjectsToggle = undefined;
     (window as any).__dpObjectLabelsToggle = undefined;
+    (window as any).__dpHitsToggle = undefined;
 }
 function cleanupTextureToggleUI(): void {
     const state = (window as any).__sfaTextureToggle as {
@@ -1944,6 +2449,66 @@ getDPTopToggleBar().appendChild(wrap);
 
   state.cb.addEventListener('change', state.handler);
 }
+
+function ensureDPHitsUI(
+  onChange: (enabled: boolean) => void | Promise<void>,
+  initial?: boolean
+): void {
+  type ToggleState = {
+    wrap: HTMLDivElement;
+    cb: HTMLInputElement;
+    handler: ((e: Event) => void) | null;
+    last?: boolean;
+  };
+
+  let state = (window as any).__dpHitsToggle as ToggleState | undefined;
+
+  if (!state) {
+    const wrap = document.createElement('div');
+    wrap.style.padding = '1px 3px';
+    wrap.style.background = 'rgba(0,0,0,0.5)';
+    wrap.style.color = '#fff';
+    wrap.style.font = '11px sans-serif';
+    wrap.style.borderRadius = '2px';
+    wrap.style.display = 'flex';
+    wrap.style.alignItems = 'center';
+    wrap.style.height = '20px';
+    wrap.style.boxSizing = 'border-box';
+    wrap.style.order = '5';
+
+    const label = document.createElement('label');
+    label.style.cursor = 'pointer';
+    label.style.display = 'flex';
+    label.style.alignItems = 'center';
+    label.style.lineHeight = '1';
+
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.style.marginRight = '1px';
+
+    label.appendChild(cb);
+    label.appendChild(document.createTextNode('HITS'));
+    wrap.appendChild(label);
+    getDPTopToggleBar().appendChild(wrap);
+
+    state = { wrap, cb, handler: null, last: false };
+    (window as any).__dpHitsToggle = state;
+  }
+
+  if (state.handler)
+    state.cb.removeEventListener('change', state.handler);
+
+  const desired = (typeof initial === 'boolean') ? initial : (state.last ?? false);
+  state.cb.checked = desired;
+
+  state.handler = async () => {
+    state!.last = state!.cb.checked;
+    await onChange(state!.cb.checked);
+  };
+
+  state.cb.addEventListener('change', state.handler);
+}
+
 function ensureTextureToggleUI(
   onChange: (enabled: boolean) => void | Promise<void>,
   initial?: boolean
@@ -2174,6 +2739,13 @@ mapRenderer.mapNum = `ancient_${this.mapKey}`;
 
 const texFetcher = await SFATextureFetcher.create(this.gameInfo, dataFetcher, false);
 texFetcher.setModelVersion(ModelVersion.AncientMap);
+texFetcher.setCurrentModelID(Number(this.mapKey));
+const ancientLogMapId = `ancient_${String(this.mapKey)}`;
+const ancientOrigGetTexture = (texFetcher as any).getTexture.bind(texFetcher);
+(texFetcher as any).getTexture = function(cache: any, id: number, useTex1: boolean) {
+    logUniqueTextureRequest('ANCIENTMAP', ancientLogMapId, id, useTex1);
+    return ancientOrigGetTexture(cache, id, useTex1);
+};
 
 const folders = ANCIENT_TEXTURE_FOLDERS[String(this.mapKey)] ?? [];
 if (Number(this.mapKey) !== 0) {
@@ -2228,46 +2800,7 @@ texFetcher.setPngOverride(3005, 'textures/shoppurple4.png');
 texFetcher.setPngOverride(3006, 'textures/shoppurple5.png'); 
 }
 
-if (Number(this.mapKey) === 0) {
-texFetcher.setPngOverride(2037, 'textures/wgfloor1.png');
-texFetcher.setPngOverride(2036, 'textures/wgfloor2.png');
-texFetcher.setPngOverride(2035, 'textures/wgfloor3.png');
-texFetcher.setPngOverride(2034, 'textures/wgwall1.png');
-texFetcher.setPngOverride(2033, 'textures/wgwall2.png');
-texFetcher.setPngOverride(2032, 'textures/wgwall3.png');
-texFetcher.setPngOverride(2031, 'textures/wgwall4.png');
-texFetcher.setPngOverride(2030, 'textures/wgfloor4.png');
-texFetcher.setPngOverride(2029, 'textures/wgwall5.png');
-texFetcher.setPngOverride(2028, 'textures/wgfloor5.png');
-texFetcher.setPngOverride(2027, 'textures/wgdirt.png');
-texFetcher.setPngOverride(2026, 'textures/wgfloor6.png');
-texFetcher.setPngOverride(2025, 'textures/wgwall6.png');
-texFetcher.setPngOverride(2024, 'textures/wgwall7.png');
-texFetcher.setPngOverride(2023, 'textures/wgwall8.png');
-texFetcher.setPngOverride(2022, 'textures/wgwall9.png');
-texFetcher.setPngOverride(2021, 'textures/wgrock.png');
-texFetcher.setPngOverride(2020, 'textures/wgwall10.png');
-texFetcher.setPngOverride(2019, 'textures/wgwall11.png');
-texFetcher.setPngOverride(2018, 'textures/wgfloor7.png');
-texFetcher.setPngOverride(2017, 'textures/wgwall12.png');
-texFetcher.setPngOverride(2016, 'textures/wgwall13.png');
-texFetcher.setPngOverride(2015, 'textures/wgvines.png');
-texFetcher.setPngOverride(2014, 'textures/wgwall14.png');
-texFetcher.setPngOverride(2013, 'textures/wgwall15.png');
-texFetcher.setPngOverride(2012, 'textures/wgwall16.png');
-texFetcher.setPngOverride(2011, 'textures/wgwall17.png');
-texFetcher.setPngOverride(2010, 'textures/wgwall18.png');
-texFetcher.setPngOverride(2009, 'textures/wgwall19.png');
-texFetcher.setPngOverride(2008, 'textures/wgwall20.png');
-texFetcher.setPngOverride(2007, 'textures/wgwall21.png');
-texFetcher.setPngOverride(2006, 'textures/wgwall22.png');
-texFetcher.setPngOverride(2005, 'textures/wgwall23.png');
-texFetcher.setPngOverride(2004, 'textures/wgrim.png');
-texFetcher.setPngOverride(2003, 'textures/wghead.png');
-texFetcher.setPngOverride(2002, 'textures/wghead2.png');
-texFetcher.setPngOverride(2001, 'textures/wghead3.png');
-texFetcher.setPngOverride(2000, 'textures/wghead4.png');
-}
+
 await texFetcher.preloadPngOverrides((materialFactory as any).cache ?? (materialFactory as any).getCache?.(), dataFetcher);
 
 const blockFetcher = await AncientBlockFetcher.create(
@@ -3124,7 +3657,7 @@ async function ensureDPMPEGVoiceUI(dataFetcher: DataFetcher, gameInfo: GameInfo)
     toggleWrap.id = 'dp-mpeg-voice-toggle';
     toggleWrap.style.height = '20px';
 toggleWrap.style.boxSizing = 'border-box';
-toggleWrap.style.order = '5';
+toggleWrap.style.order = '6';
     toggleWrap.style.padding = '1px 3px';
     toggleWrap.style.background = 'rgba(0,0,0,0.5)';
     toggleWrap.style.color = '#fff';
@@ -3526,7 +4059,8 @@ public async createScene(device: GfxDevice, context: SceneContext): Promise<View
         const mapSceneInfo = await loadMap(gInfo, context.dataFetcher, this.mapNum);
         
         const mapRenderer = new MapSceneRenderer(context, animController, materialFactory);  
-        (mapRenderer as any).mapNum = `dp_${this.mapNum}`;      
+        (mapRenderer as any).mapNum = `dp_${this.mapNum}`;   
+        mapRenderer.dpMinimapMapId = this.mapNum;   
         const texFetcher = await SFATextureFetcher.create(gInfo, context.dataFetcher, false);
         texFetcher.setModelVersion(ModelVersion.DinosaurPlanet);
 
@@ -3601,13 +4135,10 @@ requiredModels.add(0x03EB);
         let pointSampler: any = null;
         const shownTextures = new Set<any>(); 
 const origGetTexture = (texFetcher as any).getTexture.bind(texFetcher);
-(window as any).__dpTexReqCount = 0;
+const dpLogMapId = `dp_${this.mapNum}`;
 
 (texFetcher as any).getTexture = function(cache: any, id: number, useTex1: boolean) {
-    if ((window as any).__dpTexReqCount < 300) {
-      //  console.warn(`[DP TEX REQ] id=${id} bank=${useTex1 ? 'TEX1' : 'TEX0'}`);
-        (window as any).__dpTexReqCount++;
-    }
+    logUniqueTextureRequest('DP', dpLogMapId, id, useTex1);
 
     const res = origGetTexture(cache, id, useTex1);
 
@@ -3616,14 +4147,17 @@ const origGetTexture = (texFetcher as any).getTexture.bind(texFetcher);
         if (!shownTextures.has(vt)) {
             shownTextures.add(vt);
             this.textureHolder.viewerTextures.push(vt);
-            if (this.textureHolder.onnewtextures) this.textureHolder.onnewtextures();
+            if (this.textureHolder.onnewtextures)
+                this.textureHolder.onnewtextures();
         }
 
         const cutoutTextures = [0];
         if (cutoutTextures.includes(id)) {
-            if (!pointSampler) pointSampler = cache.device.createSampler({
-                wrapS: 1, wrapT: 1, minFilter: 0, magFilter: 0, mipFilter: 0, minLOD: 0, maxLOD: 100,
-            });
+            if (!pointSampler) {
+                pointSampler = cache.device.createSampler({
+                    wrapS: 1, wrapT: 1, minFilter: 0, magFilter: 0, mipFilter: 0, minLOD: 0, maxLOD: 100,
+                });
+            }
             res.gfxSampler = pointSampler;
         }
     }
@@ -3675,6 +4209,11 @@ ensureDPObjectLabelsUI(async (enabled: boolean) => {
     if (!enabled)
         mapRenderer.clearSelectedDebugObject();
 }, false);
+mapRenderer.showHits = false;
+ensureDPHitsUI(async (enabled: boolean) => {
+    mapRenderer.showHits = enabled;
+}, false);
+
 setTimeout(async () => {
             const mr = mapRenderer as any;
             if (mr.envSelect && mr.envfxMan) {

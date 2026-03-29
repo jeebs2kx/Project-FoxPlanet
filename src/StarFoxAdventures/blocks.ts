@@ -642,6 +642,8 @@ export class DPBlockFetcher implements BlockFetcher {
     private trkblkTab: DataView;
     private texFetcher: TextureFetcher;
     private pathBase: string;
+    private hitsTab: DataView | null = null;
+    private hitsBin: DataView | null = null;
 
     private constructor(private materialFactory: MaterialFactory, texFetcher: TextureFetcher, pathBase: string) {
         this.texFetcher = texFetcher;
@@ -652,11 +654,78 @@ export class DPBlockFetcher implements BlockFetcher {
         const texFetcher = await texFetcherPromise;
         const pathBase = gameInfo.pathBase; 
 
-        const trkblk = await dataFetcher.fetchData(`${pathBase}/TRKBLK.bin`);
+        const [trkblk, hitsTab, hitsBin] = await Promise.all([
+            dataFetcher.fetchData(`${pathBase}/TRKBLK.bin`),
+            dataFetcher.fetchData(`${pathBase}/HITS.tab`, { allow404: true }),
+            dataFetcher.fetchData(`${pathBase}/HITS.bin`, { allow404: true }),
+        ]);
 
         const self = new DPBlockFetcher(materialFactory, texFetcher, pathBase);
         self.trkblkTab = trkblk.createDataView();
+        self.hitsTab = hitsTab.createDataView();
+        self.hitsBin = hitsBin.createDataView();
         return self;
+    }
+
+    // ========================= PUT YOUR 20-BYTE PARSER EXACTLY HERE =========================
+    private parseOneHitLine(absOffs: number): any | null {
+        if (!this.hitsBin)
+            return null;
+
+        const dv = this.hitsBin;
+        if (absOffs < 0 || absOffs + 0x14 > dv.byteLength)
+            return null;
+
+        // PASTE YOUR EXISTING "READ ONE 20-BYTE HITS LINE" CODE IN THIS SPOT.
+        // Change whatever buffer name you used before to "dv"
+        // and change whatever offset variable you used before to "absOffs".
+
+        // Example shape only — REPLACE with your real parser:
+        // const x1 = dv.getInt16(absOffs + 0x00, false);
+        // const y1 = dv.getInt16(absOffs + 0x02, false);
+        // const z1 = dv.getInt16(absOffs + 0x04, false);
+        // const x2 = dv.getInt16(absOffs + 0x06, false);
+        // const y2 = dv.getInt16(absOffs + 0x08, false);
+        // const z2 = dv.getInt16(absOffs + 0x0A, false);
+        // const type = dv.getUint16(absOffs + 0x0C, false);
+        // const flags = dv.getUint16(absOffs + 0x0E, false);
+        // const unk10 = dv.getUint16(absOffs + 0x10, false);
+        // const unk12 = dv.getUint16(absOffs + 0x12, false);
+        //
+        // return { x1, y1, z1, x2, y2, z2, type, flags, unk10, unk12 };
+
+        return null;
+    }
+
+    private getHitsForBlock(blockNum: number): any[] {
+        if (!this.hitsTab || !this.hitsBin)
+            return [];
+
+        const entryOff = blockNum * 4;
+        if (entryOff + 4 > this.hitsTab.byteLength)
+            return [];
+
+        const start = this.hitsTab.getUint32(entryOff, false);
+        if (start === 0xFFFFFFFF || start >= this.hitsBin.byteLength)
+            return [];
+
+        let end = this.hitsBin.byteLength;
+        for (let i = blockNum + 1; (i * 4 + 4) <= this.hitsTab.byteLength; i++) {
+            const next = this.hitsTab.getUint32(i * 4, false);
+            if (next !== 0xFFFFFFFF && next > start && next <= this.hitsBin.byteLength) {
+                end = next;
+                break;
+            }
+        }
+
+        const out: any[] = [];
+        for (let offs = start; offs + 0x14 <= end; offs += 0x14) {
+            const line = this.parseOneHitLine(offs);
+            if (line)
+                out.push(line);
+        }
+
+        return out;
     }
 
     public async fetchBlock(mod: number, sub: number, dataFetcher: DataFetcher): Promise<Model | null> {

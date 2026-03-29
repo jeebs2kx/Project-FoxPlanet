@@ -255,15 +255,15 @@ private dpAnimsEnabled = false;
         panel.contents.append(modelButtonContainer);
         
 if (this.modelVersion === ModelVersion.DinosaurPlanet) {
-    const dpAnimToggle = new UI.Checkbox("Enable DP Animations", this.dpAnimsEnabled);
-    dpAnimToggle.onchanged = () => {
-        this.dpAnimsEnabled = dpAnimToggle.checked;
-        if (!this.dpAnimsEnabled && this.modelInst) {
-            this.modelInst.resetPose();
-            this.anim = null;
-        }
-    };
-    panel.contents.append(dpAnimToggle.elem);
+   // const dpAnimToggle = new UI.Checkbox("Enable DP Animations", this.dpAnimsEnabled);
+  //  dpAnimToggle.onchanged = () => {
+     //   this.dpAnimsEnabled = dpAnimToggle.checked;
+     //   if (!this.dpAnimsEnabled && this.modelInst) {
+     //       this.modelInst.resetPose();
+    //        this.anim = null;
+   //     }
+ //   };
+ //   panel.contents.append(dpAnimToggle.elem);
 }
         const spinBtn = document.createElement('button');
         spinBtn.textContent = 'Enable Turntable';

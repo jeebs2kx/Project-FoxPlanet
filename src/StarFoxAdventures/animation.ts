@@ -136,13 +136,25 @@ public hasAnim(num: number): boolean {
     if (num < 0 || (num + 1) * 4 > this.tab.byteLength) {
         return false;
     }
-
-    return (readUint32(this.tab, 0, num) & 0xff000000) === 0x10000000;
+    
+    const val = this.tab.getUint32(num * 4);
+    const nextVal = this.tab.getUint32((num + 1) * 4);
+    
+    const isSFA = (val & 0xFF000000) === 0x10000000;
+    const offs = isSFA ? (val & 0x0FFFFFFF) : val;
+    const nextOffs = isSFA ? (nextVal & 0x0FFFFFFF) : nextVal;
+    
+    return (nextOffs - offs) > 0;
 }
 
 public getAnim(num: number): Anim {
-    const offs = readUint32(this.tab, 0, num) & 0x0fffffff;
-    const nextOffs = readUint32(this.tab, 0, num + 1) & 0x0fffffff;
+    const val = this.tab.getUint32(num * 4);
+    const nextVal = this.tab.getUint32((num + 1) * 4);
+    
+    const isSFA = (val & 0xFF000000) === 0x10000000;
+    const offs = isSFA ? (val & 0x0FFFFFFF) : val;
+    const nextOffs = isSFA ? (nextVal & 0x0FFFFFFF) : nextVal;
+    
     const byteLength = nextOffs - offs;
     const data = dataSubarray(this.bin, offs, byteLength);
 
@@ -157,7 +169,7 @@ public getAnim(num: number): Anim {
 
     function loadKeyframe(kfNum: number): Keyframe {
         let cmdOffs = HEADER_SIZE;
-        const kfOffs = header.keyframesOffset + kfNum * header.keyframeStride;
+        let kfOffs = header.keyframesOffset + kfNum * header.keyframeStride;
         const kfReader = new HighBitReader(data, kfOffs);
 
         function getNextCmd(): number {
@@ -167,7 +179,7 @@ public getAnim(num: number): Anim {
         }
 
         function loadAxis(): Axis {
-            const result: Axis = createAxis();
+            const result: Axis = { translation: 0, rotation: 0, scale: 1 };
 
             let cmd = getNextCmd();
 
@@ -202,7 +214,7 @@ public getAnim(num: number): Anim {
                     if (hasTranslation)
                         cmd = getNextCmd();
                 }
-
+                
                 if (hasTranslation) {
                     result.translation = interpS16(cmd & 0xfff0);
 
@@ -218,32 +230,44 @@ public getAnim(num: number): Anim {
         }
 
         function loadPose(): Pose {
-            const result: Pose = createPose();
-            for (let i = 0; i < NUM_AXES; i++)
+            const result: Pose = { axes: [
+                { translation: 0, rotation: 0, scale: 1 },
+                { translation: 0, rotation: 0, scale: 1 },
+                { translation: 0, rotation: 0, scale: 1 }
+            ]};
+
+            for (let i = 0; i < 3; i++)
                 result.axes[i] = loadAxis();
+
             return result;
         }
 
-        const result: Keyframe = createKeyframe(header.numBones);
-        for (let i = 0; i < header.numBones; i++)
+        const result: Keyframe = { poses: [] };
+
+        for (let i = 0; i < header.numBones; i++) {
             result.poses[i] = loadPose();
+        }
 
         return result;
     }
 
     const keyframes: Keyframe[] = [];
-    for (let i = 0; i < header.numKeyframes; i++)
-        keyframes.push(loadKeyframe(i));
+    for (let i = 0; i < header.numKeyframes; i++) {
+        const keyframe = loadKeyframe(i);
+        keyframes.push(keyframe);
+    }
 
     let speed = 1;
     if (header.timesOffset !== 0) {
         let timesOffs = header.timesOffset;
+
         speed = data.getFloat32(timesOffs);
         timesOffs += 0x4;
         const numTimes = data.getUint16(timesOffs);
         timesOffs += 0x2;
-        for (let i = 0; i < numTimes; i++)
+        for (let i = 0; i < numTimes; i++) {
             timesOffs += 0x2;
+        }
     }
 
     return { keyframes, speed, times: [] };
