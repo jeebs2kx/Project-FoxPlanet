@@ -346,6 +346,9 @@ function dpGetMinimapTexTableID(tile: DPMinimapSection): number {
     const t = tile as any;
     return (t.texTableID ?? t.texTableId ?? t.textableID ?? 0) | 0;
 }
+
+
+
 const dpMinimapIconCropCache = new WeakMap<any, { sx: number; sy: number; sw: number; sh: number }>();
 
 function dpGetOpaqueImageBounds(surface: any): { sx: number; sy: number; sw: number; sh: number } {
@@ -415,6 +418,9 @@ function dpFindActiveMinimapTileAtPos(
     playerZ: number,
     ignoreY: boolean = false,
 ): DPMinimapSection | null {
+    let bestTile: DPMinimapSection | null = null;
+    let bestScore = Number.POSITIVE_INFINITY;
+
     for (const tile of level.tiles) {
         const minX = dpMinimapS16(tile.minX);
         const maxX = dpMinimapS16(tile.maxX);
@@ -430,15 +436,38 @@ function dpFindActiveMinimapTileAtPos(
         if (!insideXZ)
             continue;
 
-        if (ignoreY)
-            return tile;
-
         const insideY = playerY >= minY && playerY < maxY;
-        if (insideY)
-            return tile;
+        if (!ignoreY && !insideY)
+            continue;
+
+        const spanX = Math.max(1, maxX - minX);
+        const spanZ = Math.max(1, maxZ - minZ);
+        const spanY = Math.max(1, maxY - minY);
+
+        const centerX = (minX + maxX) * 0.5;
+        const centerZ = (minZ + maxZ) * 0.5;
+        const centerY = (minY + maxY) * 0.5;
+
+        const dx = Math.abs(playerX - centerX);
+        const dz = Math.abs(playerZ - centerZ);
+        const dy = Math.abs(playerY - centerY);
+
+        // Prefer the tightest/most specific matching tile instead of
+        // just taking the first one in the list.
+        const score =
+            (spanX * spanZ) +
+            (spanY * 8) +
+            dx +
+            dz +
+            (ignoreY ? 0 : dy * 4);
+
+        if (score < bestScore) {
+            bestScore = score;
+            bestTile = tile;
+        }
     }
 
-    return null;
+    return bestTile;
 }
 function dpResolveActiveMinimapTile(
     level: DPMinimapLevel,
@@ -547,7 +576,7 @@ function dpResolveActiveMinimapTile(
 }
 
 const DP_MINIMAP_PLAYER_ICON_TEXTABLE = 0x467; // Blue diamond
-const DP_MINIMAP_PLAYER_ICON_PNG_URL = '/data/dinosaurplanet/textures/TEX0_1044_00354120_0.png';
+const DP_MINIMAP_PLAYER_ICON_PNG_URL = 'data/dinosaurplanet/textures/TEX0_1044_00354120_0.png';
 
 let dpPlayerMarkerPng: HTMLImageElement | null = null;
 let dpPlayerMarkerPngReady = false;
@@ -674,6 +703,58 @@ type DPMinimapDrawArgs = {
     cache: any;
 };
 
+type DPMinimapFadePhase = 'idle' | 'fadeOut' | 'waitForPending' | 'fadeIn';
+type DPMinimapFadeState = {
+    currentTex0ID: number;
+    currentSurface: any | null;
+    currentDrawX: number;
+    currentDrawY: number;
+    currentDrawW: number;
+    currentDrawH: number;
+
+    pendingTex0ID: number;
+    pendingSurface: any | null;
+    pendingDrawX: number;
+    pendingDrawY: number;
+    pendingDrawW: number;
+    pendingDrawH: number;
+    pendingReadyStartMs: number;
+
+    phase: DPMinimapFadePhase;
+    transitionStartMs: number;
+};
+
+const DP_MINIMAP_FADE_OUT_MS = 300;
+const DP_MINIMAP_FADE_IN_MS = 180;
+
+function dpGetMinimapFadeState(mapID: number): DPMinimapFadeState {
+    const root = ((window as any).__dpMinimapFadeStates ??= {});
+
+    if (!root[mapID]) {
+        root[mapID] = {
+            currentTex0ID: -1,
+            currentSurface: null,
+            currentDrawX: 0,
+            currentDrawY: 0,
+            currentDrawW: 0,
+            currentDrawH: 0,
+
+            pendingTex0ID: -1,
+            pendingSurface: null,
+            pendingDrawX: 0,
+            pendingDrawY: 0,
+            pendingDrawW: 0,
+            pendingDrawH: 0,
+            pendingReadyStartMs: 0,
+
+            phase: 'idle',
+            transitionStartMs: 0,
+        } as DPMinimapFadeState;
+    }
+
+    return root[mapID];
+}
+
 export function drawDPMinimap(args: DPMinimapDrawArgs): void {
     const level = getDPMinimapLevel(args.mapID);
     if (!level || level.tiles.length === 0)
@@ -683,125 +764,284 @@ export function drawDPMinimap(args: DPMinimapDrawArgs): void {
     if (!texFetcher || typeof texFetcher.getTextureByTextable !== 'function')
         return;
 
-const camWorld = args.cameraWorldMatrix;
-const localPos = args.worldToMapPoint(camWorld[12], camWorld[13], camWorld[14]);
+    const camWorld = args.cameraWorldMatrix;
+    const localPos = args.worldToMapPoint(camWorld[12], camWorld[13], camWorld[14]);
 
-const playerLocalX = localPos[0];
-const playerLocalY = localPos[1];
-const playerLocalZ = localPos[2];
+    const playerLocalX = localPos[0];
+    const playerLocalY = localPos[1];
+    const playerLocalZ = localPos[2];
 
-const resolved = dpResolveActiveMinimapTile(
-    level,
-    playerLocalX,
-    playerLocalY,
-    playerLocalZ,
-    args.numCols,
-    args.numRows,
-);
-
-if (!resolved) {
-  //  console.warn('[DP MINIMAP] no active tile', {
-    //    mapID: args.mapID,
-    //    playerLocalX, playerLocalY, playerLocalZ,
-     //   numCols: args.numCols,
-    //    numRows: args.numRows,
-    //    tiles: level.tiles.length,
-   // });
-    return;
-}
-
-let activeTile = resolved.tile;
-let playerX = resolved.playerX;
-let playerY = resolved.playerY;
-let playerZ = resolved.playerZ;
-
-const fix = DP_MINIMAP_MANUAL_FIXES[args.mapID];
-
-if (fix?.mode) {
-    const p = dpTransformMinimapPoint(
-        fix.mode,
+    const resolved = dpResolveActiveMinimapTile(
+        level,
         playerLocalX,
         playerLocalY,
         playerLocalZ,
         args.numCols,
         args.numRows,
-        resolved.globalMinX,
-        resolved.globalMaxX,
-        resolved.globalMinZ,
-        resolved.globalMaxZ,
     );
 
-    playerX = p.x + (fix.offsetX ?? 0);
-    playerY = p.y;
-    playerZ = p.z + (fix.offsetZ ?? 0);
+    if (!resolved)
+        return;
 
-    const repicked =
-        dpFindActiveMinimapTileAtPos(level, playerX, playerY, playerZ, false) ??
-        dpFindActiveMinimapTileAtPos(level, playerX, playerY, playerZ, true);
+    let activeTile = resolved.tile;
+    let playerX = resolved.playerX;
+    let playerY = resolved.playerY;
+    let playerZ = resolved.playerZ;
 
-    if (repicked)
-        activeTile = repicked;
+    const fix = DP_MINIMAP_MANUAL_FIXES[args.mapID];
+
+    if (fix?.mode) {
+        const p = dpTransformMinimapPoint(
+            fix.mode,
+            playerLocalX,
+            playerLocalY,
+            playerLocalZ,
+            args.numCols,
+            args.numRows,
+            resolved.globalMinX,
+            resolved.globalMaxX,
+            resolved.globalMinZ,
+            resolved.globalMaxZ,
+        );
+
+        playerX = p.x + (fix.offsetX ?? 0);
+        playerY = p.y;
+        playerZ = p.z + (fix.offsetZ ?? 0);
+
+        const repicked =
+            dpFindActiveMinimapTileAtPos(level, playerX, playerY, playerZ, false) ??
+            dpFindActiveMinimapTileAtPos(level, playerX, playerY, playerZ, true);
+
+        if (repicked)
+            activeTile = repicked;
+    }
+
+    if (fix?.forceTex0ID !== undefined) {
+        const forcedTile = dpFindTileByTex0(level, fix.forceTex0ID);
+        if (forcedTile)
+            activeTile = forcedTile;
+    }
+
+    if (fix?.sticky) {
+        const stickyRoot = ((window as any).__dpMinimapSticky ??= {});
+        const prevTile = stickyRoot[args.mapID] as DPMinimapSection | undefined;
+
+        if (prevTile && dpPointInTileXZ(prevTile, playerX, playerZ, 128)) {
+            activeTile = prevTile;
+        } else {
+            stickyRoot[args.mapID] = activeTile;
+        }
+    }
+
+    const activeTex0ID = dpGetMinimapTexTableID(activeTile);
+    const fadeState = dpGetMinimapFadeState(args.mapID);
+    const now = performance.now();
+    const minimapScale = 3.5;
+
+    const tex: any =
+        (typeof texFetcher.getDPTextureByTex0ID === 'function')
+            ? texFetcher.getDPTextureByTex0ID(args.cache, activeTex0ID)
+            : (
+                (typeof texFetcher.getTextureByTextable === 'function')
+                    ? texFetcher.getTextureByTextable(args.cache, activeTex0ID)
+                    : null
+            );
+
+    let nextSurface: any | null = null;
+    let nextTexW = 0;
+    let nextTexH = 0;
+
+    if (tex?.viewerTexture?.surfaces?.length > 0) {
+        nextSurface = tex.viewerTexture.surfaces[0] as any;
+        nextTexW = (nextSurface.width ?? 0) | 0;
+        nextTexH = (nextSurface.height ?? 0) | 0;
+
+        if (nextTexW <= 0 || nextTexH <= 0) {
+            nextSurface = null;
+            nextTexW = 0;
+            nextTexH = 0;
+        }
+    }
+
+    if ((fadeState.currentTex0ID < 0 || !fadeState.currentSurface) && !nextSurface)
+        return;
+
+    const anchorX = 50 * minimapScale;
+    const anchorY = args.ctx.canvas.height - (40 * minimapScale);
+
+    let nextDrawX = 0;
+    let nextDrawY = 0;
+    let nextDrawW = 0;
+    let nextDrawH = 0;
+
+    if (nextSurface) {
+        let nextLevelMinX = Infinity;
+        let nextLevelMaxX = -Infinity;
+        let nextLevelMinZ = Infinity;
+        let nextLevelMaxZ = -Infinity;
+
+        for (const tile of level.tiles) {
+            if (dpGetMinimapTexTableID(tile) !== activeTex0ID)
+                continue;
+
+            const minX = dpMinimapS16(tile.minX);
+            const maxX = dpMinimapS16(tile.maxX);
+            const minZ = dpMinimapS16(tile.minZ);
+            const maxZ = dpMinimapS16(tile.maxZ);
+
+            if (minX < nextLevelMinX) nextLevelMinX = minX;
+            if (maxX > nextLevelMaxX) nextLevelMaxX = maxX;
+            if (minZ < nextLevelMinZ) nextLevelMinZ = minZ;
+            if (maxZ > nextLevelMaxZ) nextLevelMaxZ = maxZ;
+        }
+
+        if (!Number.isFinite(nextLevelMinX) || !Number.isFinite(nextLevelMaxX) || !Number.isFinite(nextLevelMinZ) || !Number.isFinite(nextLevelMaxZ))
+            return;
+
+        const nextSpanX = nextLevelMaxX - nextLevelMinX;
+        const nextSpanZ = nextLevelMaxZ - nextLevelMinZ;
+        if (nextSpanX <= 0 || nextSpanZ <= 0)
+            return;
+
+        let nextGridX = Math.floor((nextSpanX * 8) / 640);
+        if (nextGridX > 24)
+            nextGridX = 24;
+
+        let nextGridZ = Math.floor((nextSpanZ * 8) / 640);
+        if (nextGridZ > 24)
+            nextGridZ = (nextGridZ * 2) - 24;
+
+        nextDrawW = nextTexW * minimapScale;
+        nextDrawH = nextTexH * minimapScale;
+        nextDrawX = anchorX + (activeTile.screenOffsetX * minimapScale) - (nextGridX * minimapScale);
+        nextDrawY = anchorY + (activeTile.screenOffsetY * minimapScale) - (nextGridZ * minimapScale);
+    }
+
+    // First ever visible minimap for this map: only initialize when real surface exists.
+    if (fadeState.currentTex0ID < 0 || !fadeState.currentSurface) {
+        if (!nextSurface)
+            return;
+
+        fadeState.currentTex0ID = activeTex0ID;
+        fadeState.currentSurface = nextSurface;
+        fadeState.currentDrawX = nextDrawX;
+        fadeState.currentDrawY = nextDrawY;
+        fadeState.currentDrawW = nextDrawW;
+        fadeState.currentDrawH = nextDrawH;
+        fadeState.phase = 'idle';
+    }
+
+// Start fading out immediately on tile change.
+// If the next minimap is not ready yet, we'll wait on black and fade in once it appears.
+if (fadeState.currentTex0ID !== activeTex0ID) {
+    if (fadeState.pendingTex0ID !== activeTex0ID) {
+        fadeState.pendingTex0ID = activeTex0ID;
+        fadeState.pendingSurface = null;
+        fadeState.pendingDrawX = 0;
+        fadeState.pendingDrawY = 0;
+        fadeState.pendingDrawW = 0;
+        fadeState.pendingDrawH = 0;
+        fadeState.pendingReadyStartMs = 0;
+    }
+
+    if (nextSurface) {
+        fadeState.pendingSurface = nextSurface;
+        fadeState.pendingDrawX = nextDrawX;
+        fadeState.pendingDrawY = nextDrawY;
+        fadeState.pendingDrawW = nextDrawW;
+        fadeState.pendingDrawH = nextDrawH;
+    }
+
+    if (fadeState.phase === 'idle') {
+        fadeState.phase = 'fadeOut';
+        fadeState.transitionStartMs = now;
+    }
+} else {
+    if (nextSurface) {
+        fadeState.currentSurface = nextSurface;
+        fadeState.currentDrawX = nextDrawX;
+        fadeState.currentDrawY = nextDrawY;
+        fadeState.currentDrawW = nextDrawW;
+        fadeState.currentDrawH = nextDrawH;
+    }
+
+    fadeState.pendingTex0ID = -1;
+    fadeState.pendingSurface = null;
+    fadeState.pendingReadyStartMs = 0;
 }
 
-if (fix?.forceTex0ID !== undefined) {
-    const forcedTile = dpFindTileByTex0(level, fix.forceTex0ID);
-    if (forcedTile)
-        activeTile = forcedTile;
-}
+let minimapAlpha = 1.0;
 
-if (fix?.sticky) {
-    const stickyRoot = ((window as any).__dpMinimapSticky ??= {});
-    const prevTile = stickyRoot[args.mapID] as DPMinimapSection | undefined;
+if (fadeState.phase === 'fadeOut') {
+    const t = dpClamp01((now - fadeState.transitionStartMs) / DP_MINIMAP_FADE_OUT_MS);
+    minimapAlpha = 1.0 - t;
 
-    if (prevTile && dpPointInTileXZ(prevTile, playerX, playerZ, 128)) {
-        activeTile = prevTile;
-    } else {
-        stickyRoot[args.mapID] = activeTile;
+    if (t >= 1.0) {
+        if (fadeState.pendingSurface) {
+            fadeState.currentTex0ID = fadeState.pendingTex0ID;
+            fadeState.currentSurface = fadeState.pendingSurface;
+            fadeState.currentDrawX = fadeState.pendingDrawX;
+            fadeState.currentDrawY = fadeState.pendingDrawY;
+            fadeState.currentDrawW = fadeState.pendingDrawW;
+            fadeState.currentDrawH = fadeState.pendingDrawH;
+
+            fadeState.pendingTex0ID = -1;
+            fadeState.pendingSurface = null;
+            fadeState.pendingReadyStartMs = 0;
+
+            fadeState.phase = 'fadeIn';
+            fadeState.transitionStartMs = now;
+            minimapAlpha = 0.0;
+        } else {
+            fadeState.phase = 'waitForPending';
+            minimapAlpha = 0.0;
+        }
+    }
+} else if (fadeState.phase === 'waitForPending') {
+    minimapAlpha = 0.0;
+
+    if (fadeState.pendingSurface) {
+        fadeState.currentTex0ID = fadeState.pendingTex0ID;
+        fadeState.currentSurface = fadeState.pendingSurface;
+        fadeState.currentDrawX = fadeState.pendingDrawX;
+        fadeState.currentDrawY = fadeState.pendingDrawY;
+        fadeState.currentDrawW = fadeState.pendingDrawW;
+        fadeState.currentDrawH = fadeState.pendingDrawH;
+
+        fadeState.pendingTex0ID = -1;
+        fadeState.pendingSurface = null;
+        fadeState.pendingReadyStartMs = 0;
+
+        fadeState.phase = 'fadeIn';
+        fadeState.transitionStartMs = now;
+    }
+} else if (fadeState.phase === 'fadeIn') {
+    const t = dpClamp01((now - fadeState.transitionStartMs) / DP_MINIMAP_FADE_IN_MS);
+    minimapAlpha = t;
+
+    if (t >= 1.0) {
+        fadeState.phase = 'idle';
+        minimapAlpha = 1.0;
     }
 }
 
-//console.warn('[DP MINIMAP PICK]', {
- //   mapID: args.mapID,
- //   mode: fix?.mode ?? resolved.mode,
- //   ignoreY: resolved.ignoreY,
- //   playerX,
- //   playerY,
-//    playerZ,
-//});
+    const displayedTex0ID = fadeState.currentTex0ID;
+    const displayedSurface = fadeState.currentSurface;
+    const displayedDrawX = fadeState.currentDrawX;
+    const displayedDrawY = fadeState.currentDrawY;
+    const displayedDrawW = fadeState.currentDrawW;
+    const displayedDrawH = fadeState.currentDrawH;
 
-    const activeTex0ID = dpGetMinimapTexTableID(activeTile);
-
-const tex: any =
-    (typeof texFetcher.getDPTextureByTex0ID === 'function')
-        ? texFetcher.getDPTextureByTex0ID(args.cache, activeTex0ID)
-        : (
-            (typeof texFetcher.getTextureByTextable === 'function')
-                ? texFetcher.getTextureByTextable(args.cache, activeTex0ID)
-                : null
-        );
-
-// DP texture loads are async; during the first few frames the placeholder may exist
-// but have no viewer surface yet. Don't spam warnings for that.
-if (!tex)
-    return;
-
-if (!tex.viewerTexture || !tex.viewerTexture.surfaces || tex.viewerTexture.surfaces.length === 0)
-    return;
-
-const surface = tex.viewerTexture.surfaces[0] as any;
-    const texW = (surface.width ?? 0) | 0;
-    const texH = (surface.height ?? 0) | 0;
-    const minimapScale = 3.5;
-    if (texW <= 0 || texH <= 0)
+    if (!displayedSurface)
         return;
 
-    let levelMinX =  Infinity;
-    let levelMaxX = -Infinity;
-    let levelMinZ =  Infinity;
-    let levelMaxZ = -Infinity;
+    let displayedLevelMinX = Infinity;
+    let displayedLevelMaxX = -Infinity;
+    let displayedLevelMinZ = Infinity;
+    let displayedLevelMaxZ = -Infinity;
 
     for (const tile of level.tiles) {
-        if (dpGetMinimapTexTableID(tile) !== activeTex0ID)
+        if (dpGetMinimapTexTableID(tile) !== displayedTex0ID)
             continue;
 
         const minX = dpMinimapS16(tile.minX);
@@ -809,117 +1049,104 @@ const surface = tex.viewerTexture.surfaces[0] as any;
         const minZ = dpMinimapS16(tile.minZ);
         const maxZ = dpMinimapS16(tile.maxZ);
 
-        if (minX < levelMinX) levelMinX = minX;
-        if (maxX > levelMaxX) levelMaxX = maxX;
-        if (minZ < levelMinZ) levelMinZ = minZ;
-        if (maxZ > levelMaxZ) levelMaxZ = maxZ;
+        if (minX < displayedLevelMinX) displayedLevelMinX = minX;
+        if (maxX > displayedLevelMaxX) displayedLevelMaxX = maxX;
+        if (minZ < displayedLevelMinZ) displayedLevelMinZ = minZ;
+        if (maxZ > displayedLevelMaxZ) displayedLevelMaxZ = maxZ;
     }
 
-    if (!Number.isFinite(levelMinX) || !Number.isFinite(levelMaxX) || !Number.isFinite(levelMinZ) || !Number.isFinite(levelMaxZ))
+    if (!Number.isFinite(displayedLevelMinX) || !Number.isFinite(displayedLevelMaxX) || !Number.isFinite(displayedLevelMinZ) || !Number.isFinite(displayedLevelMaxZ))
         return;
 
-    const spanX = levelMaxX - levelMinX;
-    const spanZ = levelMaxZ - levelMinZ;
-    if (spanX <= 0 || spanZ <= 0)
+    const displayedSpanX = displayedLevelMaxX - displayedLevelMinX;
+    const displayedSpanZ = displayedLevelMaxZ - displayedLevelMinZ;
+    if (displayedSpanX <= 0 || displayedSpanZ <= 0)
         return;
 
-    // Match SFA minimap math.
-    let gridX = Math.floor((spanX * 8) / 640);
-    if (gridX > 24)
-        gridX = 24;
+    let displayedGridX = Math.floor((displayedSpanX * 8) / 640);
+    if (displayedGridX > 24)
+        displayedGridX = 24;
 
-    let gridZ = Math.floor((spanZ * 8) / 640);
-    if (gridZ > 24)
-        gridZ = (gridZ * 2) - 24;
-
-    // Original SFA anchor was (50, 200) on a 320x240 screen.
-    // Scaled version:
-    const anchorX = 50 * minimapScale;
-    const anchorY = args.ctx.canvas.height - (40 * minimapScale);
-
-    const drawW = texW * minimapScale;
-    const drawH = texH * minimapScale;
-
-    // IMPORTANT: screenOffset affects the tile art, not the marker.
-    const drawX = anchorX + (activeTile.screenOffsetX * minimapScale) - (gridX * minimapScale);
-    const drawY = anchorY + (activeTile.screenOffsetY * minimapScale) - (gridZ * minimapScale);
+    let displayedGridZ = Math.floor((displayedSpanZ * 8) / 640);
+    if (displayedGridZ > 24)
+        displayedGridZ = (displayedGridZ * 2) - 24;
 
     args.ctx.save();
+    args.ctx.globalAlpha = minimapAlpha;
+    args.ctx.drawImage(
+        displayedSurface,
+        displayedDrawX,
+        displayedDrawY,
+        displayedDrawW,
+        displayedDrawH,
+    );
+    args.ctx.restore();
 
-  //  args.ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
-   // args.ctx.fillRect(drawX - 2, drawY - 2, drawW + 4, drawH + 4);
+    const pixelsPerWorld = 0.025 * minimapScale;
+    const iconSize = 6 * minimapScale;
+    const iconHalf = iconSize * 0.5;
 
-    args.ctx.drawImage(surface, drawX, drawY, drawW, drawH);
+    const rawMarkerX =
+        anchorX
+        - (displayedGridX * minimapScale)
+        - ((playerX - displayedLevelMaxX) * pixelsPerWorld);
 
-const pixelsPerWorld = 0.025 * minimapScale;
+    const rawMarkerY =
+        anchorY
+        - (displayedGridZ * minimapScale)
+        - ((playerZ - displayedLevelMaxZ) * pixelsPerWorld);
 
-// Visible on-screen size for the player icon.
-const iconSize = 6 * minimapScale;
-const iconHalf = iconSize * 0.5;
-
-// First compute the raw marker position.
-const rawMarkerX =
-    anchorX
-    - (gridX * minimapScale)
-    - ((playerX - levelMaxX) * pixelsPerWorld);
-
-const rawMarkerY =
-    anchorY
-    - (gridZ * minimapScale)
-    - ((playerZ - levelMaxZ) * pixelsPerWorld);
-
-// Clamp marker so it can never leave the minimap texture area.
 const markerClampPad = iconHalf + 1;
+const markerEdgeBleed = 16; 
 
-const markerMinX = drawX + markerClampPad;
-const markerMaxX = drawX + drawW - markerClampPad;
-const markerMinY = drawY + markerClampPad;
-const markerMaxY = drawY + drawH - markerClampPad;
+const markerMinX = displayedDrawX + markerClampPad - markerEdgeBleed;
+const markerMaxX = displayedDrawX + displayedDrawW - markerClampPad + markerEdgeBleed;
+const markerMinY = displayedDrawY + markerClampPad - markerEdgeBleed;
+const markerMaxY = displayedDrawY + displayedDrawH - markerClampPad + markerEdgeBleed;
 
 const markerX = Math.max(markerMinX, Math.min(rawMarkerX, markerMaxX));
 const markerY = Math.max(markerMinY, Math.min(rawMarkerY, markerMaxY));
-const playerIconPng = dpGetPlayerMarkerPng();
-const playerIcon =
-    playerIconPng ? null :
-    ((typeof texFetcher.getDPTextureByTextableID === 'function')
-        ? texFetcher.getDPTextureByTextableID(args.cache, DP_MINIMAP_PLAYER_ICON_TEXTABLE)
-        : texFetcher.getTextureByTextable(args.cache, DP_MINIMAP_PLAYER_ICON_TEXTABLE));
 
-const playerIconSurface = playerIconPng ?? playerIcon?.viewerTexture?.surfaces?.[0] ?? null;
+    const playerIconPng = dpGetPlayerMarkerPng();
+    const playerIcon =
+        playerIconPng ? null :
+        ((typeof texFetcher.getDPTextureByTextableID === 'function')
+            ? texFetcher.getDPTextureByTextableID(args.cache, DP_MINIMAP_PLAYER_ICON_TEXTABLE)
+            : texFetcher.getTextureByTextable(args.cache, DP_MINIMAP_PLAYER_ICON_TEXTABLE));
 
-// Visible on-screen size you want for the diamond itself.
+    const playerIconSurface = playerIconPng ?? playerIcon?.viewerTexture?.surfaces?.[0] ?? null;
 
-const iconDrawX = markerX - (iconSize * 0.5);
-const iconDrawY = markerY - (iconSize * 0.5);
-
-if (playerIconSurface) {
-    const crop = dpGetOpaqueImageBounds(playerIconSurface);
+    const iconDrawX = markerX - (iconSize * 0.5);
+    const iconDrawY = markerY - (iconSize * 0.5);
 
     args.ctx.save();
-    args.ctx.imageSmoothingEnabled = false;
-    args.ctx.drawImage(
-        playerIconSurface,
-        crop.sx, crop.sy, crop.sw, crop.sh,
-        iconDrawX, iconDrawY, iconSize, iconSize,
-    );
-    args.ctx.restore();
-} else {
-    // fallback if the icon texture is missing
-    args.ctx.strokeStyle = 'rgba(0,0,0,0.9)';
-    args.ctx.fillStyle = 'rgba(80, 180, 255, 0.95)';
-    args.ctx.lineWidth = 1.0;
+    args.ctx.globalAlpha = minimapAlpha;
 
-    const markerSize = 4 * minimapScale;
+    if (playerIconSurface) {
+        const crop = dpGetOpaqueImageBounds(playerIconSurface);
 
-    args.ctx.beginPath();
-    args.ctx.moveTo(markerX,              markerY - markerSize);
-    args.ctx.lineTo(markerX + markerSize, markerY);
-    args.ctx.lineTo(markerX,              markerY + markerSize);
-    args.ctx.lineTo(markerX - markerSize, markerY);
-    args.ctx.closePath();
-    args.ctx.fill();
-    args.ctx.stroke();
-}
+        args.ctx.imageSmoothingEnabled = false;
+        args.ctx.drawImage(
+            playerIconSurface,
+            crop.sx, crop.sy, crop.sw, crop.sh,
+            iconDrawX, iconDrawY, iconSize, iconSize,
+        );
+    } else {
+        args.ctx.strokeStyle = 'rgba(0,0,0,0.9)';
+        args.ctx.fillStyle = 'rgba(80, 180, 255, 0.95)';
+        args.ctx.lineWidth = 1.0;
+
+        const markerSize = 4 * minimapScale;
+
+        args.ctx.beginPath();
+        args.ctx.moveTo(markerX,              markerY - markerSize);
+        args.ctx.lineTo(markerX + markerSize, markerY);
+        args.ctx.lineTo(markerX,              markerY + markerSize);
+        args.ctx.lineTo(markerX - markerSize, markerY);
+        args.ctx.closePath();
+        args.ctx.fill();
+        args.ctx.stroke();
+    }
 
     args.ctx.restore();
 }

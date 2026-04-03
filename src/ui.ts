@@ -2357,7 +2357,7 @@ class About extends Panel {
 
 <p><a href="https://discord.gg/bkJmKKv"><strong>JOIN THE DISCORD</strong> by clicking here</a></p>
 
-<p><strong>CODE PRIMARILY WRITTEN</strong> by <a href="https://twitter.com/JasperRLZ">Jasper</a></p>
+<p><strong>ORIGINAL SFA CODE WRITTEN</strong> by <a href="https://twitter.com/JasperRLZ">Jasper</a></p>
 <p><strong>ADDITIONAL SFA + DP CONTENT BY JEEBS2KX</a></p>
 
 <p><strong>OPEN SOURCE</strong> at <a href="${GITHUB_URL}">GitHub</a></p>

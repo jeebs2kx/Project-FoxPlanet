@@ -1528,23 +1528,77 @@ const posDV = new DataView(posAB);
 const clrAB = new ArrayBuffer(totalVerts * 4);
 const clrDV = new DataView(clrAB);
 
+type DPMapMaterialInfo = {
+    materialIndex: number;
+    rawTexWord: number;
+    texId: number;
+    texW: number;
+    texH: number;
+    isOpaque: boolean;
+    pixelFormat: number;
+};
+
+type DPTexScrollBinding = {
+    materialIndex: number;
+    blendMaterialIndex: number; // -1 if unused
+    uSpeedA: number;
+    vSpeedA: number;
+    uSpeedB: number;
+    vSpeedB: number;
+};
+
 type DPMapBatch = {
     isOpaque: boolean;
     pixelFormat: number;
     drawMode: number;
+
+    materialIndex: number;
+    blendMaterialIndex: number;
+
     materialId: number;
     blendMaterialId: number;
+
     vStart: number; vEnd: number;
     tStart: number; tEnd: number;
     texW: number; texH: number;
     blendTexW: number; blendTexH: number;
 
-    // effect-ish
     isWater: boolean;
-    scrollPxU: number; // pixels per frame
-    scrollPxV: number; // pixels per frame
-};
 
+    scrollPxUA: number;
+    scrollPxVA: number;
+    scrollPxUB: number;
+    scrollPxVB: number;
+};
+const dpMaterials: DPMapMaterialInfo[] = [];
+
+for (let i = 0; i < materialCount; i++) {
+    const o = matOff + i * 0x0C;
+    if (o + 0x0C > data.byteLength)
+        break;
+
+const rawTexWord = data.getInt32(o + 0x00, false);
+let texId = rawTexWord & 0xFFFF;
+    const texW = data.getUint8(o + 0x08) || 32;
+    const texH = data.getUint8(o + 0x09) || 32;
+    const matFormat = data.getUint8(o + 0x0A);
+
+    if (texId < 0 || texId >= 10000)
+        texId = -1;
+
+dpMaterials.push({
+    materialIndex: i,
+    rawTexWord,
+    texId,
+    texW,
+    texH,
+    isOpaque: (matFormat & 0x10) !== 0,
+    pixelFormat: (matFormat & 0x0F),
+});
+}
+
+(model as any).dpMapMaterials = dpMaterials;
+(model as any).dpTexScrollBindings = [] as DPTexScrollBinding[];
 const batches: DPMapBatch[] = [];
 
 for (let i = 0; i < batchCount; i++) {
@@ -1559,52 +1613,51 @@ for (let i = 0; i < batchCount; i++) {
 
     const drawMode = data.getUint8(o + 0x03);
     const matIdx = data.getUint8(o + 0x12);
-    const blendMatIdx = data.getUint8(o + 0x15);
+    const rawBlendMatIdx = data.getUint8(o + 0x15);
 
-    let materialId = -1;
-    let blendMaterialId = -1;
+    const blendMatIdx =
+        (rawBlendMatIdx !== 0x00 && rawBlendMatIdx !== 0xFF && rawBlendMatIdx < dpMaterials.length)
+            ? rawBlendMatIdx
+            : -1;
 
-    let isOpaque = true;
-    let pixelFormat = 0;
+    const matInfo = (matIdx < dpMaterials.length) ? dpMaterials[matIdx] : undefined;
+    const blendMatInfo = (blendMatIdx >= 0 && blendMatIdx < dpMaterials.length) ? dpMaterials[blendMatIdx] : undefined;
 
-    let texW = 32, texH = 32;
-    let blendTexW = 32, blendTexH = 32;
+    const materialId = matInfo?.texId ?? -1;
+    const blendMaterialId = blendMatInfo?.texId ?? -1;
 
-    if (matIdx < materialCount) {
-        const matStructOff = matOff + (matIdx * 0x0C);
-        if (matStructOff + 0x0B < data.byteLength) {
-            materialId = data.getUint32(matStructOff + 0x00, false) & 0xFFFF;
-            texW = data.getUint8(matStructOff + 0x08) || 32;
-            texH = data.getUint8(matStructOff + 0x09) || 32;
+    const isOpaque = matInfo?.isOpaque ?? true;
+    const pixelFormat = matInfo?.pixelFormat ?? 0;
 
-            const matFormat = data.getUint8(matStructOff + 0x0A);
-            isOpaque = (matFormat & 0x10) !== 0;
-            pixelFormat = (matFormat & 0x0F);
-
-            if (materialId < 0 || materialId >= 10000) materialId = -1;
-        }
-    }
-
-    if (blendMatIdx !== 0x00 && blendMatIdx !== 0xFF && blendMatIdx < materialCount) {
-        const blendMatStructOff = matOff + (blendMatIdx * 0x0C);
-        if (blendMatStructOff + 0x0B < data.byteLength) {
-            blendMaterialId = data.getUint32(blendMatStructOff + 0x00, false) & 0xFFFF;
-            blendTexW = data.getUint8(blendMatStructOff + 0x08) || 32;
-            blendTexH = data.getUint8(blendMatStructOff + 0x09) || 32;
-
-            if (blendMaterialId < 0 || blendMaterialId >= 10000) blendMaterialId = -1;
-        }
-    }
+    const texW = matInfo?.texW ?? 32;
+    const texH = matInfo?.texH ?? 32;
+    const blendTexW = blendMatInfo?.texW ?? 32;
+    const blendTexH = blendMatInfo?.texH ?? 32;
 
     if (vEnd > vStart && tEnd > tStart) {
         batches.push({
-            isOpaque, pixelFormat, drawMode,
-            materialId, blendMaterialId,
-            vStart, vEnd, tStart, tEnd,
-            texW, texH, blendTexW, blendTexH,
+            isOpaque,
+            pixelFormat,
+            drawMode,
+
+            materialIndex: matIdx,
+            blendMaterialIndex: blendMatIdx,
+
+            materialId,
+            blendMaterialId,
+
+            vStart, vEnd,
+            tStart, tEnd,
+
+            texW, texH,
+            blendTexW, blendTexH,
+
             isWater: false,
-            scrollPxU: 0,
-            scrollPxV: 0,
+
+            scrollPxUA: 0,
+            scrollPxVA: 0,
+            scrollPxUB: 0,
+            scrollPxVB: 0,
         });
     }
 }
@@ -1719,6 +1772,77 @@ model.createModelShapes = () => {
     shapes.shapes[1] = [];
     shapes.shapes[2] = [];
 
+const wireVcd: GX_VtxDesc[] = nArray(GX.Attr.MAX + 1, () => ({ type: GX.AttrType.NONE }));
+wireVcd[GX.Attr.POS].type = GX.AttrType.INDEX16;
+wireVcd[GX.Attr.CLR0].type = GX.AttrType.INDEX16;
+
+const wireVat: GX_VtxAttrFmt[][] = nArray(8, () =>
+    nArray(GX.Attr.MAX + 1, () => ({ compType: GX.CompType.U8, compShift: 0, compCnt: 0 } as GX_VtxAttrFmt))
+);
+wireVat[0][GX.Attr.POS]  = { compType: GX.CompType.S16,  compShift: 0, compCnt: GX.CompCnt.POS_XYZ };
+wireVat[0][GX.Attr.CLR0] = { compType: GX.CompType.RGBA8, compShift: 0, compCnt: GX.CompCnt.CLR_RGBA };
+
+const wireShader: Shader = {
+    layers: [],
+    flags: ShaderFlags.Fog,
+    attrFlags: ShaderAttrFlags.CLR,
+    hasHemisphericProbe: false,
+    hasReflectiveProbe: false,
+    reflectiveProbeMaskTexId: null,
+    reflectiveProbeIdx: 0,
+    reflectiveAmbFactor: 0.0,
+    hasNBTTexture: false,
+    nbtTexId: null,
+    nbtParams: 0,
+    furRegionsTexId: null,
+    color: { r: 1, g: 1, b: 1, a: 1 },
+    normalFlags: NormalFlags.HasVertexColor | NormalFlags.HasVertexAlpha,
+    lightFlags: 0,
+    texMtxCount: 0,
+};
+
+const wireMaterial = materialFactory.buildObjectMaterial(wireShader, texFetcher, false);
+const texScrollBindings = (((model as any).dpTexScrollBindings ?? []) as DPTexScrollBinding[]);
+const findTexScrollBinding = (b: DPMapBatch): DPTexScrollBinding | null => {
+    let found: DPTexScrollBinding | null = null;
+
+    for (const s of texScrollBindings) {
+        if (s.materialIndex !== b.materialIndex)
+            continue;
+        if (s.blendMaterialIndex !== -1 && s.blendMaterialIndex !== b.blendMaterialIndex)
+            continue;
+        found = s;
+    }
+
+    return found;
+};
+
+const addScrollFixed = (layer: any, duFixed: number, dvFixed: number) => {
+    if (!layer || (duFixed === 0 && dvFixed === 0))
+        return;
+
+    const slot = (materialFactory as any).addScrollSlot?.(duFixed | 0, dvFixed | 0);
+    if (slot !== undefined) {
+        layer.enableScroll = 1;
+        layer.scrollSlot = slot;
+    }
+};
+
+const addHeuristicScroll = (layer: any, uPx: number, vPx: number, texW: number, texH: number) => {
+    addScrollFixed(
+        layer,
+        ((uPx << 16) / Math.max(1, texW)) | 0,
+        ((vPx << 16) / Math.max(1, texH)) | 0,
+    );
+};
+
+const addTexScroll2 = (layer: any, uSpeed: number, vSpeed: number, texW: number, texH: number) => {
+    addScrollFixed(
+        layer,
+        ((uSpeed << 16) / Math.max(1, texW << 6)) | 0,
+        ((vSpeed << 16) / Math.max(1, texH << 6)) | 0,
+    );
+};
     const DP_WATER_DRAW_MODES = new Set<number>([0x00, 0x05, 0x14, 0x15, 0x18, 0x19,]);
 
 const DP_SCROLL_WATER_TEXIDS = new Set<number>([
@@ -1726,13 +1850,13 @@ const DP_SCROLL_WATER_TEXIDS = new Set<number>([
 ]);
 
 const DP_SCROLL_WATERFALL_TEXIDS = new Set<number>([
- 358,123 ,253,254,368,368,1127, 3560,510,    3563,3562,1941,2750,2048,270, 
+ 358,123 ,253,254,368,368,1127, 3560,510,    3563,3562,1941,2750,2048,270, 1231,1232
 ]);
 
 const __dpScrollCandidateLogged = new Set<number>();
 for (const b of batches) {
             const isSoftFormat = (b.pixelFormat !== 1 && b.pixelFormat !== 7 && b.pixelFormat !== 8);
-            const isKnownCutoutTex = [905,3,6,31,61,119,164,289,349,351,354,355,544,356,2087,3195,1101,1028,1122,1125,1050,1049,1051,1066,1075,1423,1896,1897,1888,1889].includes(b.materialId);
+            const isKnownCutoutTex = [738,739,732,733,2678,905,3,6,31,61,119,164,289,349,351,354,355,544,356,2087,3195,1101,1028,1122,1125,1050,1049,1051,1066,1075,1423,1896,1897,1888,1889].includes(b.materialId);
 
             // 1. SCAN ALPHA (Data Gathering)
             let aMin = 255;
@@ -1741,7 +1865,7 @@ for (const b of batches) {
                 if (a < aMin) aMin = a;
             }
 
-            const isImposterWall = [1157, 1156, 1146, 1151, 1165, 1170, 1145, 1147, 1152, 1135, 1134].includes(b.materialId);
+            const isImposterWall = [3549,732,733,1967,1157, 1156, 1146, 1151, 1165, 1170, 1145, 1147, 1152, 1135, 1134].includes(b.materialId);
             // Meshes that vanish head-on - Force them to stay Angle-Safe
             const isPortal = [2048, 2514, 2510].includes(b.materialId);
 
@@ -1801,28 +1925,38 @@ const DP_FORWARD_SCROLL_TEXIDS = new Set<number>([
 ]);
 
 const allowScroll =
-  b.isWater ||
-  DP_SCROLL_WATER_TEXIDS.has(b.materialId) ||
-  DP_SCROLL_WATERFALL_TEXIDS.has(b.materialId) ||
-  DP_FORWARD_SCROLL_TEXIDS.has(b.materialId);
+    b.isWater ||
+    DP_SCROLL_WATER_TEXIDS.has(b.materialId) ||
+    DP_SCROLL_WATERFALL_TEXIDS.has(b.materialId) ||
+    DP_FORWARD_SCROLL_TEXIDS.has(b.materialId);
 
 if (DP_FORWARD_SCROLL_TEXIDS.has(b.materialId)) {
-  // texId 402: forward scroll
-  b.scrollPxU = -9;
-  b.scrollPxV = 0;
+    b.scrollPxUA = -9;
+    b.scrollPxVA = 0;
+    b.scrollPxUB = -9;
+    b.scrollPxVB = 0;
 } else {
-  // existing water / waterfall behavior
-  b.scrollPxU = 0;
-  b.scrollPxV = allowScroll ? (b.isWater ? -1 : 2) : 0;
+    const defaultV = allowScroll ? (b.isWater ? -1 : 2) : 0;
+    b.scrollPxUA = 0;
+    b.scrollPxVA = defaultV;
+    b.scrollPxUB = 0;
+    b.scrollPxVB = defaultV;
 }
-            const addScroll = (layer: any, texW: number, texH: number) => {
-                if (!layer || (b.scrollPxU === 0 && b.scrollPxV === 0)) return;
-                const slot = (materialFactory as any).addScrollSlot?.(((b.scrollPxU << 16) / Math.max(1, texW)) | 0, ((b.scrollPxV << 16) / Math.max(1, texH)) | 0);
-                if (slot !== undefined) { layer.enableScroll = 1; layer.scrollSlot = slot; }
-            };
-            if (layers.length > 0) addScroll(layers[0], b.texW, b.texH);
-            if (layers.length > 1) addScroll(layers[1], b.blendTexW, b.blendTexH);
+const texScroll2 = findTexScrollBinding(b);
 
+if (texScroll2) {
+    if (layers.length > 0)
+        addTexScroll2(layers[0], texScroll2.uSpeedA, texScroll2.vSpeedA, b.texW, b.texH);
+
+    if (layers.length > 1)
+        addTexScroll2(layers[1], texScroll2.uSpeedB, texScroll2.vSpeedB, b.blendTexW, b.blendTexH);
+} else {
+    if (layers.length > 0)
+        addHeuristicScroll(layers[0], b.scrollPxUA, b.scrollPxVA, b.texW, b.texH);
+
+    if (layers.length > 1)
+        addHeuristicScroll(layers[1], b.scrollPxUB, b.scrollPxVB, b.blendTexW, b.blendTexH);
+}
             const shader: Shader = {
                 layers, flags: shaderFlags, attrFlags,
                 hasHemisphericProbe: false, hasReflectiveProbe: false,
@@ -1906,6 +2040,52 @@ batchVtxArrays[GX.Attr.TEX1] = { buffer: ArrayBufferSlice.fromView(tex1DV), offs
             const geom = new ShapeGeometry(batchVtxArrays, vcd, vat, new DataView(out.buffer), false);
             geom.setPnMatrixMap(nArray(10, () => 0), false, false);
             shapes.shapes[targetList].push(new Shape(geom, new ShapeMaterial(material), false));
+
+            // wireframe version of the same batch
+try {
+    const wireClrDV = new DataView(new ArrayBuffer(vtxCountOut * 4));
+    for (let i = 0; i < vtxCountOut; i++) {
+        wireClrDV.setUint8(i * 4 + 0, 0);
+        wireClrDV.setUint8(i * 4 + 1, 255);
+        wireClrDV.setUint8(i * 4 + 2, 255);
+        wireClrDV.setUint8(i * 4 + 3, 255);
+    }
+
+    const edgeVtxCount = (b.tEnd - b.tStart) * 6;
+    const lineDL = new Uint8Array(3 + edgeVtxCount * 4);
+    let wp = 0;
+    lineDL[wp++] = 0xA8;
+    lineDL[wp++] = (edgeVtxCount >>> 8) & 0xFF;
+    lineDL[wp++] = (edgeVtxCount >>> 0) & 0xFF;
+
+    for (let tri = 0; tri < (b.tEnd - b.tStart); tri++) {
+        const base = tri * 3;
+        const edges = [
+            base + 0, base + 1,
+            base + 1, base + 2,
+            base + 2, base + 0,
+        ];
+
+        for (let e = 0; e < edges.length; e++) {
+            const idx = edges[e];
+            lineDL[wp++] = (idx >>> 8) & 0xFF;
+            lineDL[wp++] = idx & 0xFF;
+            lineDL[wp++] = (idx >>> 8) & 0xFF;
+            lineDL[wp++] = idx & 0xFF;
+        }
+    }
+
+    const wireVtxArrays: GX_Array[] = [];
+    wireVtxArrays[GX.Attr.POS]  = { buffer: ArrayBufferSlice.fromView(batchPosDV), offs: 0, stride: 6 };
+    wireVtxArrays[GX.Attr.CLR0] = { buffer: ArrayBufferSlice.fromView(wireClrDV), offs: 0, stride: 4 };
+
+    const wireGeom = new ShapeGeometry(wireVtxArrays, wireVcd, wireVat, new DataView(lineDL.buffer), false);
+    wireGeom.setPnMatrixMap(nArray(10, () => 0), false, false);
+
+    shapes.wireframes.push(new Shape(wireGeom, new ShapeMaterial(wireMaterial), false));
+} catch (e) {
+    console.error('[DP WIREFRAME BUILD FAILED]', e, b);
+}
         }
 
     return shapes;

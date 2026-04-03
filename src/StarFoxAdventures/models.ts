@@ -46,11 +46,12 @@ interface Fur {
 }
 
 export interface ModelRenderContext {
-    sceneCtx: SceneRenderContext;
-    showDevGeometry: boolean;
+    sceneCtx: SceneRenderContext;
+    showDevGeometry: boolean;
 showDevObjects?: boolean;
-    showMeshes: boolean; 
-    ambienceIdx: number;
+    showMeshes: boolean; 
+    showMapWireframe?: boolean;
+    ambienceIdx: number;
     outdoorAmbientColor: Color;
     object?: ObjectInstance;
     setupLights: (lights: GX_Material.Light[], typeMask: LightType) => void;
@@ -68,9 +69,10 @@ const scratchVec0 = vec3.create();
 const scratchBox0 = new AABB();
 
 export class ModelShapes {
-    public shapes: Shape[][] = [];
-    public furs: Fur[] = [];
-    public waters: Shape[] = [];
+    public shapes: Shape[][] = [];
+    public furs: Fur[] = [];
+    public waters: Shape[] = [];
+    public wireframes: Shape[] = [];
 
     constructor(public model: Model, public posBuffer: DataView, public nrmBuffer?: DataView) {
     }
@@ -85,9 +87,12 @@ export class ModelShapes {
         for (let i = 0; i < this.furs.length; i++)
             this.furs[i].shape.reloadVertices();
 
-        for (let i = 0; i < this.waters.length; i++)
-            this.waters[i].reloadVertices();
-    }
+        for (let i = 0; i < this.waters.length; i++)
+            this.waters[i].reloadVertices();
+
+        for (let i = 0; i < this.wireframes.length; i++)
+            this.wireframes[i].reloadVertices();
+    }
 
     public forceMaterialUpdates(device: GfxDevice): void {
         console.log(`[DEBUG_MODELS] Calling forceMaterialUpdates for ModelShapes.`);
@@ -129,78 +134,108 @@ export class ModelShapes {
                // console.warn(`[DEBUG_MODELS] Material for water shape found, but rebindTextures method is missing.`);
             }
         }
+
+        for (let i = 0; i < this.wireframes.length; i++) {
+            const wireShape = this.wireframes[i];
+            const material = (wireShape as any).material;
+            if (material && typeof material.rebindTextures === 'function') {
+                material.rebindTextures(device);
+            }
+        }
     }
 
 
-    public addRenderInsts(device: GfxDevice, renderInstManager: GfxRenderInstManager, modelCtx: ModelRenderContext, renderLists: SFARenderLists | null, matrix: mat4, matrixPalette: ReadonlyMat4[], overrideSortDepth?: number, overrideSortLayer?: number) {
-    const lights = nArray(8, () => new GX_Material.Light());
-    if (!this.model.isMapBlock && ((this.model.lightFlags & 0xc) === 0))
-        modelCtx.setupLights(lights, LightType.POINT | LightType.DIRECTIONAL);
-    else
-        modelCtx.setupLights(lights, LightType.POINT);
+       public addRenderInsts(device: GfxDevice, renderInstManager: GfxRenderInstManager, modelCtx: ModelRenderContext, renderLists: SFARenderLists | null, matrix: mat4, matrixPalette: ReadonlyMat4[], overrideSortDepth?: number, overrideSortLayer?: number) {
+    const lights = nArray(8, () => new GX_Material.Light());
+    if (!this.model.isMapBlock && ((this.model.lightFlags & 0xc) === 0))
+        modelCtx.setupLights(lights, LightType.POINT | LightType.DIRECTIONAL);
+    else
+        modelCtx.setupLights(lights, LightType.POINT);
 
-    const shapeCtx: ShapeRenderContext = {
-        modelCtx,
-        setupLights: (dst: GX_Material.Light[]) => {
-            for (let i = 0; i < dst.length; i++)
-                dst[i].copy(lights[i]);
-        }
-    };
+    const shapeCtx: ShapeRenderContext = {
+        modelCtx,
+        setupLights: (dst: GX_Material.Light[]) => {
+            for (let i = 0; i < dst.length; i++)
+                dst[i].copy(lights[i]);
+        }
+    };
 
-    if (modelCtx.showMeshes) {
-        for (let i = 0; i < 3; i++) { 
-            if (this.shapes[i] !== undefined) {
-                if (renderLists !== null)
-                    renderInstManager.setCurrentRenderInstList(renderLists.world[i]);
-                for (let j = 0; j < this.shapes[i].length; j++) {
-                    const shape = this.shapes[i][j];
-                    if (shape.isDevGeometry && !modelCtx.showDevGeometry)
-                        continue; 
+const drawFilledMeshes = modelCtx.showMeshes;
+const drawWireframe = !!modelCtx.showMapWireframe && this.model.isMapBlock;
+    if (drawFilledMeshes) {
+        for (let i = 0; i < 3; i++) { 
+            if (this.shapes[i] !== undefined) {
+                if (renderLists !== null)
+                    renderInstManager.setCurrentRenderInstList(renderLists.world[i]);
+                for (let j = 0; j < this.shapes[i].length; j++) {
+                    const shape = this.shapes[i][j];
+                    if (shape.isDevGeometry && !modelCtx.showDevGeometry)
+                        continue; 
 
-                    mat4.copy(scratchMtx0, matrix);
-                    mat4PostTranslate(scratchMtx0, this.model.modelTranslate);
+                    mat4.copy(scratchMtx0, matrix);
+                    mat4PostTranslate(scratchMtx0, this.model.modelTranslate);
 
-                    let draw = true;
-                    if (modelCtx.cullByAabb && shape.geom.aabb !== undefined) {
-                        scratchBox0.transform(shape.geom.aabb, scratchMtx0);
-                        draw = modelCtx.sceneCtx.viewerInput.camera.frustum.contains(scratchBox0);
-                    }
+                    let draw = true;
+                    if (modelCtx.cullByAabb && shape.geom.aabb !== undefined) {
+                        scratchBox0.transform(shape.geom.aabb, scratchMtx0);
+                        draw = modelCtx.sceneCtx.viewerInput.camera.frustum.contains(scratchBox0);
+                    }
 
-                    if (draw)
-                        shape.addRenderInsts(device, renderInstManager, scratchMtx0, shapeCtx, {}, matrixPalette, overrideSortDepth, overrideSortLayer);
-                }
-            }
-        }
-    } 
+                    if (draw)
+                        shape.addRenderInsts(device, renderInstManager, scratchMtx0, shapeCtx, {}, matrixPalette, overrideSortDepth, overrideSortLayer);
+                }
+            }
+        }
+    }
 
-    if (renderLists !== null)
-        renderInstManager.setCurrentRenderInstList(renderLists.waters);
-    if (modelCtx.showMeshes) {
-        for (let i = 0; i < this.waters.length; i++) {
-            mat4.copy(scratchMtx0, matrix);
-            mat4PostTranslate(scratchMtx0, this.model.modelTranslate);
-            this.waters[i].addRenderInsts(device, renderInstManager, scratchMtx0, shapeCtx, {}, matrixPalette);
-        }
-    }
+    if (drawWireframe) {
+if (renderLists !== null)
+    renderInstManager.setCurrentRenderInstList(renderLists.world[0]);
+        for (let i = 0; i < this.wireframes.length; i++) {
+            const shape = this.wireframes[i];
 
-    if (renderLists !== null)
-        renderInstManager.setCurrentRenderInstList(renderLists.furs);
-    if (modelCtx.showMeshes) { 
-        for (let i = 0; i < this.furs.length; i++) {
-            const fur = this.furs[i];
-            for (let j = 0; j < fur.numLayers; j++) {
-                mat4.copy(scratchMtx0, matrix);
-                mat4PostTranslate(scratchMtx0,
-                    [this.model.modelTranslate[0],
-                    this.model.modelTranslate[1] + 0.4 * (j + 1),
-                    this.model.modelTranslate[2]]);
+            mat4.copy(scratchMtx0, matrix);
+            mat4PostTranslate(scratchMtx0, this.model.modelTranslate);
 
-                fur.shape.addRenderInsts(device, renderInstManager, scratchMtx0, shapeCtx, {
-                    furLayer: j,
-                }, matrixPalette, undefined, BLOCK_FUR_RENDER_LAYER);
-            }
-        }
-    }
+            let draw = true;
+            if (modelCtx.cullByAabb && shape.geom.aabb !== undefined) {
+                scratchBox0.transform(shape.geom.aabb, scratchMtx0);
+                draw = modelCtx.sceneCtx.viewerInput.camera.frustum.contains(scratchBox0);
+            }
+
+            if (draw)
+                shape.addRenderInsts(device, renderInstManager, scratchMtx0, shapeCtx, {}, matrixPalette, overrideSortDepth, overrideSortLayer);
+        }
+    }
+
+    if (renderLists !== null)
+        renderInstManager.setCurrentRenderInstList(renderLists.waters);
+    if (drawFilledMeshes) {
+        for (let i = 0; i < this.waters.length; i++) {
+            mat4.copy(scratchMtx0, matrix);
+            mat4PostTranslate(scratchMtx0, this.model.modelTranslate);
+            this.waters[i].addRenderInsts(device, renderInstManager, scratchMtx0, shapeCtx, {}, matrixPalette);
+        }
+    }
+
+    if (renderLists !== null)
+        renderInstManager.setCurrentRenderInstList(renderLists.furs);
+    if (drawFilledMeshes) { 
+        for (let i = 0; i < this.furs.length; i++) {
+            const fur = this.furs[i];
+            for (let j = 0; j < fur.numLayers; j++) {
+                mat4.copy(scratchMtx0, matrix);
+                mat4PostTranslate(scratchMtx0,
+                    [this.model.modelTranslate[0],
+                    this.model.modelTranslate[1] + 0.4 * (j + 1),
+                    this.model.modelTranslate[2]]);
+
+                fur.shape.addRenderInsts(device, renderInstManager, scratchMtx0, shapeCtx, {
+                    furLayer: j,
+                }, matrixPalette, undefined, BLOCK_FUR_RENDER_LAYER);
+            }
+        }
+    }
 }
 
     public destroy(device: GfxDevice) {
@@ -215,10 +250,14 @@ export class ModelShapes {
             this.furs[i].shape.destroy(device);
         this.furs = [];
 
-        for (let i = 0; i < this.waters.length; i++)
-            this.waters[i].destroy(device);
-        this.waters = [];
-    }
+        for (let i = 0; i < this.waters.length; i++)
+            this.waters[i].destroy(device);
+        this.waters = [];
+
+        for (let i = 0; i < this.wireframes.length; i++)
+            this.wireframes[i].destroy(device);
+        this.wireframes = [];
+    }
 }
 
 export interface FineSkin {

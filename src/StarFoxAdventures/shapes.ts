@@ -72,15 +72,15 @@ class MyShapeHelper {
         }
     }
 
-    public setOnRenderInst(renderInst: GfxRenderInst, draw: LoadedVertexDraw | null = null): void {
-        renderInst.setVertexInput(this.inputLayout, this.vertexBufferDescriptors, this.indexBufferDescriptor);
-        if (draw !== null) {
-            renderInst.setDrawCount(draw.indexCount, draw.indexOffset);
-        }
-        else {
-            renderInst.setDrawCount(this.loadedVertexData.totalIndexCount);
-        }
+public setOnRenderInst(renderInst: GfxRenderInst, draw: LoadedVertexDraw | null = null): void {
+    renderInst.setVertexInput(this.inputLayout, this.vertexBufferDescriptors, this.indexBufferDescriptor);
+
+    if (draw !== null) {
+        renderInst.setDrawCount(draw.indexCount, draw.indexOffset);
+    } else {
+        renderInst.setDrawCount(this.loadedVertexData.totalIndexCount);
     }
+}
 
     public destroy(device: GfxDevice): void {
         for (let buffer of this.vertexBuffers)
@@ -137,8 +137,8 @@ export class ShapeGeometry {
         this.hasFineSkinning = hasFineSkinning;
     }
 
-    public setOnRenderInst(device: GfxDevice, renderInstManager: GfxRenderInstManager, renderInst: GfxRenderInst,
-        modelToWorldMtx: ReadonlyMat4, matrixPalette: ReadonlyMat4[], camera: Camera, overrideSortDepth?: number, overrideSortLayer?: number)
+public setOnRenderInst(device: GfxDevice, renderInstManager: GfxRenderInstManager, renderInst: GfxRenderInst,
+    modelToWorldMtx: ReadonlyMat4, matrixPalette: ReadonlyMat4[], camera: Camera, overrideSortDepth?: number, overrideSortLayer?: number, draw: LoadedVertexDraw | null = null)
     {
         if (this.shapeHelper === null) {
             this.shapeHelper = new MyShapeHelper(device, renderInstManager.gfxRenderCache,
@@ -151,8 +151,7 @@ export class ShapeGeometry {
             this.verticesDirty = false;
         }
 
-        this.shapeHelper.setOnRenderInst(renderInst);
-
+this.shapeHelper.setOnRenderInst(renderInst, draw);
         this.drawParams.clear();
 
         const worldToViewMtx = scratchMtx0;
@@ -292,9 +291,8 @@ export class Shape {
         this.geom.reloadVertices();
     }
 
-    public setOnRenderInst(device: GfxDevice, renderInstManager: GfxRenderInstManager, renderInst: GfxRenderInst, modelToWorldMtx: ReadonlyMat4, shapeCtx: ShapeRenderContext, matOptions: MaterialOptions, matrixPalette: ReadonlyMat4[], overrideSortDepth?: number, overrideSortLayer?: number) {
-        this.geom.setOnRenderInst(device, renderInstManager, renderInst, modelToWorldMtx, matrixPalette, shapeCtx.modelCtx.sceneCtx.viewerInput.camera, overrideSortDepth, overrideSortLayer);
-        this.material.setOnMaterialParams(scratchMaterialParams, this.geom, modelToWorldMtx, shapeCtx, matOptions);
+public setOnRenderInst(device: GfxDevice, renderInstManager: GfxRenderInstManager, renderInst: GfxRenderInst, modelToWorldMtx: ReadonlyMat4, shapeCtx: ShapeRenderContext, matOptions: MaterialOptions, matrixPalette: ReadonlyMat4[], overrideSortDepth?: number, overrideSortLayer?: number, draw: LoadedVertexDraw | null = null) {       
+this.geom.setOnRenderInst(device, renderInstManager, renderInst, modelToWorldMtx, matrixPalette, shapeCtx.modelCtx.sceneCtx.viewerInput.camera, overrideSortDepth, overrideSortLayer, draw);        this.material.setOnMaterialParams(scratchMaterialParams, this.geom, modelToWorldMtx, shapeCtx, matOptions);
 
         const drawParams = this.geom.getDrawParams();
 
@@ -311,14 +309,34 @@ export class Shape {
         }
 
         const materialHelper = this.material.getGXMaterialHelper();
-        setGXMaterialOnRenderInst(renderInstManager, renderInst, materialHelper, scratchMaterialParams, drawParams);
+setGXMaterialOnRenderInst(renderInstManager, renderInst, materialHelper, scratchMaterialParams, drawParams);
+
+// DP/SFA map wireframe toggle.
+// Only apply to map/block geometry, not spawned objects.
+if (shapeCtx.modelCtx.showMapWireframe && shapeCtx.modelCtx.object === undefined) {
+    renderInst.setMegaStateFlags({ wireframe: true });
+}    }
+
+public addRenderInsts(device: GfxDevice, renderInstManager: GfxRenderInstManager, modelToWorldMtx: ReadonlyMat4, shapeCtx: ShapeRenderContext, matOptions: MaterialOptions, matrixPalette: ReadonlyMat4[], overrideSortDepth?: number, overrideSortLayer?: number) {
+    const draws = this.geom.loadedVertexData.draws;
+
+    if (draws.length === 0) {
+        const renderInst = renderInstManager.newRenderInst();
+        this.setOnRenderInst(device, renderInstManager, renderInst, modelToWorldMtx, shapeCtx, matOptions, matrixPalette, overrideSortDepth, overrideSortLayer, null);
+        renderInstManager.submitRenderInst(renderInst);
+        return;
     }
 
-    public addRenderInsts(device: GfxDevice, renderInstManager: GfxRenderInstManager, modelToWorldMtx: ReadonlyMat4, shapeCtx: ShapeRenderContext, matOptions: MaterialOptions, matrixPalette: ReadonlyMat4[], overrideSortDepth?: number, overrideSortLayer?: number) {
+    for (let i = 0; i < draws.length; i++) {
+        const draw = draws[i];
+        if (draw.indexCount <= 0)
+            continue;
+
         const renderInst = renderInstManager.newRenderInst();
-        this.setOnRenderInst(device, renderInstManager, renderInst, modelToWorldMtx, shapeCtx, matOptions, matrixPalette, overrideSortDepth, overrideSortLayer);
+        this.setOnRenderInst(device, renderInstManager, renderInst, modelToWorldMtx, shapeCtx, matOptions, matrixPalette, overrideSortDepth, overrideSortLayer, draw);
         renderInstManager.submitRenderInst(renderInst);
     }
+}
     
     public destroy(device: GfxDevice) {
         this.geom.destroy(device);

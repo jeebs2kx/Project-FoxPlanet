@@ -336,17 +336,49 @@ if (isTrueTrans) {
 }
 
 export class StandardMapMaterial extends StandardMaterial {
-    protected genScrollableTexCoord(texMap: TexMap, texGenSrc: GX.TexGenSrc, scrollSlot?: number): TexCoord {
-        if (scrollSlot !== undefined) {
-            const scroll = this.factory.scrollSlots[scrollSlot];
-            const postTexMtx = this.mb.genPostTexMtx((dst: mat4) => {
-                mat4.fromTranslation(dst, [scroll.x / MAX_SCROLL, scroll.y / MAX_SCROLL, 0]);
-            });
+protected genScrollableTexCoord(
+    texMap: TexMap,
+    texGenSrc: GX.TexGenSrc,
+    scrollSlot?: number,
+    texId?: number,
+): TexCoord {
+    const isAncientFlower928 =
+        texId === 928 &&
+        this.shader.layers.length === 1 &&
+        (this.shader.flags & ShaderFlags.AlphaCompare) !== 0 &&
+        (this.shader.flags & ShaderFlags.CullBackface) !== 0;
 
-            return this.mb.genTexCoord(GX.TexGenType.MTX2x4, texGenSrc, undefined, undefined, getGXPostTexGenMatrix(postTexMtx));
-        } else {
-            return this.mb.genTexCoord(GX.TexGenType.MTX2x4, texGenSrc);
-        }
+    if (scrollSlot !== undefined || isAncientFlower928) {
+        const scroll = scrollSlot !== undefined ? this.factory.scrollSlots[scrollSlot] : null;
+
+        const postTexMtx = this.mb.genPostTexMtx((dst: mat4) => {
+            mat4.identity(dst);
+
+if (isAncientFlower928) {
+    mat4SetValue(dst, 0, 0, 1.5);
+    mat4SetValue(dst, 0, 3, -0.75);
+
+    mat4SetValue(dst, 1, 1, 2.0);
+    mat4SetValue(dst, 1, 3, 0.0);
+}
+
+            if (scroll !== null) {
+                mat4SetValue(dst, 0, 3, dst[12] + scroll.x / MAX_SCROLL);
+                mat4SetValue(dst, 1, 3, scroll.y / MAX_SCROLL);
+            }
+        });
+
+        return this.mb.genTexCoord(
+            GX.TexGenType.MTX2x4,
+            texGenSrc,
+            undefined,
+            undefined,
+            getGXPostTexGenMatrix(postTexMtx),
+        );
+    } else {
+        return this.mb.genTexCoord(GX.TexGenType.MTX2x4, texGenSrc);
+    }
+
     }
 
     protected addTevStagesForIndoorOutdoorBlend(texMap: TexMap, texCoord: TexCoord) {
@@ -682,10 +714,18 @@ export class StandardMapMaterial extends StandardMaterial {
     protected addTevStagesForNonLava() {
         if (this.shader.layers.length === 2 && (this.shader.layers[1].tevMode & 0x7f) === 9) {
             const texMap0 = this.mb.genTexMap(makeMaterialTexture(this.texFetcher.getTexture(this.cache, this.shader.layers[0].texId!, true)));
-            const texCoord0 = this.genScrollableTexCoord(texMap0, GX.TexGenSrc.TEX0, this.shader.layers[0].scrollSlot);
-            const texMap1 = this.mb.genTexMap(makeMaterialTexture(this.texFetcher.getTexture(this.cache, this.shader.layers[1].texId!, true)));
-            const texCoord1 = this.genScrollableTexCoord(texMap1, GX.TexGenSrc.TEX1, this.shader.layers[1].scrollSlot);
-
+const texCoord0 = this.genScrollableTexCoord(
+    texMap0,
+    GX.TexGenSrc.TEX0,
+    this.shader.layers[0].scrollSlot,
+    this.shader.layers[0].texId ?? undefined,
+);            const texMap1 = this.mb.genTexMap(makeMaterialTexture(this.texFetcher.getTexture(this.cache, this.shader.layers[1].texId!, true)));
+const texCoord1 = this.genScrollableTexCoord(
+    texMap1,
+    GX.TexGenSrc.TEX1,
+    this.shader.layers[1].scrollSlot,
+    this.shader.layers[1].texId ?? undefined,
+);
             this.addTevStageForTexture(0, texMap0, texCoord0);
             if (this.shader.flags & ShaderFlags.Reflective)
                 this.addTevStagesForReflectiveFloor();
@@ -696,8 +736,12 @@ export class StandardMapMaterial extends StandardMaterial {
                 const layer = this.shader.layers[i];
 
                 const texMap = this.mb.genTexMap(makeMaterialTexture(this.texFetcher.getTexture(this.cache, this.shader.layers[i].texId!, true)));
-                const texCoord = this.genScrollableTexCoord(texMap, GX.TexGenSrc.TEX0 + i, layer.scrollSlot);
-
+const texCoord = this.genScrollableTexCoord(
+    texMap,
+    GX.TexGenSrc.TEX0 + i,
+    layer.scrollSlot,
+    layer.texId ?? undefined,
+);
                 if (this.shader.flags & ShaderFlags.IndoorOutdoorBlend)
                     this.addTevStagesForIndoorOutdoorBlend(texMap, texCoord);
                 else

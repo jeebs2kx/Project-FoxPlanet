@@ -774,7 +774,20 @@ if (!(objType as any)._dpNameFixed) {
 
     const rawScale = objBin.getFloat32(startOffs + 0x04);
     objType.scale = (Number.isFinite(rawScale) && rawScale > 0.0 && rawScale <= 10.0) ? rawScale : 1.0;
+    (objType as any)._dpHitFlags = 0;
+    (objType as any)._dpHitRadius = 0;
+    (objType as any)._dpHitTop = 0;
+    (objType as any)._dpHitBottom = 0;
 
+    if (defSize >= 0x98) {
+        (objType as any)._dpHitFlags = objBin.getUint8(startOffs + 0x93);
+        (objType as any)._dpHitTop = objBin.getInt16(startOffs + 0x94);
+        (objType as any)._dpHitBottom = objBin.getInt16(startOffs + 0x96);
+    }
+
+    if (defSize >= 0xB8) {
+        (objType as any)._dpHitRadius = objBin.getInt16(startOffs + 0xB6);
+    }
     objType.modelNums = [];
 }
                 
@@ -1071,6 +1084,326 @@ function projectWorldToCanvas(
         depth: ndcZ,
     };
 }
+
+// ===================== DP CURVES / ROUTE + FBFX + OBJ HIT DEBUG =====================
+
+type DPCurveNode = {
+    uid: number;
+    curveType: number;
+    pos: vec3;
+    links: number[];
+    name: string;
+};
+
+type DPCurveDB = {
+    nodes: DPCurveNode[];
+    byUid: Map<number, DPCurveNode>;
+};
+
+type DPCurveRouteResult = {
+    uidPath: number[];
+    distanceSq: number;
+};
+
+type DPFbfxSeed = {
+    x: number;
+    y: number;
+    r: number;
+    grow: number;
+};
+
+const DP_FBFX_OPTIONS: Array<{ id: number; label: string }> = [
+    { id: 0,  label: '0 None' },
+    { id: 1,  label: '1 Sine Waves' },
+    { id: 2,  label: '2 Fade Out / Fade In' },
+    { id: 3,  label: '3 Lerp' },
+    { id: 4,  label: '4 Slide' },
+    { id: 5,  label: '5 No-op' },
+    { id: 6,  label: '6 Burn Paper Random' },
+    { id: 7,  label: '7 Burn Paper Center' },
+    { id: 8,  label: '8 Burn Paper Right' },
+    { id: 9,  label: '9 Burn Paper Corners' },
+    { id: 10, label: '10 Motion Blur' },
+    { id: 11, label: '11 Fade Right / In' },
+    { id: 12, label: '12 Fade Left / In' },
+    { id: 13, label: '13 Fade Down / In' },
+    { id: 14, label: '14 Fade Up / In' },
+    { id: 15, label: '15 Fade Out' },
+];
+
+function dpNum(v: any, fallback: number = 0): number {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : fallback;
+}
+
+function dpCurveSqDist(a: vec3, b: vec3): number {
+    const dx = a[0] - b[0];
+    const dy = a[1] - b[1];
+    const dz = a[2] - b[2];
+    return dx * dx + dy * dy + dz * dz;
+}
+
+function dpNormalizeCurveNode(raw: any, fallbackUid: number): DPCurveNode | null {
+    const uid = (raw?.uid ?? raw?.uID ?? raw?.id ?? fallbackUid) | 0;
+
+    const x = dpNum(raw?.x ?? raw?.pos?.[0] ?? raw?.pos?.x, 0);
+    const y = dpNum(raw?.y ?? raw?.pos?.[1] ?? raw?.pos?.y, 0);
+    const z = dpNum(raw?.z ?? raw?.pos?.[2] ?? raw?.pos?.z, 0);
+
+    const linksSrc = Array.isArray(raw?.links) ? raw.links : [];
+    const links = [
+        (linksSrc[0] ?? -1) | 0,
+        (linksSrc[1] ?? -1) | 0,
+        (linksSrc[2] ?? -1) | 0,
+        (linksSrc[3] ?? -1) | 0,
+    ];
+
+    return {
+        uid,
+        curveType: (raw?.curveType ?? raw?.type ?? 0) | 0,
+        pos: vec3.fromValues(x, y, z),
+        links,
+        name: String(raw?.name ?? ''),
+    };
+}
+
+async function loadDPCurveDB(
+    dataFetcher: DataFetcher,
+    gameInfo: GameInfo,
+    mapNum: number,
+): Promise<DPCurveDB | null> {
+    const tryPaths = [
+        `${gameInfo.pathBase}/curves/${mapNum}.json`,
+        `${gameInfo.pathBase}/curves/map_${mapNum}.json`,
+        `${gameInfo.pathBase}/dp_curves/${mapNum}.json`,
+    ];
+
+    for (const path of tryPaths) {
+        try {
+            const buf = await dataFetcher.fetchData(path, { allow404: true });
+            if (!buf || buf.byteLength === 0)
+                continue;
+
+            const text = new TextDecoder('utf-8').decode(buf.arrayBuffer as ArrayBuffer);
+            const root = JSON.parse(text);
+            const src = Array.isArray(root) ? root : (Array.isArray(root?.nodes) ? root.nodes : []);
+
+            const nodes: DPCurveNode[] = [];
+            const byUid = new Map<number, DPCurveNode>();
+
+            for (let i = 0; i < src.length; i++) {
+                const n = dpNormalizeCurveNode(src[i], i);
+                if (!n)
+                    continue;
+                nodes.push(n);
+                byUid.set(n.uid, n);
+            }
+
+            if (nodes.length > 0)
+                return { nodes, byUid };
+        } catch (e) {
+        }
+    }
+
+    return null;
+}
+
+function dpSolveCurveRoute(
+    curveDB: DPCurveDB,
+    startUid: number,
+    goalUid: number,
+    maxIterations: number = 4096,
+): DPCurveRouteResult | null {
+    const start = curveDB.byUid.get(startUid);
+    const goal  = curveDB.byUid.get(goalUid);
+
+    if (!start || !goal)
+        return null;
+
+    type RoutePoint = {
+        uid: number;
+        goalDist: number;
+        netDist: number;
+        prevUid: number;
+        visited: boolean;
+    };
+
+    const points = new Map<number, RoutePoint>();
+
+    points.set(start.uid, {
+        uid: start.uid,
+        goalDist: dpCurveSqDist(start.pos, goal.pos),
+        netDist: 0,
+        prevUid: -1,
+        visited: false,
+    });
+
+    let lastUid = -1;
+
+    for (let iter = 0; iter < maxIterations; iter++) {
+        let current: RoutePoint | null = null;
+
+        for (const p of points.values()) {
+            if (p.visited)
+                continue;
+            if (!current || (p.goalDist + p.netDist) < (current.goalDist + current.netDist))
+                current = p;
+        }
+
+        if (!current)
+            return null;
+
+        lastUid = current.uid;
+
+        if (current.uid === goal.uid)
+            break;
+
+        current.visited = true;
+
+        const base = curveDB.byUid.get(current.uid);
+        if (!base)
+            continue;
+
+        for (let i = 0; i < 4; i++) {
+            const neighborUid = base.links[i] | 0;
+            if (neighborUid < 0)
+                continue;
+
+            const neighbor = curveDB.byUid.get(neighborUid);
+            if (!neighbor)
+                continue;
+
+            const dist = current.netDist + dpCurveSqDist(base.pos, neighbor.pos);
+            const old = points.get(neighbor.uid);
+
+            if (!old) {
+                points.set(neighbor.uid, {
+                    uid: neighbor.uid,
+                    goalDist: dpCurveSqDist(neighbor.pos, goal.pos),
+                    netDist: dist,
+                    prevUid: current.uid,
+                    visited: false,
+                });
+            } else if (!old.visited && dist < old.netDist) {
+                old.netDist = dist;
+                old.prevUid = current.uid;
+            }
+        }
+    }
+
+    if (lastUid !== goal.uid)
+        return null;
+
+    const goalPoint = points.get(goal.uid);
+    if (!goalPoint)
+        return null;
+
+    const uidPath: number[] = [];
+    let curUid = goal.uid;
+
+    while (curUid >= 0) {
+        uidPath.push(curUid);
+        const p = points.get(curUid);
+        if (!p)
+            break;
+        curUid = p.prevUid;
+    }
+
+    uidPath.reverse();
+
+    return {
+        uidPath,
+        distanceSq: goalPoint.netDist,
+    };
+}
+
+function dpDrawProjectedRing(
+    ctx: CanvasRenderingContext2D,
+    clipFromWorld: mat4,
+    canvas: HTMLCanvasElement,
+    cx: number,
+    cy: number,
+    cz: number,
+    radius: number,
+    segments: number = 20,
+): void {
+    let first = true;
+
+    ctx.beginPath();
+    for (let i = 0; i <= segments; i++) {
+        const a = (i / segments) * Math.PI * 2;
+        const wx = cx + Math.cos(a) * radius;
+        const wz = cz + Math.sin(a) * radius;
+        const p = projectWorldToCanvas(clipFromWorld, canvas, wx, cy, wz);
+        if (!p)
+            continue;
+
+        if (first) {
+            ctx.moveTo(p.x, p.y);
+            first = false;
+        } else {
+            ctx.lineTo(p.x, p.y);
+        }
+    }
+    if (!first)
+        ctx.stroke();
+}
+
+function dpDrawProjectedSegment(
+    ctx: CanvasRenderingContext2D,
+    clipFromWorld: mat4,
+    canvas: HTMLCanvasElement,
+    ax: number,
+    ay: number,
+    az: number,
+    bx: number,
+    by: number,
+    bz: number,
+): void {
+    const p0 = projectWorldToCanvas(clipFromWorld, canvas, ax, ay, az);
+    const p1 = projectWorldToCanvas(clipFromWorld, canvas, bx, by, bz);
+    if (!p0 || !p1)
+        return;
+
+    ctx.beginPath();
+    ctx.moveTo(p0.x, p0.y);
+    ctx.lineTo(p1.x, p1.y);
+    ctx.stroke();
+}
+
+function dpBuildFbfxSeeds(effectId: number, width: number, height: number): DPFbfxSeed[] {
+    const seeds: DPFbfxSeed[] = [];
+
+    const push = (x: number, y: number, r: number, grow: number) => {
+        seeds.push({ x, y, r, grow });
+    };
+
+    switch (effectId) {
+    case 6: { // random
+        for (let i = 0; i < 10; i++)
+            push(Math.random() * width, Math.random() * height, 8 + Math.random() * 14, 90 + Math.random() * 110);
+        break;
+    }
+    case 7: // center
+        push(width * 0.5, height * 0.5, 12, Math.max(width, height) * 0.8);
+        break;
+    case 8: // right
+        for (let i = 0; i < 4; i++)
+            push(width - 10, (height * (i + 1)) / 5, 10, Math.max(width, height) * 0.75);
+        break;
+    case 9: // corners
+        push(0, 0, 12, Math.max(width, height) * 0.75);
+        push(width, 0, 12, Math.max(width, height) * 0.75);
+        push(0, height, 12, Math.max(width, height) * 0.75);
+        push(width, height, 12, Math.max(width, height) * 0.75);
+        break;
+    default:
+        break;
+    }
+
+    return seeds;
+}
+
 export class MapInstance {
     public setBlockFetcher(blockFetcher: BlockFetcher) {
         this.blockFetcher = blockFetcher;
@@ -1163,55 +1496,68 @@ const devName = String(otForDev?.name ?? '').toLowerCase();
 
 }
                         // --- DP ROTATION FIX ---
-                        let yawU = objParams.byteLength >= 0x08 ? objParams.getUint16(0x06) : 0;
+let yawU = objParams.byteLength >= 0x08 ? objParams.getUint16(0x06) : 0;
 
-                        if (objParams.byteLength >= 0x1A) {
-                            const flags = objParams.getUint16(0x04);
-                            const altYaw18 = objParams.getUint16(0x18);
-                            const altYaw1A = objParams.byteLength >= 0x1C ? objParams.getUint16(0x1A) : 0;
-                            const altYaw1C = objParams.byteLength >= 0x1E ? objParams.getUint16(0x1C) : 0;
-                            const altYaw28 = objParams.byteLength >= 0x14 ? objParams.getUint16(0x12) : 0;
-                            const altYaw10 = objParams.byteLength >= 0x14 ? objParams.getUint16(0x10) : 0;
+if (objParams.byteLength >= 0x20) {
+    const flags = objParams.getUint16(0x04);
+    const altYaw18 = objParams.getUint16(0x18);
+    const altYaw1A = objParams.byteLength >= 0x1C ? objParams.getUint16(0x1A) : 0;
+    const altYaw1C = objParams.byteLength >= 0x1E ? objParams.getUint16(0x1C) : 0;
+    const altYaw28 = objParams.byteLength >= 0x14 ? objParams.getUint16(0x12) : 0;
+    const altYaw10 = objParams.byteLength >= 0x14 ? objParams.getUint16(0x10) : 0;
 
-                            const TYPES_YAW_28 = new Set([0x0251, 0x03AF,0x0281, 0x007E, 0x04D9, 0x0011,0x0292, 0x0527,0x050C]);
-                            const TYPES_YAW_10 = new Set([0x0409,]);
-                            const TYPES_YAW_1C = new Set([0x01D3,0x0089, 0x057E,]);
-                            const TYPES_YAW_1A = new Set([0x01CC, 0x0439,0x00D0,0x050D,0x0520,0x051F,]);
-                            const TYPES_YAW_18 = new Set([
-                                0x04F9, 0x0501, 0x04De, 0x042e, 0x0450, 0x0497, 0x0178, 
-                                0x04F8, 0x0513, 0x046D, 0x0472, 0x0489, 0x048A, 0x046B, 
-                                0x04B0, 0x0181, 0x0349, 0x0485, 0x0426, 0x0160, 0x04A8, 
-                                0x04E9, 0x0435, 0x0436, 0x0486, 0x0475, 0x0490, 0x042D,0x04E6,
-                                0x04E0, 0x04BF, 0x04B5, 0x0144, 0x0275,0x015D, 0x037A, 0x00E6,
-                                0x00B7, 0x0575, 0x00CE, 0x0051, 0x00A5, 0x0529, 0x0528, 0x050E,
-                                0x0515, 0x0131, 0x048C, 0x0487,
-                            ]);
+    if (typeNum === 0x0527) {
+        const yawByte = objParams.getUint8(0x1F); 
 
-                            if (TYPES_YAW_28.has(typeNum)) {
-                                yawU = altYaw28;
-                            } else if (TYPES_YAW_1C.has(typeNum)) {
-                                yawU = altYaw1C;
-                            } else if (TYPES_YAW_1A.has(typeNum)) {
-                                yawU = altYaw1A;
-                            } else if (TYPES_YAW_18.has(typeNum)) {
-                                yawU = altYaw18;
-                            } else if (TYPES_YAW_10.has(typeNum)) {
-                                yawU = altYaw10;
-                            } else {
-                                const hi = yawU >> 8;
-                                const lo = yawU & 0xFF;
-                                const isDummyYaw = (hi === lo && hi !== 0) || 
-                                                   (hi === 0x64 || hi === 0x5A || hi === 0x2A) ||
-                                                   (yawU === 0x06CD || yawU === 0x0632);
-                                                   
-                                if (isDummyYaw || ((flags & 0x1000) !== 0 && altYaw18 !== 0 && altYaw18 !== 0xFFFF && yawU < 0x1000)) {
-                                    yawU = altYaw18;
-                                }
-                            }
-                        }
+        if (yawByte === 0x3F) yawU = 0x4000;      
+        else if (yawByte === 0xC0) yawU = 0xC000; 
+        else yawU = yawByte << 8;
+    } else {
+        const TYPES_YAW_28 = new Set([0x0251, 0x03AF,0x0281, 0x007E, 0x04D9, 0x0011,0x0292,0x050C,]);
+        const TYPES_YAW_10 = new Set([0x0409, 0x04F4,]);
+        const TYPES_YAW_1C = new Set([0x01D3,0x0089, 0x057E,]);
+        const TYPES_YAW_1A = new Set([0x01CC, 0x0439,0x00D0,0x050D,0x0520,0x051F,]);
+        const TYPES_YAW_18 = new Set([
+          0x0416,  0x04F9, 0x0501, 0x04De, 0x042e, 0x0450, 0x0497, 0x0178,0x03C2,
+            0x04F8, 0x0513, 0x046D, 0x0472, 0x0489, 0x048A, 0x046B,
+            0x04B0, 0x0181, 0x0349, 0x0485, 0x0426, 0x0160, 0x04A8,
+            0x04E9, 0x0435, 0x0436, 0x0486, 0x0475, 0x0490, 0x042D,0x04E6,
+            0x04E0, 0x04BF, 0x04B5, 0x0144, 0x0275,0x015D, 0x037A, 0x00E6,
+            0x00B7, 0x0575, 0x00CE, 0x0051, 0x00A5, 0x0529, 0x0528, 0x050E,
+            0x0515, 0x0131, 0x048C, 0x0487,
+        ]);
+
+        if (TYPES_YAW_28.has(typeNum)) {
+            yawU = altYaw28;
+        } else if (TYPES_YAW_1C.has(typeNum)) {
+            yawU = altYaw1C;
+        } else if (TYPES_YAW_1A.has(typeNum)) {
+            yawU = altYaw1A;
+        } else if (TYPES_YAW_18.has(typeNum)) {
+            yawU = altYaw18;
+        } else if (TYPES_YAW_10.has(typeNum)) {
+            yawU = altYaw10;
+        } else {
+            const hi = yawU >> 8;
+            const lo = yawU & 0xFF;
+            const isDummyYaw = (hi === lo && hi !== 0) ||
+                               (hi === 0x64 || hi === 0x5A || hi === 0x2A) ||
+                               (yawU === 0x06CD || yawU === 0x0632);
+
+            if (isDummyYaw || ((flags & 0x1000) !== 0 && altYaw18 !== 0 && altYaw18 !== 0xFFFF && yawU < 0x1000)) {
+                yawU = altYaw18;
+            }
+        }
+    }
+}
 
                         objInst.yaw = (yawU === 0xFFFF) ? 0 : (yawU / 0x10000) * (Math.PI * 2);
-                        
+                        if (typeNum === 0x01D3 && objParams.byteLength >= 0x20) {
+    const sideByte = objParams.getUint8(0x1F); // low byte of u1E
+    if (sideByte >= 0x80) {
+        objInst.yaw += Math.PI;
+    }
+}
                         // --- DP SCALE FIX ---
                         const ot = this.mapOpts.objectManager.getObjectType(typeNum, false);
                         const baseS = (ot as any).scale ?? 1.0;
@@ -1394,10 +1740,17 @@ for (let obj of this.objects) {
                 }
 
                 const s = (obj as any)._dpScale ?? 1.0;
+                const typeNum = ((((obj as any)._dpTypeNum ?? -1) as number) & 0xFFFF);
 
                 mat4.fromTranslation(scratchObjMtx0, obj.position);
                 mat4.rotateY(scratchObjMtx0, scratchObjMtx0, obj.yaw);
-                if (s !== 1.0) mat4.scale(scratchObjMtx0, scratchObjMtx0, [s, s, s]);
+
+                if (typeNum === 0x01D3) {
+                    mat4.rotateX(scratchObjMtx0, scratchObjMtx0, Math.PI * 0.5);
+                }
+
+                if (s !== 1.0)
+                    mat4.scale(scratchObjMtx0, scratchObjMtx0, [s, s, s]);
 
                 mat4.mul(scratchObjMtx0, this.matrix, scratchObjMtx0);
 
@@ -1564,7 +1917,7 @@ class MapSceneRenderer extends SFARenderer {
 public showMinimap = true;
 public textureHolder: UI.TextureListHolder = { viewerTextures: [], onnewtextures: null };
     private blockFetcherFactory?: () => Promise<BlockFetcher>;
-    private map: MapInstance;
+private map!: MapInstance;
     private dataFetcher!: DataFetcher;
 private currentGameInfo!: GameInfo;
 private currentTexFetcher: any;
@@ -1618,6 +1971,29 @@ private rebuildSky(texFetcher: any, gameInfo: GameInfo): void {
 private sky: Sky | null = null;
 public showObjectLabels = false;
 public showHits = false;
+public showHitVolumes = false;
+public showMapWireframe = false;
+public showCurves = false;
+public showCurveLabels = true;
+
+private dpCurveDB: DPCurveDB | null = null;
+private dpCurveStartUid = -1;
+private dpCurveGoalUid = -1;
+private dpCurvePathSet = new Set<number>();
+private dpCurvePathOrder = new Map<number, number>();
+private dpCurveDistanceSq = 0;
+
+private dpFbfxCanvas: HTMLCanvasElement | null = null;
+private dpFbfxCtx: CanvasRenderingContext2D | null = null;
+private dpFbfxState = {
+    active: false,
+    effectId: 0,
+    durationMs: 1200,
+    startMs: 0,
+    seeds: [] as DPFbfxSeed[],
+    lastCamX: 0,
+    lastCamZ: 0,
+};
 private selectedObject: ObjectInstance | null = null;
 private projectedObjectLabels: Array<{
     obj: ObjectInstance;
@@ -1778,6 +2154,13 @@ const lines: string[] = [
     `activeModel=${activeModelId >= 0 ? `0x${dpHex(activeModelId).toUpperCase()}` : 'none'}`,
     `models=${modelText}`,
     `materials=${mats.length} scale=${scale.toFixed(3)} yaw=${yawDeg.toFixed(1)}°`,
+        (() => {
+        const hitFlags = ((((ot as any)?._dpHitFlags ?? 0) as number) & 0xFF);
+        const hitRadius = ((((ot as any)?._dpHitRadius ?? 0) as number) * scale);
+        const hitTop = ((((ot as any)?._dpHitTop ?? 0) as number) * scale);
+        const hitBottom = ((((ot as any)?._dpHitBottom ?? 0) as number) * scale);
+        return `hit=flags:0x${hitFlags.toString(16)} r=${hitRadius.toFixed(1)} top=${hitTop.toFixed(1)} bottom=${hitBottom.toFixed(1)}`;
+    })(),
     `textures=${texIds.length ? texIds.map((n) => `0x${dpHex(n).toUpperCase()}`).join(', ') : 'none'}`,
     `pos=(${obj.position[0].toFixed(1)}, ${obj.position[1].toFixed(1)}, ${obj.position[2].toFixed(1)})`,
 ];
@@ -1880,6 +2263,424 @@ private drawDPMinimapOverlay(viewerInput: Viewer.ViewerRenderInput): void {
         texFetcher,
         cache,
     });
+}
+
+public setDPCurveDB(curveDB: DPCurveDB | null): void {
+    this.dpCurveDB = curveDB;
+    this.dpCurveStartUid = -1;
+    this.dpCurveGoalUid = -1;
+    this.dpCurveDistanceSq = 0;
+    this.dpCurvePathSet.clear();
+    this.dpCurvePathOrder.clear();
+}
+
+public solveDPCurveRoute(startUid: number, goalUid: number): boolean {
+    if (!this.dpCurveDB)
+        return false;
+
+    const result = dpSolveCurveRoute(this.dpCurveDB, startUid, goalUid);
+    this.dpCurveStartUid = startUid | 0;
+    this.dpCurveGoalUid = goalUid | 0;
+    this.dpCurveDistanceSq = 0;
+    this.dpCurvePathSet.clear();
+    this.dpCurvePathOrder.clear();
+
+    if (!result)
+        return false;
+
+    this.dpCurveDistanceSq = result.distanceSq;
+    for (let i = 0; i < result.uidPath.length; i++) {
+        const uid = result.uidPath[i] | 0;
+        this.dpCurvePathSet.add(uid);
+        this.dpCurvePathOrder.set(uid, i);
+    }
+
+    return true;
+}
+
+public clearDPCurveRoute(): void {
+    this.dpCurveStartUid = -1;
+    this.dpCurveGoalUid = -1;
+    this.dpCurveDistanceSq = 0;
+    this.dpCurvePathSet.clear();
+    this.dpCurvePathOrder.clear();
+}
+
+public playDPFramebufferFX(effectId: number, durationMs: number = 1200): void {
+    if (effectId === 0) {
+        this.dpFbfxState.active = false;
+        if (this.dpFbfxCtx && this.dpFbfxCanvas)
+            this.dpFbfxCtx.clearRect(0, 0, this.dpFbfxCanvas.width, this.dpFbfxCanvas.height);
+        return;
+    }
+
+    this.ensureDPFramebufferCanvas();
+
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+
+    this.dpFbfxState.active = true;
+    this.dpFbfxState.effectId = effectId | 0;
+    this.dpFbfxState.durationMs = Math.max(100, durationMs | 0);
+    this.dpFbfxState.startMs = performance.now();
+    this.dpFbfxState.seeds = dpBuildFbfxSeeds(effectId | 0, width, height);
+}
+
+private ensureDPFramebufferCanvas(): void {
+    if (this.dpFbfxCanvas && this.dpFbfxCtx)
+        return;
+
+    const canvas = document.createElement('canvas');
+    canvas.id = 'dp-fbfx-overlay';
+    canvas.style.position = 'fixed';
+    canvas.style.left = '0';
+    canvas.style.top = '0';
+    canvas.style.width = '100vw';
+    canvas.style.height = '100vh';
+    canvas.style.pointerEvents = 'none';
+    canvas.style.zIndex = '9990';
+
+    document.body.appendChild(canvas);
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx)
+        return;
+
+    this.dpFbfxCanvas = canvas;
+    this.dpFbfxCtx = ctx;
+}
+
+private drawDPFramebufferFXOverlay(viewerInput: Viewer.ViewerRenderInput): void {
+    if (!this.dpFbfxCanvas || !this.dpFbfxCtx)
+        return;
+
+    const canvas = this.dpFbfxCanvas;
+    const ctx = this.dpFbfxCtx;
+
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.max(1, Math.floor(window.innerWidth));
+    const h = Math.max(1, Math.floor(window.innerHeight));
+
+    if (canvas.width !== Math.floor(w * dpr) || canvas.height !== Math.floor(h * dpr)) {
+        canvas.width = Math.floor(w * dpr);
+        canvas.height = Math.floor(h * dpr);
+    }
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    if (!this.dpFbfxState.active)
+        return;
+
+    const now = performance.now();
+    const t = (now - this.dpFbfxState.startMs) / this.dpFbfxState.durationMs;
+    const clamped = Math.max(0, Math.min(1, t));
+
+    if (clamped >= 1) {
+        this.dpFbfxState.active = false;
+        return;
+    }
+
+    const fadePulse = clamped < 0.5 ? (clamped * 2) : ((1 - clamped) * 2);
+
+    ctx.save();
+
+    switch (this.dpFbfxState.effectId) {
+    case 1: { // SINE_WAVES
+        const spread = (w * 0.5) * clamped;
+        const amp = Math.max(12, w * 0.03);
+        const centerX = w * 0.5;
+        const leftX = centerX - spread;
+        const rightX = centerX + spread;
+
+        ctx.fillStyle = `rgba(0,0,0,${0.12 + fadePulse * 0.08})`;
+        ctx.fillRect(0, 0, w, h);
+
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+
+        const drawWave = (baseX: number, sign: number) => {
+            ctx.beginPath();
+            for (let y = 0; y <= h; y += 8) {
+                const x = baseX + Math.sin((y * 0.02) + (clamped * Math.PI * 8.0)) * amp * sign;
+                if (y === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+        };
+
+        drawWave(leftX, -1);
+        drawWave(rightX, 1);
+        break;
+    }
+
+    case 3: { // LERP
+        ctx.fillStyle = `rgba(255,255,255,${0.18 * (1 - clamped)})`;
+        ctx.fillRect(0, 0, w, h);
+        break;
+    }
+
+    case 4: { // SLIDE
+        const slideW = Math.floor(w * clamped);
+        ctx.fillStyle = 'rgba(0,0,0,0.85)';
+        ctx.fillRect(0, 0, Math.max(0, w - slideW), h);
+        break;
+    }
+
+    case 6:
+    case 7:
+    case 8:
+    case 9: { // burn paper family
+        ctx.fillStyle = 'rgba(0,0,0,0.94)';
+        ctx.fillRect(0, 0, w, h);
+
+        ctx.globalCompositeOperation = 'destination-out';
+        for (const s of this.dpFbfxState.seeds) {
+            const r = s.r + s.grow * clamped;
+            const grad = ctx.createRadialGradient(s.x, s.y, Math.max(1, r * 0.25), s.x, s.y, r);
+            grad.addColorStop(0.0, 'rgba(0,0,0,1)');
+            grad.addColorStop(0.65, 'rgba(0,0,0,0.85)');
+            grad.addColorStop(1.0, 'rgba(0,0,0,0)');
+            ctx.fillStyle = grad;
+            ctx.beginPath();
+            ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.globalCompositeOperation = 'source-over';
+
+        ctx.strokeStyle = 'rgba(255,180,90,0.55)';
+        ctx.lineWidth = 2;
+        for (const s of this.dpFbfxState.seeds) {
+            const r = s.r + s.grow * clamped;
+            ctx.beginPath();
+            ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+        break;
+    }
+
+    case 10: { // MOTION_BLUR (viewer-side approximation)
+        const cam = viewerInput.camera.worldMatrix;
+        const camX = cam[12];
+        const camZ = cam[14];
+        const dx = (camX - this.dpFbfxState.lastCamX) * 0.04;
+        const dz = (camZ - this.dpFbfxState.lastCamZ) * 0.04;
+        this.dpFbfxState.lastCamX = camX;
+        this.dpFbfxState.lastCamZ = camZ;
+
+        for (let i = 0; i < 6; i++) {
+            ctx.fillStyle = `rgba(255,255,255,${0.03 * (1 - i / 6)})`;
+            ctx.fillRect(dx * i * 12, dz * i * 12, w, h);
+        }
+
+        ctx.fillStyle = 'rgba(0,0,0,0.05)';
+        ctx.fillRect(0, 0, w, h);
+        break;
+    }
+
+    case 11:
+    case 12:
+    case 13:
+    case 14:
+    case 15:
+    case 2: { // fade family
+        const alpha = (this.dpFbfxState.effectId === 15) ? clamped : fadePulse;
+
+        ctx.fillStyle = `rgba(0,0,0,${Math.max(0, Math.min(1, alpha))})`;
+        ctx.fillRect(0, 0, w, h);
+
+        let x0 = 0, y0 = 0, x1 = w, y1 = 0;
+        if (this.dpFbfxState.effectId === 11) { x0 = w; y0 = 0; x1 = 0; y1 = 0; }
+        if (this.dpFbfxState.effectId === 12) { x0 = 0; y0 = 0; x1 = w; y1 = 0; }
+        if (this.dpFbfxState.effectId === 13) { x0 = 0; y0 = h; x1 = 0; y1 = 0; }
+        if (this.dpFbfxState.effectId === 14) { x0 = 0; y0 = 0; x1 = 0; y1 = h; }
+
+        if (this.dpFbfxState.effectId !== 2 && this.dpFbfxState.effectId !== 15) {
+            const grad = ctx.createLinearGradient(x0, y0, x1, y1);
+            grad.addColorStop(0.0, `rgba(255,255,255,${0.18 * alpha})`);
+            grad.addColorStop(1.0, 'rgba(255,255,255,0)');
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, 0, w, h);
+        }
+        break;
+    }
+
+    case 5:
+    default:
+        break;
+    }
+
+    ctx.restore();
+}
+
+private drawDPCurveOverlay(viewerInput: Viewer.ViewerRenderInput): void {
+    if (this.dpOverlayUIHidden)
+        return;
+    if (!this.isDPMapScene)
+        return;
+    if (!this.showCurves)
+        return;
+    if (!this.dpCurveDB)
+        return;
+
+    const ctx = getDebugOverlayCanvas2D() as CanvasRenderingContext2D | null;
+    if (!ctx)
+        return;
+
+    const canvas = ctx.canvas;
+    const clipFromWorld = getClipFromWorldMatrix(viewerInput);
+    if (!clipFromWorld)
+        return;
+
+    const mapMtx = this.map.getMapMatrix();
+
+    ctx.save();
+    ctx.lineWidth = 1.5;
+
+    // Links first
+    for (const node of this.dpCurveDB.nodes) {
+        for (const linkUid of node.links) {
+            if (linkUid < 0 || linkUid <= node.uid)
+                continue;
+
+            const other = this.dpCurveDB.byUid.get(linkUid);
+            if (!other)
+                continue;
+
+            const a = transformMapPoint(mapMtx, node.pos[0], node.pos[1], node.pos[2]);
+            const b = transformMapPoint(mapMtx, other.pos[0], other.pos[1], other.pos[2]);
+
+            const p0 = projectWorldToCanvas(clipFromWorld, canvas, a[0], a[1], a[2]);
+            const p1 = projectWorldToCanvas(clipFromWorld, canvas, b[0], b[1], b[2]);
+            if (!p0 || !p1)
+                continue;
+
+            const aOrd = this.dpCurvePathOrder.get(node.uid);
+            const bOrd = this.dpCurvePathOrder.get(other.uid);
+            const onRoute =
+                aOrd !== undefined &&
+                bOrd !== undefined &&
+                Math.abs(aOrd - bOrd) === 1;
+
+            ctx.strokeStyle = onRoute ? 'rgba(255,220,0,0.95)' : 'rgba(0,180,255,0.55)';
+            ctx.beginPath();
+            ctx.moveTo(p0.x, p0.y);
+            ctx.lineTo(p1.x, p1.y);
+            ctx.stroke();
+        }
+    }
+
+    // Nodes + labels
+    ctx.font = '14px monospace';
+    ctx.textBaseline = 'middle';
+
+    for (const node of this.dpCurveDB.nodes) {
+        const w = transformMapPoint(mapMtx, node.pos[0], node.pos[1], node.pos[2]);
+        const p = projectWorldToCanvas(clipFromWorld, canvas, w[0], w[1], w[2]);
+        if (!p)
+            continue;
+
+        const isStart = node.uid === this.dpCurveStartUid;
+        const isGoal  = node.uid === this.dpCurveGoalUid;
+        const isPath  = this.dpCurvePathSet.has(node.uid);
+
+        ctx.fillStyle =
+            isStart ? '#00ff88' :
+            isGoal  ? '#ff5050' :
+            isPath  ? '#ffe100' :
+                      'rgba(255,255,255,0.85)';
+
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, isStart || isGoal ? 4 : 2.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        if (this.showCurveLabels) {
+            const label = node.name ? `${node.uid} ${node.name}` : `${node.uid}`;
+            ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+            ctx.lineWidth = 3;
+            ctx.strokeText(label, p.x + 7, p.y);
+            ctx.fillText(label, p.x + 7, p.y);
+        }
+    }
+
+    ctx.restore();
+}
+
+private drawDPObjectHitOverlay(viewerInput: Viewer.ViewerRenderInput): void {
+    if (this.dpOverlayUIHidden)
+        return;
+    if (!this.isDPMapScene)
+        return;
+    if (!this.showHitVolumes)
+        return;
+
+    const ctx = getDebugOverlayCanvas2D() as CanvasRenderingContext2D | null;
+    if (!ctx)
+        return;
+
+    const canvas = ctx.canvas;
+    const clipFromWorld = getClipFromWorldMatrix(viewerInput);
+    if (!clipFromWorld)
+        return;
+
+    ctx.save();
+    ctx.lineWidth = 1.2;
+
+    for (const obj of this.map.objects) {
+        if ((obj as any)._isDevDP && !this.showDevObjects)
+            continue;
+
+        const typeNum = ((((obj as any)._dpTypeNum ?? -1) as number) & 0xFFFF);
+        const ot = this.map.mapOpts?.objectManager?.getObjectType?.(typeNum, false);
+        if (!ot)
+            continue;
+
+        const scale = (((obj as any)._dpScale ?? 1.0) as number);
+        const hitFlags = ((((ot as any)._dpHitFlags ?? 0) as number) & 0xFF);
+        const rawRadius = (((ot as any)._dpHitRadius ?? 0) as number);
+        const rawTop = (((ot as any)._dpHitTop ?? 0) as number);
+        const rawBottom = (((ot as any)._dpHitBottom ?? 0) as number);
+
+        const radius = Math.abs(rawRadius * scale);
+        if (!Number.isFinite(radius) || radius <= 0.0)
+            continue;
+
+        const worldPos = this.map.getObjectWorldPosition(obj, scratchVec3a);
+        let y0 = worldPos[1] - radius;
+        let y1 = worldPos[1] + radius;
+
+        const top = rawTop * scale;
+        const bottom = rawBottom * scale;
+
+        if (hitFlags & 0x02) {
+            y0 = worldPos[1] + Math.min(top, bottom);
+            y1 = worldPos[1] + Math.max(top, bottom);
+        } else if (hitFlags & 0x01) {
+            y0 = worldPos[1];
+            y1 = worldPos[1] + radius;
+        }
+
+        const selected = obj === this.selectedObject;
+        ctx.strokeStyle =
+            selected ? 'rgba(255,255,0,0.98)' :
+            ((hitFlags & 0x10) ? 'rgba(255,140,0,0.85)' : 'rgba(0,255,80,0.85)');
+
+        dpDrawProjectedRing(ctx, clipFromWorld, canvas, worldPos[0], y0, worldPos[2], radius, 24);
+        dpDrawProjectedRing(ctx, clipFromWorld, canvas, worldPos[0], y1, worldPos[2], radius, 24);
+
+        const midY = (y0 + y1) * 0.5;
+        if (Math.abs(y1 - y0) > 2.0)
+            dpDrawProjectedRing(ctx, clipFromWorld, canvas, worldPos[0], midY, worldPos[2], radius, 24);
+
+        for (let i = 0; i < 8; i++) {
+            const a = (i / 8) * Math.PI * 2;
+            const x = worldPos[0] + Math.cos(a) * radius;
+            const z = worldPos[2] + Math.sin(a) * radius;
+            dpDrawProjectedSegment(ctx, clipFromWorld, canvas, x, y0, z, x, y1, z);
+        }
+    }
+
+    ctx.restore();
 }
 
 private drawObjectDebugOverlay(viewerInput: Viewer.ViewerRenderInput): void {
@@ -2165,8 +2966,10 @@ protected override update(viewerInput: Viewer.ViewerRenderInput) {
     }
 
 this.drawObjectDebugOverlay(viewerInput);
+this.drawDPObjectHitOverlay(viewerInput);
 this.drawDPHitOverlay(viewerInput);
 this.drawDPMinimapOverlay(viewerInput);
+this.drawDPFramebufferFXOverlay(viewerInput);
 }
 
 
@@ -2202,12 +3005,12 @@ protected override addSkyRenderPasses(
         }
 
 const forceHideDPObjectsInVR = this.isDPMapScene && !!sceneCtx.viewerInput.isVR;
-
 const modelCtx = {
     sceneCtx,
     showDevGeometry: false,
     ambienceIdx: 0,
     showMeshes: true,
+    showMapWireframe: this.showMapWireframe,
     outdoorAmbientColor: scratchColor0,
     setupLights: () => {},
     animController: this.animController,
@@ -2230,7 +3033,11 @@ public override destroy(device: GfxDevice) {
         window.removeEventListener('contextmenu', this.onDebugOverlayContextMenu, true);
         this.debugOverlayCanvas = null;
     }
-
+    if (this.dpFbfxCanvas) {
+        this.dpFbfxCanvas.remove();
+        this.dpFbfxCanvas = null;
+        this.dpFbfxCtx = null;
+    }
     super.destroy(device);
     if (this.sky) { this.sky.destroy(device); this.sky = null; }
     if (this.envfxMan) this.envfxMan.destroy(device);
@@ -2242,12 +3049,20 @@ function cleanupDPUI(): void {
 
     document.getElementById('dp-mpeg-voice-ui')?.remove();
     document.getElementById('dp-mpeg-voice-toggle')?.remove();
+
+    document.getElementById('dp-fbfx-ui')?.remove();
+    document.getElementById('dp-fbfx-toggle')?.remove();
+
     document.getElementById('dp-top-toggle-bar')?.remove();
 
     (window as any).__dpObjectsToggle = undefined;
     (window as any).__dpDevObjectsToggle = undefined;
     (window as any).__dpObjectLabelsToggle = undefined;
     (window as any).__dpHitsToggle = undefined;
+    (window as any).__dpHitVolumesToggle = undefined;
+    (window as any).__dpWireframeToggle = undefined;
+    (window as any).__dpFbfxToggle = undefined;
+    (window as any).__dpFbfxUIState = undefined;
 }
 function cleanupTextureToggleUI(): void {
     const state = (window as any).__sfaTextureToggle as {
@@ -2275,13 +3090,200 @@ function getDPTopToggleBar(): HTMLDivElement {
         bar.style.zIndex = '10000';
         bar.style.display = 'flex';
         bar.style.alignItems = 'center';
-        bar.style.gap = '4px';
+        bar.style.gap = '2px';
+
+        // make the whole top-right toggle bar about 50% smaller
+        bar.style.transformOrigin = 'top right';
+        bar.style.transform = 'scale(0.8)';
+
         document.body.appendChild(bar);
     }
 
     return bar;
 }
+function ensureDPWireframeUI(
+  onChange: (enabled: boolean) => void | Promise<void>,
+  initial?: boolean
+): void {
+  type ToggleState = {
+    wrap: HTMLDivElement;
+    cb: HTMLInputElement;
+    handler: ((e: Event) => void) | null;
+    last?: boolean;
+  };
 
+  let state = (window as any).__dpWireframeToggle as ToggleState | undefined;
+
+  if (!state) {
+    const wrap = document.createElement('div');
+    wrap.style.padding = '1px 3px';
+    wrap.style.background = 'rgba(0,0,0,0.5)';
+    wrap.style.color = '#fff';
+    wrap.style.font = '11px sans-serif';
+    wrap.style.borderRadius = '2px';
+    wrap.style.display = 'flex';
+    wrap.style.alignItems = 'center';
+    wrap.style.height = '20px';
+    wrap.style.boxSizing = 'border-box';
+    wrap.style.order = '6';
+
+    const label = document.createElement('label');
+    label.style.cursor = 'pointer';
+    label.style.display = 'flex';
+    label.style.alignItems = 'center';
+    label.style.lineHeight = '1';
+
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.style.marginRight = '1px';
+
+    label.appendChild(cb);
+    label.appendChild(document.createTextNode('Wireframe'));
+    wrap.appendChild(label);
+    getDPTopToggleBar().appendChild(wrap);
+
+    state = { wrap, cb, handler: null, last: false };
+    (window as any).__dpWireframeToggle = state;
+  }
+
+  if (state.handler)
+    state.cb.removeEventListener('change', state.handler);
+
+  const desired = (typeof initial === 'boolean') ? initial : (state.last ?? false);
+  state.cb.checked = desired;
+
+  state.handler = async () => {
+    state!.last = state!.cb.checked;
+    await onChange(state!.cb.checked);
+  };
+
+  state.cb.addEventListener('change', state.handler);
+}
+
+function ensureDPFbfxUI(
+  onPlay: (effectId: number) => void | Promise<void>,
+  initialOpen: boolean = false
+): void {
+  type FbfxState = {
+    toggleWrap: HTMLDivElement;
+    panel: HTMLDivElement;
+    cb: HTMLInputElement;
+    select: HTMLSelectElement;
+    playBtn: HTMLButtonElement;
+    handlerToggle: ((e: Event) => void) | null;
+    handlerPlay: ((e: Event) => void) | null;
+    open: boolean;
+  };
+
+  let state = (window as any).__dpFbfxUIState as FbfxState | undefined;
+
+  if (!state) {
+    const toggleWrap = document.createElement('div');
+    toggleWrap.id = 'dp-fbfx-toggle';
+    toggleWrap.style.padding = '1px 3px';
+    toggleWrap.style.background = 'rgba(0,0,0,0.5)';
+    toggleWrap.style.color = '#fff';
+    toggleWrap.style.font = '11px sans-serif';
+    toggleWrap.style.borderRadius = '2px';
+    toggleWrap.style.display = 'flex';
+    toggleWrap.style.alignItems = 'center';
+    toggleWrap.style.height = '20px';
+    toggleWrap.style.boxSizing = 'border-box';
+    toggleWrap.style.order = '7';
+
+    const label = document.createElement('label');
+    label.style.cursor = 'pointer';
+    label.style.display = 'flex';
+    label.style.alignItems = 'center';
+    label.style.lineHeight = '1';
+
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.style.marginRight = '1px';
+
+    label.appendChild(cb);
+    label.appendChild(document.createTextNode('FBFX'));
+    toggleWrap.appendChild(label);
+    getDPTopToggleBar().appendChild(toggleWrap);
+
+    const panel = document.createElement('div');
+    panel.id = 'dp-fbfx-ui';
+    panel.style.position = 'fixed';
+    panel.style.right = '8px';
+    panel.style.top = '28px';
+    panel.style.width = '260px';
+    panel.style.zIndex = '10000';
+    panel.style.background = 'rgba(0,0,0,0.88)';
+    panel.style.color = '#fff';
+    panel.style.font = '12px sans-serif';
+    panel.style.padding = '8px';
+    panel.style.border = '1px solid rgba(255,255,255,0.18)';
+    panel.style.borderRadius = '8px';
+    panel.style.display = 'none';
+    panel.style.gap = '8px';
+
+    const title = document.createElement('div');
+    title.textContent = 'DP Framebuffer FX';
+    title.style.fontWeight = 'bold';
+    title.style.marginBottom = '6px';
+    panel.appendChild(title);
+
+    const select = document.createElement('select');
+    select.style.width = '100%';
+    select.style.marginBottom = '6px';
+
+    for (const opt of DP_FBFX_OPTIONS) {
+      const el = document.createElement('option');
+      el.value = String(opt.id);
+      el.textContent = opt.label;
+      select.appendChild(el);
+    }
+
+    panel.appendChild(select);
+
+    const playBtn = document.createElement('button');
+    playBtn.textContent = 'Play';
+    playBtn.style.width = '100%';
+    panel.appendChild(playBtn);
+
+    document.body.appendChild(panel);
+
+    state = {
+      toggleWrap,
+      panel,
+      cb,
+      select,
+      playBtn,
+      handlerToggle: null,
+      handlerPlay: null,
+      open: false,
+    };
+
+    (window as any).__dpFbfxUIState = state;
+  }
+
+  if (state.handlerToggle)
+    state.cb.removeEventListener('change', state.handlerToggle);
+  if (state.handlerPlay)
+    state.playBtn.removeEventListener('click', state.handlerPlay);
+
+  state.open = initialOpen;
+  state.cb.checked = initialOpen;
+  state.panel.style.display = initialOpen ? 'block' : 'none';
+
+  state.handlerToggle = () => {
+    state!.open = state!.cb.checked;
+    state!.panel.style.display = state!.open ? 'block' : 'none';
+  };
+
+  state.handlerPlay = async () => {
+    const effectId = Number(state!.select.value) | 0;
+    await onPlay(effectId);
+  };
+
+  state.cb.addEventListener('change', state.handlerToggle);
+  state.playBtn.addEventListener('click', state.handlerPlay);
+}
 
 function ensureDPObjectsUI(
   onChange: (enabled: boolean) => void | Promise<void>,
@@ -4214,6 +5216,14 @@ ensureDPHitsUI(async (enabled: boolean) => {
     mapRenderer.showHits = enabled;
 }, false);
 
+mapRenderer.showMapWireframe = false;
+ensureDPWireframeUI(async (enabled: boolean) => {
+    mapRenderer.showMapWireframe = enabled;
+}, false);
+
+ensureDPFbfxUI(async (effectId: number) => {
+    mapRenderer.playDPFramebufferFX(effectId, 1200);
+}, false);
 setTimeout(async () => {
             const mr = mapRenderer as any;
             if (mr.envSelect && mr.envfxMan) {
