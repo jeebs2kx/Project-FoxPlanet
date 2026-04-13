@@ -115,14 +115,14 @@ export class ObjectType {
     public adjustCullRadius: number = 0;
     public ambienceNum: number = 0;
 
-    constructor(public typeNum: number, private data: DataView, private isEarlyObject: boolean) {
-        this.scale = this.data.getFloat32(0x4);
+constructor(public typeNum: number, private data: DataView, private useEarlyNameLayout: boolean) {
+            this.scale = this.data.getFloat32(0x4);
         if (!Number.isFinite(this.scale) || this.scale <= 0 || this.scale > 10.0)
     this.scale = 1.0;
         this.objClass = this.data.getInt16(0x50);
 
         this.name = '';
-        let offs = isEarlyObject ? 0x58 : 0x91;
+       let offs = this.useEarlyNameLayout ? 0x58 : 0x91;
         let c;
         while ((c = this.data.getUint8(offs)) != 0) {
             this.name += String.fromCharCode(c);
@@ -177,16 +177,41 @@ export class ObjectInstance {
     public cullRadius: number = 10;
     private modelAnimNum: number | null = null;
     private anim: Anim | null = null;
-    private modanim: DataView;
+    private modanim!: DataView;
     private ambienceIdx: number = 0;
     public animSpeed: number = 0.01;
     public internalClass?: SFAClass;
 
 constructor(public world: World, public objType: ObjectType, public objParams: DataView, public posInMap: vec3) {
     this.scale = objType.scale;
-
     const objClass = this.objType.objClass;
     const typeNum = this.objType.typeNum;
+
+    if (this.world.gameInfo.pathBase === 'StarFoxAdventuresDemo') {
+        if (typeNum === 0x0593) // SnowTree4
+            this.scale = 3.0;
+         else if (typeNum === 0x05AB) 
+        this.scale = 0.2;
+             else if (typeNum === 0x03A4) 
+        this.scale = 0.1;
+                 else if (typeNum === 0x05AD) 
+        this.scale = 0.1;
+                     else if (typeNum === 0x01E2) 
+        this.scale = 0.1;
+                         else if (typeNum === 0x01E1) 
+        this.scale = 3.0;
+                             else if (typeNum === 0x0098) 
+        this.scale = 3.0;
+                                 else if (typeNum === 0x057E) 
+        this.scale = 4.0;
+                                     else if (typeNum === 0x058C) 
+        this.scale = 1.0;
+                                         else if (typeNum === 0x0587) 
+        this.scale = 1.0;
+                                             else if (typeNum === 0x0594) 
+        this.scale = 3.0;
+
+    }
     this.objParams = __dpNormalizeObjParams(typeNum, objClass, objParams);
 
     this.commonObjectParams = parseCommonObjectParams(this.objParams);
@@ -397,13 +422,18 @@ public update(updateCtx: ObjectUpdateContext) {
 }
 
 export class ObjectManager {
-    private objectsTab: DataView;
-    private objectsBin: DataView;
-    private objindexBin: DataView | null;
-    private objectTypes: ObjectType[] = [];
+    private objectsTab!: DataView;
+    private objectsBin!: DataView;
+    private objindexBin!: DataView | null;
+private objectTypes: ObjectType[] = [];
 
-    private constructor(private world: World, private useEarlyObjects: boolean) {
-    }
+private constructor(
+  private world: World,
+  private useEarlyObjects: boolean,
+  private useEarlyNameLayout: boolean,
+) {
+
+}
 
     private async init(dataFetcher: DataFetcher) {
         const pathBase = this.world.gameInfo.pathBase;
@@ -417,11 +447,20 @@ export class ObjectManager {
         this.objindexBin = !this.useEarlyObjects ? objindexBin!.createDataView() : null;
     }
 
-    public static async create(world: World, dataFetcher: DataFetcher, useEarlyObjects: boolean): Promise<ObjectManager> {
-        const self = new ObjectManager(world, useEarlyObjects);
-        await self.init(dataFetcher);
-        return self;
-    }
+public static async create(
+  world: World,
+  dataFetcher: DataFetcher,
+  useEarlyObjects: boolean,
+  useEarlyNameLayout: boolean = useEarlyObjects,
+): Promise<ObjectManager> {
+
+  const self = new ObjectManager(world, useEarlyObjects, useEarlyNameLayout);
+
+  await self.init(dataFetcher);
+
+  return self;
+
+}
 
 public getObjectType(typeNum: number, skipObjindex: boolean = false): ObjectType {
         if (this.objindexBin && !skipObjindex) {
@@ -430,7 +469,7 @@ public getObjectType(typeNum: number, skipObjindex: boolean = false): ObjectType
 
         if (this.objectTypes[typeNum] === undefined) {
             const offs = readUint32(this.objectsTab, 0, typeNum);
-            const objType = new ObjectType(typeNum, dataSubarray(this.objectsBin, offs), this.useEarlyObjects);
+const objType = new ObjectType(typeNum, dataSubarray(this.objectsBin, offs), this.useEarlyNameLayout);
             this.objectTypes[typeNum] = objType;
         }
 

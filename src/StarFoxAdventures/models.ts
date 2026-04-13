@@ -6,10 +6,9 @@ import { GfxRenderInstManager } from "../gfx/render/GfxRenderInstManager.js";
 import { DataFetcher } from '../DataFetcher.js';
 import * as GX_Material from '../gx/gx_material.js';
 import { Color } from '../Color.js';
-// export { Shape } from './shapes.js'; // This line is likely redundant as Shape is imported below
 
 import { GameInfo } from './scenes.js';
-import { MapLight, SFAMaterial } from './materials.js'; // Assuming SFAMaterial is your Material class
+import { MapLight, SFAMaterial } from './materials.js'; 
 import { Keyframe, SFAAnimationController } from './animation.js';
 import { MaterialFactory } from './materials.js';
 import { dataSubarray, readUint32, setInt8Clamped, setInt16Clamped, mat4PostTranslate } from './util.js';
@@ -271,10 +270,10 @@ export interface FineSkin {
 }
 
 export class Model {
-    public createModelShapes: CreateModelShapesFunc;
+    public createModelShapes!: CreateModelShapesFunc;
     public sharedModelShapes: ModelShapes | null = null;
 
-    public modelData: DataView;
+    public modelData!: DataView;
 
     public joints: Joint[] = [];
     public coarseBlends: CoarseBlend[] = [];
@@ -286,8 +285,8 @@ export class Model {
 
     public materials: (SFAMaterial | undefined)[] = [];
 
-    public originalPosBuffer: DataView;
-    public originalNrmBuffer: DataView;
+    public originalPosBuffer!: DataView;
+    public originalNrmBuffer!: DataView;
 
     public hasFineSkinning: boolean = false;
     public hasBetaFineSkinning: boolean = false;
@@ -299,10 +298,10 @@ export class Model {
     
     public skeleton?: Skeleton;
 
-    public isMapBlock: boolean;
+    public isMapBlock!: boolean;
     surfaces: any;
     meshes: any;
-    vatTableIndex: number;
+    vatTableIndex!: number;
 
     public constructor(public version: ModelVersion) {
     }
@@ -339,8 +338,8 @@ export class ModelInstance {
 
     public matrixPalette: mat4[] = [];
     private skinningDirty: boolean = true;
-    private amap: DataView;
-    public poses: Keyframe;
+    private amap!: DataView;
+    public poses!: Keyframe;
 
     constructor(public model: Model) {
         const numMatrices = this.model.joints.length + this.model.coarseBlends.length;
@@ -526,8 +525,8 @@ for (let i = 0; i < this.model.joints.length; i++) {
 }
 
 class ModelsFile {
-    private tab: DataView;
-    private bin: ArrayBufferSlice;
+    private tab!: DataView;
+    private bin!: ArrayBufferSlice;
     private models: (Model | undefined)[] = [];
 
     private constructor(private materialFactory: MaterialFactory, private texFetcher: TextureFetcher, private animController: SFAAnimationController, private modelVersion: ModelVersion) {

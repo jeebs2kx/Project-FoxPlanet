@@ -1,0 +1,1310 @@
+import * as Viewer from '../viewer.js';
+import * as UI from '../ui.js';
+
+import { GfxDevice } from '../gfx/platform/GfxPlatform.js';
+import { SceneContext } from '../SceneBase.js';
+import { DataFetcher } from '../DataFetcher.js';
+
+import { SFAAnimationController } from './animation.js';
+import { MaterialFactory } from './materials.js';
+import { SFARenderer } from './render.js';
+import { GameInfo } from './scenes.js';
+import { SFATextureFetcher } from './textures.js';
+
+const LANGUAGE_NAMES = [
+  'English',
+  'Français',
+  'Deutsch',
+  'Español',
+  'Italiano',
+];
+
+type ParagraphAlign = 'center' | 'left';
+
+interface ParsedTextRun {
+  text: string;
+  color: string;
+  isIcon: boolean;
+}
+
+interface ParsedParagraph {
+  durationMs: number;
+  align: ParagraphAlign;
+  verticalCenter: boolean;
+  runs: ParsedTextRun[];
+}
+
+interface ParsedGameTextEntry {
+  id: number;
+  offset: number;
+  size: number;
+  commandCount: number;
+  commands: number[];
+  strings: string[];
+  preview: string;
+  paragraphs: ParsedParagraph[];
+}
+
+interface DPFontGlyph {
+  textureIndex: number;
+  kerning: number;
+  offsetX: number;
+  offsetY: number;
+  textureU: number;
+  textureV: number;
+  width: number;
+  height: number;
+}
+
+interface DPSubtitleFont {
+  name: string;
+  textureIds: number[];
+  glyphs: DPFontGlyph[];
+  lineHeight: number;
+  spaceAdvance: number;
+}
+
+type CanvasLineItem =
+  | { kind: 'glyph'; glyph: DPFontGlyph; texId: number; color: string; advance: number; }
+  | { kind: 'space'; advance: number; }
+  | { kind: 'icon'; token: string; color: string; advance: number; };
+
+class DPGameTextRenderer extends SFARenderer {
+  private gameInfo!: GameInfo;
+  private dataFetcher!: DataFetcher;
+
+  private languageId = 0;
+  private entries: ParsedGameTextEntry[] = [];
+  private visibleEntries: ParsedGameTextEntry[] = [];
+  private currentVisibleIndex = -1;
+  private searchText = '';
+
+  private resultsLabel: HTMLElement | null = null;
+  private rawPre: HTMLPreElement | null = null;
+  private entryIdInput: HTMLInputElement | null = null;
+
+  private overlayRoot: HTMLDivElement | null = null;
+  private overlayCanvas: HTMLCanvasElement | null = null;
+  private overlayCtx: CanvasRenderingContext2D | null = null;
+
+  private subtitleFontFetcher: SFATextureFetcher | null = null;
+  private subtitleFont: DPSubtitleFont | null = null;
+  private subtitleAtlasCanvases = new Map<number, HTMLCanvasElement>();
+
+  private glyphScratchCanvas: HTMLCanvasElement | null = null;
+  private glyphScratchCtx: CanvasRenderingContext2D | null = null;
+
+  private isPlaying = true;
+  private loopPlayback = true;
+  private currentParagraphIndex = 0;
+  private paragraphTimeLeftMs = 0;
+  private paragraphDurationMs = 0;
+
+  private readonly subtitleScale = 2;
+
+public async create(gameInfo: GameInfo, dataFetcher: DataFetcher): Promise<Viewer.SceneGfx> {
+  this.gameInfo = gameInfo;
+  this.dataFetcher = dataFetcher;
+
+  this.ensureOverlay();
+
+  // Load gametext immediately so the scene becomes usable right away.
+  await this.loadLanguage(0);
+
+  // Load DinoSubtitleFont1 in the background so scene creation does not stall.
+  void this.loadSubtitleFont().then(() => {
+    this.updateOverlay();
+  }).catch((e) => {
+    console.warn('Background subtitle font load failed', e);
+  });
+
+  return this;
+}
+
+  public override destroy(device: GfxDevice): void {
+    this.subtitleFontFetcher?.destroy(this.materialFactory.device);
+    this.subtitleFontFetcher = null;
+    this.subtitleAtlasCanvases.clear();
+
+    this.destroyOverlay();
+    super.destroy(device);
+  }
+
+  protected override update(viewerInput: Viewer.ViewerRenderInput): void {
+    super.update(viewerInput);
+
+    if (!this.isPlaying)
+      return;
+
+    const entry = this.getCurrentEntry();
+    if (entry === null || entry.paragraphs.length === 0)
+      return;
+
+    this.paragraphTimeLeftMs -= viewerInput.deltaTime;
+
+    while (this.paragraphTimeLeftMs <= 0) {
+      this.currentParagraphIndex++;
+
+      if (this.currentParagraphIndex >= entry.paragraphs.length) {
+        if (!this.loopPlayback) {
+          this.currentParagraphIndex = entry.paragraphs.length - 1;
+          this.paragraphTimeLeftMs = 0;
+          this.paragraphDurationMs = entry.paragraphs[this.currentParagraphIndex].durationMs;
+          this.updateOverlay();
+          return;
+        }
+
+        this.currentParagraphIndex = 0;
+      }
+
+      this.startCurrentParagraph(false);
+    }
+
+    this.updateOverlayFade();
+  }
+
+  private getCurrentEntry(): ParsedGameTextEntry | null {
+    if (this.currentVisibleIndex < 0 || this.currentVisibleIndex >= this.visibleEntries.length)
+      return null;
+    return this.visibleEntries[this.currentVisibleIndex];
+  }
+
+  private async loadLanguage(languageId: number): Promise<void> {
+    const pathBase = this.gameInfo.pathBase;
+
+    const [tabBuf, binBuf] = await Promise.all([
+      this.dataFetcher.fetchData(`${pathBase}/GAMETEXT.tab`),
+      this.dataFetcher.fetchData(`${pathBase}/GAMETEXT.bin`),
+    ]);
+
+    const tab = tabBuf.createDataView();
+    const bin = binBuf.createDataView();
+
+    const languageCount = tab.getUint16(0);
+    const gametextCount = tab.getUint16(2);
+
+    if (languageId < 0 || languageId >= languageCount)
+      throw new Error(`Invalid GameText language id ${languageId}`);
+
+    const languageTabSize = 4 + gametextCount + (gametextCount * 2) + (gametextCount * 2);
+    const languageTabBase = 4 + (languageId * languageTabSize);
+
+    const languageOffset = tab.getUint32(languageTabBase + 0);
+    const commandCountBase = languageTabBase + 4;
+    const sizeBase = commandCountBase + gametextCount;
+    const offsetBase = sizeBase + (gametextCount * 2);
+
+    const entries: ParsedGameTextEntry[] = [];
+
+    for (let i = 0; i < gametextCount; i++) {
+      const commandCount = tab.getUint8(commandCountBase + i);
+      const size = tab.getUint16(sizeBase + (i * 2));
+      const relativeOffset = tab.getUint16(offsetBase + (i * 2)) * 2;
+      const absoluteOffset = languageOffset + relativeOffset;
+
+      entries.push(this.parseEntry(bin, i, absoluteOffset, size, commandCount));
+    }
+
+    this.languageId = languageId;
+    this.entries = entries;
+    this.rebuildVisibleEntries();
+  }
+
+  private parseEntry(
+    bin: DataView,
+    id: number,
+    offset: number,
+    size: number,
+    commandCount: number,
+  ): ParsedGameTextEntry {
+    const safeEnd = Math.min(bin.byteLength, offset + size);
+    const commands: number[] = [];
+
+    for (let i = 0; i < commandCount; i++) {
+      const cmdOffs = offset + (i * 2);
+      if (cmdOffs + 2 > safeEnd)
+        break;
+      commands.push(bin.getInt16(cmdOffs));
+    }
+
+    const strings: string[] = [];
+    let ptr = offset + (commandCount * 2);
+
+    for (let i = 0; i < commandCount && ptr < safeEnd; i++) {
+      const str = this.readCString(bin, ptr, safeEnd);
+      strings.push(str.text);
+      ptr = str.next;
+    }
+
+    while (strings.length < commands.length)
+      strings.push('');
+
+    const paragraphs = this.buildParagraphs(commands, strings);
+    const preview = this.buildPreview(paragraphs);
+
+    return {
+      id,
+      offset,
+      size,
+      commandCount,
+      commands,
+      strings,
+      preview,
+      paragraphs,
+    };
+  }
+
+  private readCString(bin: DataView, start: number, end: number): { text: string; next: number } {
+    const bytes: number[] = [];
+    let ptr = start;
+
+    while (ptr < end) {
+      const b = bin.getUint8(ptr++);
+      if (b === 0)
+        break;
+      bytes.push(b);
+    }
+
+    return {
+      text: bytes.map((b) => String.fromCharCode(b)).join(''),
+      next: ptr,
+    };
+  }
+
+  private readAsciiZ(dv: DataView, start: number, maxLen: number): string {
+    const chars: number[] = [];
+
+    for (let i = 0; i < maxLen; i++) {
+      const c = dv.getUint8(start + i);
+      if (c === 0)
+        break;
+      chars.push(c);
+    }
+
+    return chars.map((c) => String.fromCharCode(c)).join('');
+  }
+
+  private commandToken(cmd: number): string {
+    const u = cmd & 0xFFFF;
+
+    switch (u) {
+    case 0xFEFE: return '[A]';
+    case 0xFEFD: return '[B]';
+    case 0xFEFC: return '[C-Left]';
+    case 0xFEFB: return '[C-Right]';
+    case 0xFEFA: return '[C-Down]';
+    case 0xFEF9: return '[Z]';
+    case 0xFEF8: return '[Stick]';
+    default: return '';
+    }
+  }
+
+  private formatCommand(cmd: number): string {
+    const u = cmd & 0xFFFF;
+    return `0x${u.toString(16).toUpperCase().padStart(4, '0')}`;
+  }
+
+  private subtitleColorFromCommand(cmd: number): string | null {
+    if (cmd >= 0 || cmd < -255)
+      return null;
+
+    let colourValueSigned = cmd & 0xFF;
+    if (colourValueSigned >= 0x80)
+      colourValueSigned -= 0x100;
+
+    const colour8 = Math.abs(colourValueSigned) - 1;
+
+    const r2 = (colour8 & 0b11000000) >> 6;
+    const g2 = (colour8 & 0b00110000) >> 4;
+    const b2 = (colour8 & 0b00001100) >> 2;
+    const a2 = (colour8 & 0b00000011);
+
+    const rgb2Possibilities = [0, 72, 150, 255];
+    const a2Possibilities = [128, 192, 255, 64];
+
+    const r = rgb2Possibilities[r2];
+    const g = rgb2Possibilities[g2];
+    const b = rgb2Possibilities[b2];
+    const a = a2Possibilities[a2] / 255.0;
+
+    return `rgba(${r}, ${g}, ${b}, ${a})`;
+  }
+
+  private buildParagraphs(commands: number[], strings: string[]): ParsedParagraph[] {
+    const paragraphs: ParsedParagraph[] = [];
+
+    let currentColor = 'rgba(255, 255, 255, 1)';
+    let currentAlign: ParagraphAlign = 'center';
+    let currentVerticalCenter = false;
+    let currentRuns: ParsedTextRun[] = [];
+    let currentDurationMs = 2500;
+
+    const resetParagraphLayout = (): void => {
+      currentAlign = 'center';
+      currentVerticalCenter = false;
+    };
+
+    const pushText = (text: string): void => {
+      if (text.length === 0)
+        return;
+
+      currentRuns.push({
+        text,
+        color: currentColor,
+        isIcon: false,
+      });
+    };
+
+    const pushIcon = (text: string): void => {
+      if (text.length === 0)
+        return;
+
+      currentRuns.push({
+        text,
+        color: currentColor,
+        isIcon: true,
+      });
+    };
+
+    const finalizeParagraph = (): void => {
+      if (currentRuns.length === 0)
+        return;
+
+      paragraphs.push({
+        durationMs: Math.max(1, currentDurationMs),
+        align: currentAlign,
+        verticalCenter: currentVerticalCenter,
+        runs: currentRuns,
+      });
+
+      currentRuns = [];
+      resetParagraphLayout();
+    };
+
+    for (let i = 0; i < commands.length; i++) {
+      const cmd = commands[i];
+      const text = strings[i] ?? '';
+
+      if (cmd > 0) {
+        if (currentRuns.length > 0)
+          finalizeParagraph();
+
+        currentDurationMs = cmd;
+        resetParagraphLayout();
+        pushText(text);
+        continue;
+      }
+
+      if (cmd === 0) {
+        pushText(text);
+        pushText('\n');
+        continue;
+      }
+
+      if (cmd === -256) {
+        currentVerticalCenter = true;
+        pushText(text);
+        continue;
+      }
+
+      if (cmd === -257) {
+        currentAlign = 'left';
+        pushText(text);
+        continue;
+      }
+
+      const color = this.subtitleColorFromCommand(cmd);
+      if (color !== null) {
+        currentColor = color;
+        pushText(text);
+        continue;
+      }
+
+      const token = this.commandToken(cmd);
+      if (token.length > 0) {
+        pushIcon(token);
+        pushText(text);
+        continue;
+      }
+
+      pushText(text);
+    }
+
+    if (currentRuns.length > 0)
+      finalizeParagraph();
+
+    if (paragraphs.length === 0) {
+      const merged = strings.join('');
+      if (merged.length > 0) {
+        paragraphs.push({
+          durationMs: 2500,
+          align: 'center',
+          verticalCenter: false,
+          runs: [{
+            text: merged,
+            color: 'rgba(255, 255, 255, 1)',
+            isIcon: false,
+          }],
+        });
+      }
+    }
+
+    return paragraphs;
+  }
+
+  private buildPreview(paragraphs: ParsedParagraph[]): string {
+    return paragraphs.map((p) => {
+      const text = p.runs.map((r) => r.text).join('');
+      return `[${p.durationMs} ms] ${text}`;
+    }).join('\n\n');
+  }
+
+  private rebuildVisibleEntries(): void {
+    const q = this.searchText.trim().toLowerCase();
+
+    if (q.length === 0) {
+      this.visibleEntries = this.entries.slice();
+    } else {
+      this.visibleEntries = this.entries.filter((entry) => {
+        if (`${entry.id}` === q)
+          return true;
+
+        if (entry.preview.toLowerCase().includes(q))
+          return true;
+
+        return entry.strings.some((s) => s.toLowerCase().includes(q));
+      });
+    }
+
+    this.currentVisibleIndex = this.visibleEntries.length > 0 ? 0 : -1;
+    this.resetPlayback();
+    this.syncUI();
+  }
+
+  private selectVisibleIndex(index: number): void {
+    if (this.visibleEntries.length === 0)
+      return;
+
+    const clamped = Math.max(0, Math.min(index, this.visibleEntries.length - 1));
+    this.currentVisibleIndex = clamped;
+    this.resetPlayback();
+    this.syncUI();
+  }
+
+  private selectEntryById(id: number): void {
+    const idx = this.visibleEntries.findIndex((e) => e.id === id);
+    if (idx >= 0) {
+      this.selectVisibleIndex(idx);
+      return;
+    }
+
+    const fullIdx = this.entries.findIndex((e) => e.id === id);
+    if (fullIdx >= 0) {
+      this.searchText = '';
+      this.visibleEntries = this.entries.slice();
+      this.currentVisibleIndex = fullIdx;
+      this.resetPlayback();
+      this.syncUI();
+    }
+  }
+
+  private resetPlayback(): void {
+    this.currentParagraphIndex = 0;
+    this.paragraphTimeLeftMs = 0;
+    this.paragraphDurationMs = 0;
+
+    const entry = this.getCurrentEntry();
+    if (entry === null) {
+      this.hideOverlay();
+      return;
+    }
+
+    const hasTiming = entry.commands.some((c) => c > 0);
+    this.isPlaying = hasTiming;
+
+    this.startCurrentParagraph(true);
+  }
+
+  private startCurrentParagraph(_forceShow: boolean): void {
+    const entry = this.getCurrentEntry();
+    if (entry === null || entry.paragraphs.length === 0) {
+      this.hideOverlay();
+      return;
+    }
+
+    if (this.currentParagraphIndex < 0 || this.currentParagraphIndex >= entry.paragraphs.length)
+      this.currentParagraphIndex = 0;
+
+    const paragraph = entry.paragraphs[this.currentParagraphIndex];
+    this.paragraphDurationMs = paragraph.durationMs;
+    this.paragraphTimeLeftMs = paragraph.durationMs;
+    this.updateOverlay();
+  }
+
+  private parseDinoSubtitleFont(fontsDv: DataView): DPSubtitleFont {
+    const fontCount = fontsDv.getUint32(0);
+    if (fontCount < 2)
+      throw new Error('FONTS.bin does not contain DinoSubtitleFont1');
+
+    const FONT_SIZE = 2240;
+    const FONT_INDEX = 1;
+    const fontBase = 4 + (FONT_INDEX * FONT_SIZE);
+
+    const name = this.readAsciiZ(fontsDv, fontBase + 0x00, 0x22);
+
+    const textureIds: number[] = [];
+    for (let i = 0; i < 64; i++)
+      textureIds.push(fontsDv.getInt16(fontBase + 0x40 + (i * 2)));
+
+    const glyphs: DPFontGlyph[] = [];
+    let maxGlyphHeight = 0;
+
+    for (let i = 0; i < 256; i++) {
+      const offs = fontBase + 0xC0 + (i * 8);
+const glyph: DPFontGlyph = {
+  textureIndex: fontsDv.getUint8(offs + 0),
+  kerning: fontsDv.getInt8(offs + 1),
+  offsetX: fontsDv.getInt8(offs + 2),
+  offsetY: fontsDv.getInt8(offs + 3),
+  textureU: fontsDv.getUint8(offs + 4),
+  textureV: fontsDv.getUint8(offs + 5),
+  width: fontsDv.getUint8(offs + 6),
+  height: fontsDv.getUint8(offs + 7),
+};
+
+      glyphs.push(glyph);
+maxGlyphHeight = Math.max(maxGlyphHeight, glyph.height + Math.max(0, glyph.offsetY));
+    }
+
+    const spaceGlyph = glyphs[0x20];
+    const spaceAdvance =
+      spaceGlyph.kerning !== 0
+        ? spaceGlyph.kerning
+        : Math.max(4, spaceGlyph.width !== 0 ? spaceGlyph.width : Math.floor(maxGlyphHeight / 3));
+
+    return {
+      name,
+      textureIds,
+      glyphs,
+      lineHeight: Math.max(1, maxGlyphHeight),
+      spaceAdvance,
+    };
+  }
+
+  private tryGetDecodedTextureRGBA(texId: number): { width: number; height: number; pixels: Uint8ClampedArray } | null {
+    const fetcherAny = this.subtitleFontFetcher as any;
+    const dpDecoded: Map<number, { width: number; height: number; pixels: Uint8Array }> | undefined = fetcherAny?.dpDecoded;
+    const hit = dpDecoded?.get(texId);
+    if (!hit)
+      return null;
+
+    return {
+      width: hit.width,
+      height: hit.height,
+      pixels: new Uint8ClampedArray(hit.pixels),
+    };
+  }
+
+  private async waitForDecodedTextureRGBA(
+    texId: number,
+    alwaysUseTex1: boolean,
+    timeoutMs: number = 4000,
+  ): Promise<{ width: number; height: number; pixels: Uint8ClampedArray } | null> {
+    if (this.subtitleFontFetcher === null)
+      return null;
+
+    void this.subtitleFontFetcher.getTexture(this.materialFactory.cache, texId, alwaysUseTex1);
+
+    const startTime = performance.now();
+
+    for (;;) {
+      const hit = this.tryGetDecodedTextureRGBA(texId);
+      if (hit !== null)
+        return hit;
+
+      if ((performance.now() - startTime) >= timeoutMs)
+        return null;
+
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 16));
+      void this.subtitleFontFetcher.getTexture(this.materialFactory.cache, texId, alwaysUseTex1);
+    }
+  }
+
+private async loadSubtitleFont(): Promise<void> {
+  try {
+    const fontsBin = await this.dataFetcher.fetchData(`${this.gameInfo.pathBase}/FONTS.bin`);
+    this.subtitleFont = this.parseDinoSubtitleFont(fontsBin.createDataView());
+
+    console.warn(
+      'DinoSubtitleFont1 textureIds',
+      this.subtitleFont?.textureIds.filter((id) => id >= 0).slice(0, 16),
+    );
+
+    this.subtitleFontFetcher = await SFATextureFetcher.create(this.gameInfo, this.dataFetcher, false);
+    this.subtitleAtlasCanvases.clear();
+
+    for (const texId of this.subtitleFont.textureIds) {
+      if (texId < 0)
+        continue;
+
+      const decoded = await this.waitForDecodedTextureRGBA(texId, false, 4000);
+      if (decoded === null)
+        continue;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = decoded.width;
+      canvas.height = decoded.height;
+
+      const ctx = canvas.getContext('2d');
+      if (ctx === null)
+        continue;
+
+      const imageData = ctx.createImageData(decoded.width, decoded.height);
+      imageData.data.set(decoded.pixels);
+      ctx.putImageData(imageData, 0, 0);
+
+      this.subtitleAtlasCanvases.set(texId, canvas);
+    }
+
+    console.log(
+      'DinoSubtitleFont1',
+      this.subtitleFont?.name,
+      'atlasCount',
+      this.subtitleAtlasCanvases.size,
+    );
+
+    this.updateOverlay();
+  } catch (e) {
+    console.warn('Failed to load DinoSubtitleFont1', e);
+    this.subtitleFont = null;
+    this.subtitleFontFetcher?.destroy(this.materialFactory.device);
+    this.subtitleFontFetcher = null;
+    this.subtitleAtlasCanvases.clear();
+  }
+}
+
+  private getGlyphAdvance(glyph: DPFontGlyph): number {
+    if (glyph.kerning !== 0)
+      return glyph.kerning;
+
+    if (glyph.width !== 0)
+      return glyph.width;
+
+    return this.subtitleFont !== null ? this.subtitleFont.spaceAdvance : 8;
+  }
+
+  private getButtonAdvance(token: string): number {
+    const label = token.startsWith('[') && token.endsWith(']') ? token.slice(1, -1) : token;
+
+    if (label === 'Stick')
+      return 78;
+
+    if (label.indexOf('C-') === 0)
+      return 64;
+
+    return 42;
+  }
+
+  private fillRoundRect(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    r: number,
+  ): void {
+    const rr = Math.min(r, Math.floor(Math.min(w, h) / 2));
+
+    ctx.beginPath();
+    ctx.moveTo(x + rr, y);
+    ctx.lineTo(x + w - rr, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
+    ctx.lineTo(x + w, y + h - rr);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
+    ctx.lineTo(x + rr, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
+    ctx.lineTo(x, y + rr);
+    ctx.quadraticCurveTo(x, y, x + rr, y);
+    ctx.closePath();
+  }
+
+  private drawButtonToken(
+    ctx: CanvasRenderingContext2D,
+    token: string,
+    x: number,
+    y: number,
+    h: number,
+    alpha: number,
+  ): void {
+    const label = token.startsWith('[') && token.endsWith(']') ? token.slice(1, -1) : token;
+    const w = this.getButtonAdvance(token);
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+
+    this.fillRoundRect(ctx, x, y + 6, w, h - 12, 10);
+    ctx.fillStyle = 'rgba(255,255,255,0.16)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.50)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.fillStyle = 'rgba(255,255,255,1)';
+    ctx.font = 'bold 18px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, x + (w / 2), y + (h / 2));
+
+    ctx.restore();
+  }
+
+  private drawTintedGlyph(
+    texId: number,
+    glyph: DPFontGlyph,
+    color: string,
+    dx: number,
+    dy: number,
+    scale: number,
+    alpha: number,
+  ): void {
+    if (this.overlayCtx === null || this.glyphScratchCanvas === null || this.glyphScratchCtx === null)
+      return;
+
+    const atlas = this.subtitleAtlasCanvases.get(texId);
+    if (atlas === undefined)
+      return;
+
+    const sw = glyph.width;
+    const sh = glyph.height;
+    if (sw <= 0 || sh <= 0)
+      return;
+
+    this.glyphScratchCanvas.width = sw;
+    this.glyphScratchCanvas.height = sh;
+
+    const sctx = this.glyphScratchCtx;
+    sctx.clearRect(0, 0, sw, sh);
+    sctx.globalCompositeOperation = 'source-over';
+    sctx.drawImage(atlas, glyph.textureU, glyph.textureV, sw, sh, 0, 0, sw, sh);
+    sctx.globalCompositeOperation = 'source-in';
+    sctx.fillStyle = color;
+    sctx.fillRect(0, 0, sw, sh);
+    sctx.globalCompositeOperation = 'source-over';
+
+    this.overlayCtx.save();
+    this.overlayCtx.globalAlpha = alpha;
+    this.overlayCtx.drawImage(
+      this.glyphScratchCanvas,
+      0, 0, sw, sh,
+      dx, dy, sw * scale, sh * scale,
+    );
+    this.overlayCtx.restore();
+  }
+
+  private getCurrentOverlayAlpha(): number {
+    if (this.paragraphDurationMs <= 0)
+      return 1;
+
+    const fadeWindowMs = Math.min(250, this.paragraphDurationMs * 0.25);
+    if (this.paragraphTimeLeftMs > fadeWindowMs)
+      return 1;
+
+    return Math.max(0, this.paragraphTimeLeftMs / fadeWindowMs);
+  }
+
+  private ensureOverlay(): void {
+    if (this.overlayRoot !== null)
+      return;
+
+    this.overlayRoot = document.createElement('div');
+    this.overlayRoot.style.position = 'fixed';
+    this.overlayRoot.style.left = '50%';
+    this.overlayRoot.style.bottom = '28px';
+    this.overlayRoot.style.transform = 'translateX(-50%)';
+    this.overlayRoot.style.width = '72vw';
+    this.overlayRoot.style.maxWidth = '1100px';
+    this.overlayRoot.style.pointerEvents = 'none';
+    this.overlayRoot.style.zIndex = '100000';
+    this.overlayRoot.style.display = 'none';
+
+    this.overlayCanvas = document.createElement('canvas');
+    this.overlayCanvas.width = 1100;
+    this.overlayCanvas.height = 240;
+    this.overlayCanvas.style.display = 'block';
+    this.overlayCanvas.style.width = '100%';
+    this.overlayCanvas.style.height = '240px';
+
+    this.overlayCtx = this.overlayCanvas.getContext('2d');
+    if (this.overlayCtx !== null)
+      this.overlayCtx.imageSmoothingEnabled = false;
+
+    this.glyphScratchCanvas = document.createElement('canvas');
+    this.glyphScratchCanvas.width = 64;
+    this.glyphScratchCanvas.height = 64;
+    this.glyphScratchCtx = this.glyphScratchCanvas.getContext('2d');
+
+    this.overlayRoot.appendChild(this.overlayCanvas);
+    document.body.appendChild(this.overlayRoot);
+  }
+
+  private destroyOverlay(): void {
+    if (this.overlayRoot !== null && this.overlayRoot.parentElement !== null)
+      this.overlayRoot.parentElement.removeChild(this.overlayRoot);
+
+    this.overlayRoot = null;
+    this.overlayCanvas = null;
+    this.overlayCtx = null;
+    this.glyphScratchCanvas = null;
+    this.glyphScratchCtx = null;
+  }
+
+  private hideOverlay(): void {
+    if (this.overlayRoot !== null)
+      this.overlayRoot.style.display = 'none';
+
+    if (this.overlayCtx !== null && this.overlayCanvas !== null)
+      this.overlayCtx.clearRect(0, 0, this.overlayCanvas.width, this.overlayCanvas.height);
+  }
+
+  private drawParagraphToCanvas(paragraph: ParsedParagraph, alpha: number): void {
+    if (this.overlayCanvas === null || this.overlayCtx === null) {
+      return;
+    }
+
+    const ctx = this.overlayCtx;
+    const canvas = this.overlayCanvas;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.imageSmoothingEnabled = false;
+
+if (this.subtitleFont === null || this.subtitleAtlasCanvases.size === 0) {
+  type FallbackRun = { text: string; color: string; isIcon: boolean; };
+  const lines: FallbackRun[][] = [[]];
+  let currentLine = lines[0];
+
+  for (const run of paragraph.runs) {
+    if (run.isIcon) {
+      currentLine.push({ text: run.text, color: run.color, isIcon: true });
+      continue;
+    }
+
+    const parts = run.text.split('\n');
+    for (let i = 0; i < parts.length; i++) {
+      if (parts[i].length > 0)
+        currentLine.push({ text: parts[i], color: run.color, isIcon: false });
+
+      if (i !== parts.length - 1) {
+        currentLine = [];
+        lines.push(currentLine);
+      }
+    }
+  }
+
+  ctx.save();
+  ctx.font = 'bold 34px serif';
+  ctx.textBaseline = 'top';
+
+  const lineHeight = 38;
+  const lineWidths = lines.map((line) => {
+    let w = 0;
+    for (const run of line) {
+      if (run.isIcon)
+        w += this.getButtonAdvance(run.text);
+      else
+        w += ctx.measureText(run.text).width;
+    }
+    return w;
+  });
+
+  const maxLineWidth = Math.max(1, ...lineWidths);
+  const boxPadX = 28;
+  const boxPadY = 18;
+  const boxWidth = Math.min(canvas.width - 32, Math.ceil(maxLineWidth) + (boxPadX * 2));
+  const boxHeight = Math.max(90, (lines.length * lineHeight) + (boxPadY * 2));
+  const boxX = paragraph.align === 'center' ? Math.floor((canvas.width - boxWidth) / 2) : 20;
+  const boxY = paragraph.verticalCenter
+    ? Math.floor((canvas.height - boxHeight) / 2)
+    : canvas.height - boxHeight - 16;
+
+  ctx.globalAlpha = alpha;
+  this.fillRoundRect(ctx, boxX, boxY, boxWidth, boxHeight, 18);
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.24)';
+  ctx.fill();
+
+  let y = boxY + boxPadY;
+
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const line = lines[lineIndex];
+    let x = paragraph.align === 'center'
+      ? Math.floor((canvas.width - lineWidths[lineIndex]) / 2)
+      : boxX + boxPadX;
+
+    for (const run of line) {
+      if (run.isIcon) {
+        this.drawButtonToken(ctx, run.text, x, y, lineHeight, alpha);
+        x += this.getButtonAdvance(run.text);
+      } else {
+        ctx.fillStyle = run.color;
+        ctx.fillText(run.text, x, y);
+        x += ctx.measureText(run.text).width;
+      }
+    }
+
+    y += lineHeight;
+  }
+
+  ctx.restore();
+  return;
+}
+
+    const font = this.subtitleFont;
+    const scale = this.subtitleScale;
+
+    const lines: CanvasLineItem[][] = [[]];
+    let currentLine = lines[0];
+
+    for (const run of paragraph.runs) {
+      if (run.isIcon) {
+        currentLine.push({
+          kind: 'icon',
+          token: run.text,
+          color: run.color,
+          advance: this.getButtonAdvance(run.text),
+        });
+        continue;
+      }
+
+      for (let i = 0; i < run.text.length; i++) {
+        const ch = run.text.charAt(i);
+
+        if (ch === '\n') {
+          currentLine = [];
+          lines.push(currentLine);
+          continue;
+        }
+
+        if (ch === ' ') {
+          currentLine.push({
+            kind: 'space',
+            advance: font.spaceAdvance * scale,
+          });
+          continue;
+        }
+
+        const charCode = run.text.charCodeAt(i) & 0xFF;
+        const glyph = font.glyphs[charCode];
+        const texId = font.textureIds[glyph.textureIndex] ?? -1;
+
+        if (glyph.width === 0 || glyph.height === 0 || texId < 0) {
+          currentLine.push({
+            kind: 'space',
+            advance: font.spaceAdvance * scale,
+          });
+          continue;
+        }
+
+        currentLine.push({
+          kind: 'glyph',
+          glyph,
+          texId,
+          color: run.color,
+          advance: this.getGlyphAdvance(glyph) * scale,
+        });
+      }
+    }
+
+    const lineWidths = lines.map((line) => line.reduce((sum, item) => sum + item.advance, 0));
+    const maxLineWidth = Math.max(1, ...lineWidths);
+    const lineHeight = Math.ceil((font.lineHeight * scale) + 8);
+    const blockHeight = lines.length * lineHeight;
+
+    const boxPadX = 28;
+    const boxPadY = 18;
+    const boxWidth = Math.min(canvas.width - 32, maxLineWidth + (boxPadX * 2));
+    const boxHeight = blockHeight + (boxPadY * 2);
+    const boxX = paragraph.align === 'center' ? Math.floor((canvas.width - boxWidth) / 2) : 20;
+    const boxY = paragraph.verticalCenter
+      ? Math.floor((canvas.height - boxHeight) / 2)
+      : canvas.height - boxHeight - 16;
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    this.fillRoundRect(ctx, boxX, boxY, boxWidth, boxHeight, 18);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.24)';
+    ctx.fill();
+    ctx.restore();
+
+    let y = boxY + boxPadY;
+
+    for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+      const line = lines[lineIndex];
+      const lineWidth = lineWidths[lineIndex];
+
+      let x = paragraph.align === 'center'
+        ? Math.floor((canvas.width - lineWidth) / 2)
+        : boxX + boxPadX;
+
+      for (const item of line) {
+        if (item.kind === 'space') {
+          x += item.advance;
+          continue;
+        }
+
+        if (item.kind === 'icon') {
+          this.drawButtonToken(ctx, item.token, x, y, lineHeight, alpha);
+          x += item.advance;
+          continue;
+        }
+
+        this.drawTintedGlyph(
+          item.texId,
+          item.glyph,
+          item.color,
+          Math.floor(x + (item.glyph.offsetX * scale)),
+          Math.floor(y + (item.glyph.offsetY * scale)),
+          scale,
+          alpha,
+        );
+
+        x += item.advance;
+      }
+
+      y += lineHeight;
+    }
+  }
+
+  private updateOverlay(): void {
+    if (this.overlayRoot === null || this.overlayCanvas === null || this.overlayCtx === null)
+      return;
+
+    const entry = this.getCurrentEntry();
+    if (entry === null || entry.paragraphs.length === 0) {
+      this.hideOverlay();
+      return;
+    }
+
+    const paragraph = entry.paragraphs[this.currentParagraphIndex];
+    this.overlayRoot.style.display = 'block';
+
+    if (paragraph.verticalCenter) {
+      this.overlayRoot.style.top = '50%';
+      this.overlayRoot.style.bottom = 'auto';
+      this.overlayRoot.style.transform = 'translate(-50%, -50%)';
+    } else {
+      this.overlayRoot.style.top = 'auto';
+      this.overlayRoot.style.bottom = '28px';
+      this.overlayRoot.style.transform = 'translateX(-50%)';
+    }
+
+    this.drawParagraphToCanvas(paragraph, this.getCurrentOverlayAlpha());
+  }
+
+  private updateOverlayFade(): void {
+    this.updateOverlay();
+  }
+
+  private syncUI(): void {
+    const current = this.getCurrentEntry();
+
+    if (this.entryIdInput !== null && current !== null)
+      this.entryIdInput.value = `${current.id}`;
+
+    if (this.resultsLabel !== null) {
+      if (current === null) {
+        this.resultsLabel.textContent = `0 matches | ${LANGUAGE_NAMES[this.languageId]}`;
+      } else {
+        this.resultsLabel.textContent =
+          `${this.currentVisibleIndex + 1} / ${this.visibleEntries.length} matches | ` +
+          `Entry ${current.id} | ${LANGUAGE_NAMES[this.languageId]} | ` +
+          `${current.paragraphs.length} paragraph(s) | ` +
+          `${current.commands.some((c) => c > 0) ? 'timed subtitle' : 'static text'}`;
+      }
+    }
+
+    if (this.rawPre !== null) {
+      if (current === null) {
+        this.rawPre.textContent = '';
+      } else {
+        const rawStrings = current.strings
+          .map((s, i) => `[${i}] ${s}`)
+          .join('\n');
+
+        this.rawPre.textContent =
+          `Commands (${current.commandCount}): ${current.commands.map((c) => this.formatCommand(c)).join(', ')}\n\n` +
+          `Offset: 0x${current.offset.toString(16)}\n` +
+          `Size: ${current.size} bytes\n\n` +
+          rawStrings;
+      }
+    }
+
+    this.updateOverlay();
+  }
+
+  public createPanels(): UI.Panel[] {
+    const browserPanel = new UI.Panel();
+    browserPanel.setTitle(UI.SAND_CLOCK_ICON, 'DP GameText Browser');
+    browserPanel.elem.style.maxWidth = '420px';
+    browserPanel.elem.style.width = '420px';
+
+    const help = document.createElement('div');
+    help.style.whiteSpace = 'pre-wrap';
+    help.style.marginBottom = '8px';
+    help.textContent =
+      'Main-screen subtitle playback.\n' +
+      'Browse an entry, then it plays on the screen using paragraph timing, colour commands, line breaks, alignment, and button-icon inserts.';
+    browserPanel.contents.appendChild(help);
+
+    const languageRow = document.createElement('div');
+    languageRow.style.display = 'flex';
+    languageRow.style.gap = '8px';
+    languageRow.style.alignItems = 'center';
+    languageRow.style.marginBottom = '8px';
+
+    const languageLabel = document.createElement('span');
+    languageLabel.textContent = 'Language:';
+    languageRow.appendChild(languageLabel);
+
+    const languageSelect = document.createElement('select');
+    for (let i = 0; i < LANGUAGE_NAMES.length; i++) {
+      const option = document.createElement('option');
+      option.value = `${i}`;
+      option.textContent = LANGUAGE_NAMES[i];
+      languageSelect.appendChild(option);
+    }
+
+    languageSelect.value = `${this.languageId}`;
+    languageSelect.onchange = async () => {
+      await this.loadLanguage(Number(languageSelect.value));
+    };
+    languageRow.appendChild(languageSelect);
+
+    browserPanel.contents.appendChild(languageRow);
+
+    const searchEntry = new UI.TextEntry();
+    searchEntry.setPlaceholder('Search text or entry id');
+    searchEntry.ontext = (s: string) => {
+      this.searchText = s;
+      this.rebuildVisibleEntries();
+    };
+    browserPanel.contents.appendChild(searchEntry.elem);
+
+    const navRow = document.createElement('div');
+    navRow.style.display = 'flex';
+    navRow.style.gap = '8px';
+    navRow.style.marginTop = '8px';
+    navRow.style.marginBottom = '8px';
+
+    const prevButton = document.createElement('button');
+    prevButton.textContent = 'Prev';
+    prevButton.onclick = () => this.selectVisibleIndex(this.currentVisibleIndex - 1);
+    navRow.appendChild(prevButton);
+
+    const nextButton = document.createElement('button');
+    nextButton.textContent = 'Next';
+    nextButton.onclick = () => this.selectVisibleIndex(this.currentVisibleIndex + 1);
+    navRow.appendChild(nextButton);
+
+    this.entryIdInput = document.createElement('input');
+    this.entryIdInput.type = 'number';
+    this.entryIdInput.min = '0';
+    this.entryIdInput.style.width = '90px';
+    navRow.appendChild(this.entryIdInput);
+
+    const goButton = document.createElement('button');
+    goButton.textContent = 'Go';
+    goButton.onclick = () => {
+      const id = Number(this.entryIdInput!.value);
+      if (!Number.isNaN(id))
+        this.selectEntryById(id);
+    };
+    navRow.appendChild(goButton);
+
+    browserPanel.contents.appendChild(navRow);
+
+    const playbackRow = document.createElement('div');
+    playbackRow.style.display = 'flex';
+    playbackRow.style.gap = '8px';
+    playbackRow.style.alignItems = 'center';
+    playbackRow.style.marginBottom = '8px';
+
+    const playPauseButton = document.createElement('button');
+    playPauseButton.textContent = 'Pause';
+    playPauseButton.onclick = () => {
+      this.isPlaying = !this.isPlaying;
+      playPauseButton.textContent = this.isPlaying ? 'Pause' : 'Play';
+      this.updateOverlay();
+    };
+    playbackRow.appendChild(playPauseButton);
+
+    const restartButton = document.createElement('button');
+    restartButton.textContent = 'Restart';
+    restartButton.onclick = () => {
+      this.resetPlayback();
+      this.syncUI();
+    };
+    playbackRow.appendChild(restartButton);
+
+    const loopLabel = document.createElement('label');
+    loopLabel.style.display = 'inline-flex';
+    loopLabel.style.alignItems = 'center';
+    loopLabel.style.gap = '6px';
+
+    const loopCheckbox = document.createElement('input');
+    loopCheckbox.type = 'checkbox';
+    loopCheckbox.checked = this.loopPlayback;
+    loopCheckbox.onchange = () => {
+      this.loopPlayback = loopCheckbox.checked;
+    };
+    loopLabel.appendChild(loopCheckbox);
+
+    const loopText = document.createElement('span');
+    loopText.textContent = 'Loop';
+    loopLabel.appendChild(loopText);
+
+    playbackRow.appendChild(loopLabel);
+    browserPanel.contents.appendChild(playbackRow);
+
+    this.resultsLabel = document.createElement('div');
+    this.resultsLabel.style.color = '#aaa';
+    this.resultsLabel.style.marginBottom = '8px';
+    browserPanel.contents.appendChild(this.resultsLabel);
+
+    const details = document.createElement('details');
+    details.style.marginTop = '8px';
+
+    const summary = document.createElement('summary');
+    summary.textContent = 'Raw commands / strings';
+    details.appendChild(summary);
+
+    this.rawPre = document.createElement('pre');
+    this.rawPre.style.whiteSpace = 'pre-wrap';
+    this.rawPre.style.margin = '8px 0 0 0';
+    this.rawPre.style.font = '14px monospace';
+    this.rawPre.style.color = '#aaa';
+    details.appendChild(this.rawPre);
+
+    browserPanel.contents.appendChild(details);
+
+    this.syncUI();
+    return [browserPanel];
+  }
+}
+
+export class DPGameTextSceneDesc implements Viewer.SceneDesc {
+  constructor(
+    public id: string,
+    public name: string,
+    private gameInfo: GameInfo,
+  ) {}
+
+  public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+    const renderer = new DPGameTextRenderer(
+      context,
+      new SFAAnimationController(),
+      new MaterialFactory(device),
+    );
+
+    await renderer.create(this.gameInfo, context.dataFetcher);
+    return renderer;
+  }
+}

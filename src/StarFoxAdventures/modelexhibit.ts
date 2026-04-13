@@ -112,6 +112,56 @@ async function warmAllTexturesIntoViewer(
 
     dedupeViewerTextures(holder);
 }
+
+function fadeOutGlobalSceneMusic(fadeMs: number = 800): void {
+    const state = (window as any).musicState as {
+        muted?: boolean;
+        audio?: HTMLAudioElement | null;
+        fadeTimer?: number | null;
+    } | undefined;
+
+    if (!state?.audio)
+        return;
+
+    const audio = state.audio;
+
+    if (state.fadeTimer !== undefined && state.fadeTimer !== null) {
+        window.clearInterval(state.fadeTimer);
+        state.fadeTimer = null;
+    }
+
+    const startVolume = Number.isFinite(audio.volume) ? audio.volume : 1.0;
+
+    if (startVolume <= 0) {
+        audio.pause();
+        audio.currentTime = 0;
+        state.audio = null;
+        return;
+    }
+
+    const stepMs = 50;
+    const steps = Math.max(1, Math.ceil(fadeMs / stepMs));
+    let step = 0;
+
+    state.fadeTimer = window.setInterval(() => {
+        step++;
+        const t = Math.min(1, step / steps);
+        audio.volume = Math.max(0, startVolume * (1 - t));
+
+        if (t >= 1) {
+            if (state.fadeTimer !== undefined && state.fadeTimer !== null) {
+                window.clearInterval(state.fadeTimer);
+                state.fadeTimer = null;
+            }
+
+            audio.pause();
+            audio.currentTime = 0;
+            audio.volume = startVolume;
+            state.audio = null;
+        }
+    }, stepMs);
+}
+
 class ModelExhibitRenderer extends SFARenderer {
     private turntableEnabled = false;
     private turntableAngle = 0;
@@ -119,14 +169,14 @@ class ModelExhibitRenderer extends SFARenderer {
 
     private modelInst: ModelInstance | null | undefined = undefined;
     private modelNum = 1;
-    private modelSelect: UI.TextEntry;
+    private modelSelect!: UI.TextEntry;
 
     private modanim: DataView | null = null;
     private amap: DataView | null = null;
     private generatedAmap: DataView | null = null;
     private anim: Anim | null = null;
     private modelAnimNum = 0;
-    private animSelect: UI.TextEntry;
+    private animSelect!: UI.TextEntry;
 
     private displayBones: boolean = false;
     private useGlobalAnimNum: boolean = false;
@@ -923,11 +973,14 @@ export class SFAModelExhibitSceneDesc implements Viewer.SceneDesc {
         private subdirs?: string[] 
     ) { }
 
-    public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
-        const materialFactory = new MaterialFactory(device);
-        materialFactory.initialize();
+public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
 
-        const animController = new SFAAnimationController();
+  fadeOutGlobalSceneMusic();
+
+  const materialFactory = new MaterialFactory(device);
+
+  materialFactory.initialize();
+  const animController = new SFAAnimationController();
         const modanimColl = await ModanimCollection.create(this.gameInfo, context.dataFetcher);
         const amapColl = await AmapCollection.create(this.gameInfo, context.dataFetcher);
 
@@ -971,11 +1024,14 @@ export class SFATextureExhibitSceneDesc implements Viewer.SceneDesc {
         private maxTexId: number = 4096,
     ) {}
 
-    public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
-        const materialFactory = new MaterialFactory(device);
-        materialFactory.initialize();
+public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
 
-        const animController = new SFAAnimationController();
+  fadeOutGlobalSceneMusic();
+
+  const materialFactory = new MaterialFactory(device);
+
+  materialFactory.initialize();
+  const animController = new SFAAnimationController();
 
         const texFetcher = await SFATextureFetcher.create(
             this.gameInfo,
@@ -1023,11 +1079,12 @@ export class DPTextureExhibitSceneDesc implements Viewer.SceneDesc {
         private maxTexId: number = 4096,
     ) {}
 
-    public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
-        const materialFactory = new MaterialFactory(device);
-        materialFactory.initialize();
+public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+    fadeOutGlobalSceneMusic();
 
-        const animController = new SFAAnimationController();
+    const materialFactory = new MaterialFactory(device);
+    materialFactory.initialize();
+    const animController = new SFAAnimationController();
 
         const texFetcher = await SFATextureFetcher.create(this.gameInfo, context.dataFetcher, true);
         texFetcher.setModelVersion(ModelVersion.DinosaurPlanet);
@@ -1090,11 +1147,12 @@ export class DPModelFetcher {
 export class DPModelExhibitSceneDesc implements Viewer.SceneDesc {
     constructor(public id: string, public name: string, private gameInfo: GameInfo = DP_GAME_INFO) { }
 
-    public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
-        const materialFactory = new MaterialFactory(device);
-        materialFactory.initialize();
+public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+    fadeOutGlobalSceneMusic();
 
-        const animController = new SFAAnimationController();
+    const materialFactory = new MaterialFactory(device);
+    materialFactory.initialize();
+    const animController = new SFAAnimationController();
 
         const modanimColl = await ModanimCollection.create(this.gameInfo, context.dataFetcher);
         const amapColl = await AmapCollection.create(this.gameInfo, context.dataFetcher);

@@ -44,8 +44,8 @@ interface AnimCurve {
 }
 
 export class AnimCurvFile {
-    private animcurvTab: DataView;
-    private animcurvBin: DataView;
+    private animcurvTab!: DataView;
+    private animcurvBin!: DataView;
 
     private constructor() {
     }
@@ -109,8 +109,8 @@ export interface Anim {
 }
 
 export class AnimFile {
-    private tab: DataView;
-    private bin: DataView;
+    private tab!: DataView;
+    private bin!: DataView;
 
     private constructor() {
     }
@@ -364,8 +364,8 @@ export function applyAnimationToModel(time: number, modelInst: ModelInstance, an
 
 
 export class AmapCollection {
-    public amapTab: DataView;
-    public amapBin: DataView;
+    public amapTab!: DataView;
+    public amapBin!: DataView;
 
     private constructor() {
     }
@@ -397,8 +397,8 @@ public static async create(gameInfo: GameInfo, dataFetcher: DataFetcher): Promis
 }
 
 export class ModanimCollection {
-    public modanimTab: DataView;
-    public modanimBin: DataView;
+    public modanimTab!: DataView;
+    public modanimBin!: DataView;
 
     private constructor() {
     }

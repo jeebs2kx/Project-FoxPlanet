@@ -11,8 +11,7 @@ import { SceneContext } from '../SceneBase.js';
 import * as GX_Material from '../gx/gx_material.js';
 import { fillSceneParamsDataOnTemplate } from '../gx/gx_render.js';
 import { getDebugOverlayCanvas2D, drawWorldSpaceText } from "../DebugJunk.js";
-import { colorCopy, colorNewFromRGBA } from '../Color.js';
-
+import { White, colorCopy, colorNewFromRGBA } from '../Color.js';
 import { SFA_GAME_INFO, GameInfo } from './scenes.js';
 import { loadRes, ResourceCollection } from './resource.js';
 import { ObjectManager, ObjectInstance, ObjectUpdateContext } from './objects.js';
@@ -27,9 +26,9 @@ import { Sky } from './Sky.js';
 import { LightType, WorldLights } from './WorldLights.js';
 import { SFATextureFetcher } from './textures.js';
 import { SphereMapManager } from './SphereMaps.js';
-import { computeViewMatrix } from '../Camera.js';
+import { Camera, CameraController, OrbitCameraController, computeViewMatrix } from '../Camera.js';
 import { nArray } from '../util.js';
-import { transformVec3Mat4w0, transformVec3Mat4w1 } from '../MathHelpers.js';
+import { computeUnitSphericalCoordinates, transformVec3Mat4w0, transformVec3Mat4w1 } from '../MathHelpers.js';
 import { GfxRenderCache } from '../gfx/render/GfxRenderCache.js';
 if (!(window as any).musicState) {
     (window as any).musicState = {
@@ -70,6 +69,11 @@ const scratchVec0 = vec3.create();
 const scratchMtx0 = mat4.create();
 const scratchMtx1 = mat4.create();
 const scratchColor0 = colorNewFromRGBA(1, 1, 1, 1);
+
+
+function formatObjectInspectorHex(value: number, minWidth: number = 4): string {
+  return (value >>> 0).toString(16).toUpperCase().padStart(minWidth, '0');
+}
 function getClipFromWorldMatrix(viewerInput: Viewer.ViewerRenderInput): mat4 | null {
     const cam: any = viewerInput.camera;
     if (cam?.clipFromWorldMatrix)
@@ -188,12 +192,12 @@ export class World {
     public mapNum: number | null = null;
 
     public backgroundMusic: HTMLAudioElement | null = null;
-    public animController: SFAAnimationController;
-    public envfxMan: EnvfxManager;
-    public blockFetcher: SFABlockFetcher;
+    public animController!: SFAAnimationController;
+    public envfxMan!: EnvfxManager;
+    public blockFetcher!: SFABlockFetcher;
     public mapInstance: MapInstance | null = null;
-    public objectMan: ObjectManager;
-    public resColl: ResourceCollection;
+    public objectMan!: ObjectManager;
+    public resColl!: ResourceCollection;
     public objectInstances: ObjectInstance[] = [];
     public worldLights: WorldLights = new WorldLights();
     public renderCache: GfxRenderCache;
@@ -276,7 +280,12 @@ private handleMusic() {
         const [resColl, blockFetcher, objectMan] = await Promise.all([
             resCollPromise,
             SFABlockFetcher.create(this.gameInfo, dataFetcher, this.context.device, this.materialFactory, this.animController, texFetcherPromise()),
-            ObjectManager.create(this, dataFetcher, false),
+ObjectManager.create(
+  this,
+  dataFetcher,
+  false,
+  this.gameInfo.pathBase === 'StarFoxAdventuresDemo',
+),
         ]);
         this.resColl = resColl;
         this.blockFetcher = blockFetcher;
@@ -401,17 +410,25 @@ if (this.backgroundMusic) {
 }
 
 class WorldRenderer extends SFARenderer {
-    public textureHolder: UI.TextureListHolder;
-    private timeSelect: UI.Slider;
+    public textureHolder!: UI.TextureListHolder;
+    private timeSelect!: UI.Slider;
     private enableAmbient: boolean = true;
     private enableFog: boolean = true;
-    private layerSelect: UI.Slider;
+    private layerSelect!: UI.Slider;
 private showObjects: boolean;
 private showDevGeometry: boolean = false;
 private showDevObjects: boolean = false;
 public showHits: boolean = false;
 private enableLights: boolean = true;
+
+private showObjectLabels: boolean = false;
+private objectInspectorSelect: HTMLSelectElement | null = null;
+private objectInspectorPre: HTMLPreElement | null = null;
+private objectInspectorSelectedValue: string = '';
+private objectInspectorLastObjectCount: number = -1;
+
 private sky: Sky;
+
 private sphereMapMan: SphereMapManager;
     constructor(protected override world: World, materialFactory: MaterialFactory, defaultShowObjects: boolean = true) {
         super(world.context, world.animController, materialFactory);
@@ -478,19 +495,351 @@ const hideObjects = new UI.Checkbox("Hide objects", !this.showObjects);
         }
         layerPanel.contents.append(disableLights.elem);
         
-        const renderHacksPanel = new UI.Panel();
-renderHacksPanel.customHeaderBackgroundColor = UI.COOL_BLUE_COLOR();
-        renderHacksPanel.setTitle(UI.RENDER_HACKS_ICON, 'Render Hacks');
+const showDebugThumbnails = new UI.Checkbox('Show Debug Thumbnails', false);
+showDebugThumbnails.onchanged = () => {
+    const v = showDebugThumbnails.checked;
+    this.renderHelper.debugThumbnails.enabled = v;
+};
+const objectPanel = new UI.Panel();
+objectPanel.setTitle(UI.RENDER_HACKS_ICON, 'Object Inspector');
 
-        const showDebugThumbnails = new UI.Checkbox('Show Debug Thumbnails', false);
-        showDebugThumbnails.onchanged = () => {
-            const v = showDebugThumbnails.checked;
-            this.renderHelper.debugThumbnails.enabled = v;
-        };
-        renderHacksPanel.contents.appendChild(showDebugThumbnails.elem);
+const objectIntro = document.createElement('div');
+objectIntro.style.whiteSpace = 'pre-wrap';
+objectIntro.style.marginBottom = '8px';
+objectIntro.textContent =
+  'SFA object browser for the current world.\n' +
+  'Click an object in the list or press "Go To Object" to move the camera to it.';
+objectPanel.contents.appendChild(objectIntro);
 
-        return [timePanel, layerPanel, renderHacksPanel];
+objectPanel.contents.appendChild(showDebugThumbnails.elem);
+
+const showObjectLabels = new UI.Checkbox('Show object labels', this.showObjectLabels);
+showObjectLabels.onchanged = () => {
+  this.showObjectLabels = showObjectLabels.checked;
+};
+objectPanel.contents.appendChild(showObjectLabels.elem);
+
+const objectSelectLabel = document.createElement('div');
+objectSelectLabel.textContent = 'Loaded objects';
+objectSelectLabel.style.marginTop = '8px';
+objectSelectLabel.style.marginBottom = '4px';
+objectPanel.contents.appendChild(objectSelectLabel);
+
+const objectSelect = document.createElement('select');
+objectSelect.size = 10;
+objectSelect.style.width = '100%';
+objectSelect.style.boxSizing = 'border-box';
+objectSelect.style.marginBottom = '8px';
+objectSelect.onchange = () => {
+  this.objectInspectorSelectedValue = objectSelect.value;
+  this.refreshSelectedObjectInspectorText();
+
+  const selected = this.getSelectedInspectableObject();
+  if (selected !== null)
+    this.focusCameraOnInspectableObject(selected.obj);
+};
+objectPanel.contents.appendChild(objectSelect);
+this.objectInspectorSelect = objectSelect;
+
+const objectButtonRow = document.createElement('div');
+objectButtonRow.style.display = 'flex';
+objectButtonRow.style.gap = '8px';
+objectButtonRow.style.marginBottom = '8px';
+
+const refreshObjectsBtn = document.createElement('button');
+refreshObjectsBtn.textContent = 'Refresh List';
+refreshObjectsBtn.onclick = () => {
+  this.refreshObjectInspectorList(true);
+};
+objectButtonRow.appendChild(refreshObjectsBtn);
+
+const focusSelectedBtn = document.createElement('button');
+focusSelectedBtn.textContent = 'Go To Object';
+focusSelectedBtn.onclick = () => {
+  const selected = this.getSelectedInspectableObject();
+  if (selected !== null)
+    this.focusCameraOnInspectableObject(selected.obj);
+};
+objectButtonRow.appendChild(focusSelectedBtn);
+
+const clearSelectionBtn = document.createElement('button');
+clearSelectionBtn.textContent = 'Clear Selection';
+clearSelectionBtn.onclick = () => {
+  this.objectInspectorSelectedValue = '';
+  if (this.objectInspectorSelect)
+    this.objectInspectorSelect.value = '';
+  this.refreshSelectedObjectInspectorText();
+};
+objectButtonRow.appendChild(clearSelectionBtn);
+
+objectPanel.contents.appendChild(objectButtonRow);
+
+const objectInfoPre = document.createElement('pre');
+objectInfoPre.style.whiteSpace = 'pre-wrap';
+objectInfoPre.style.maxHeight = '360px';
+objectInfoPre.style.overflow = 'auto';
+objectInfoPre.style.margin = '0';
+objectPanel.contents.appendChild(objectInfoPre);
+this.objectInspectorPre = objectInfoPre;
+
+this.refreshObjectInspectorList(false);
+
+return [timePanel, layerPanel, objectPanel];
     }
+
+private getInspectableObjects(): Array<{ worldIndex: number; obj: ObjectInstance }> {
+  const out: Array<{ worldIndex: number; obj: ObjectInstance }> = [];
+
+  for (let i = 0; i < this.world.objectInstances.length; i++)
+    out.push({ worldIndex: i, obj: this.world.objectInstances[i] });
+
+  return out;
+}
+
+private buildInspectableObjectLabel(worldIndex: number, obj: ObjectInstance): string {
+  const type = obj.getType();
+  return `#${worldIndex} ${obj.getName()} [type 0x${formatObjectInspectorHex(type.typeNum)} class ${type.objClass}]`;
+}
+
+private refreshObjectInspectorList(preserveSelection: boolean = true): void {
+  if (this.objectInspectorSelect === null)
+    return;
+
+  const select = this.objectInspectorSelect;
+  const previousValue = preserveSelection ? this.objectInspectorSelectedValue : '';
+  const entries = this.getInspectableObjects();
+
+  select.innerHTML = '';
+
+  for (const entry of entries) {
+    const opt = document.createElement('option');
+    opt.value = String(entry.worldIndex);
+    opt.textContent = this.buildInspectableObjectLabel(entry.worldIndex, entry.obj);
+    select.appendChild(opt);
+  }
+
+  if (previousValue !== '' && Array.from(select.options).some((o) => o.value === previousValue)) {
+    select.value = previousValue;
+    this.objectInspectorSelectedValue = previousValue;
+  } else if (select.options.length > 0) {
+    select.selectedIndex = 0;
+    this.objectInspectorSelectedValue = select.value;
+  } else {
+    this.objectInspectorSelectedValue = '';
+  }
+
+  this.objectInspectorLastObjectCount = this.world.objectInstances.length;
+  this.refreshSelectedObjectInspectorText();
+}
+
+private getSelectedInspectableObject(): { worldIndex: number; obj: ObjectInstance } | null {
+  const rawValue =
+    this.objectInspectorSelectedValue !== ''
+      ? this.objectInspectorSelectedValue
+      : (this.objectInspectorSelect?.value ?? '');
+
+  if (rawValue === '')
+    return null;
+
+  const worldIndex = Number.parseInt(rawValue, 10);
+  if (!Number.isFinite(worldIndex))
+    return null;
+
+  const obj = this.world.objectInstances[worldIndex];
+  if (!obj)
+    return null;
+
+  return { worldIndex, obj };
+}
+
+private buildObjectInspectorText(worldIndex: number, obj: ObjectInstance): string {
+  const type = obj.getType();
+  const common = obj.commonObjectParams;
+  const worldPos = vec3.create();
+  obj.getPosition(worldPos);
+
+  const internalClassName =
+    obj.internalClass !== undefined ? obj.internalClass.constructor.name : '(none)';
+
+  let renderPath = 'plain current-model';
+  if (obj.internalClass !== undefined)
+    renderPath = `class-backed (${internalClassName})`;
+  if (obj.modelInst === null)
+    renderPath = obj.internalClass !== undefined
+      ? `class-backed (${internalClassName}), no current model`
+      : 'no current model';
+
+  const modelList =
+    type.modelNums.length > 0
+      ? type.modelNums.map((n) => `0x${formatObjectInspectorHex(n, 4)}`).join(', ')
+      : '(none)';
+
+  const activeModelAnim = (obj as any).modelAnimNum as number | null | undefined;
+  const hasLoadedAnim = ((obj as any).anim ?? null) !== null;
+  const resolvedAmbienceIdx = (obj as any).ambienceIdx as number | undefined;
+
+  const parentChain: string[] = [];
+  let parent = obj.parent;
+  while (parent !== null) {
+    const parentIndex = this.world.objectInstances.indexOf(parent);
+    parentChain.push(
+      parentIndex >= 0 ? `#${parentIndex} ${parent.getName()}` : parent.getName()
+    );
+    parent = parent.parent;
+  }
+
+  const directChildren: string[] = [];
+  for (let i = 0; i < this.world.objectInstances.length; i++) {
+    const candidate = this.world.objectInstances[i];
+    if (candidate.parent === obj)
+      directChildren.push(`#${i} ${candidate.getName()}`);
+  }
+
+  const lines: string[] = [];
+  lines.push(`selected index: #${worldIndex}`);
+  lines.push(`name: ${obj.getName()}`);
+  lines.push(`map: ${this.world.mapNum ?? '(none)'}`);
+  lines.push(`typeNum: 0x${formatObjectInspectorHex(type.typeNum)}`);
+  lines.push(`romlist type: 0x${formatObjectInspectorHex(common.objType)}`);
+  lines.push(`class: ${type.objClass}`);
+  lines.push(`object id: 0x${formatObjectInspectorHex(common.id, 8)}`);
+  lines.push(`render path: ${renderPath}`);
+  lines.push(`internal class: ${internalClassName}`);
+  lines.push(`model list: ${modelList}`);
+  lines.push(`model instance: ${obj.modelInst !== null ? 'yes' : 'no'}`);
+  lines.push(`joint count: ${obj.modelInst !== null ? obj.modelInst.model.joints.length : 0}`);
+  lines.push(`active model anim index: ${activeModelAnim ?? '(none)'}`);
+  lines.push(`animation loaded: ${hasLoadedAnim ? 'yes' : 'no'}`);
+  lines.push(`anim speed: ${obj.animSpeed}`);
+  lines.push(`scale: ${obj.scale.toFixed(3)}`);
+  lines.push(`cull radius: ${obj.cullRadius.toFixed(3)}`);
+  lines.push(`dev object: ${type.isDevObject ? 'yes' : 'no'}`);
+  lines.push(`object ambience: ${type.ambienceNum}`);
+  lines.push(`resolved ambience idx: ${resolvedAmbienceIdx ?? 0}`);
+  lines.push(`common ambience value: ${common.ambienceValue}`);
+  lines.push(`layer bits: 0x${formatObjectInspectorHex(common.layerValues[0], 2)} 0x${formatObjectInspectorHex(common.layerValues[1], 2)}`);
+  lines.push(`visible in current layer ${this.layerSelect.getValue()}: ${obj.isInLayer(this.layerSelect.getValue()) ? 'yes' : 'no'}`);
+  lines.push(`position (local): ${obj.position[0].toFixed(2)}, ${obj.position[1].toFixed(2)}, ${obj.position[2].toFixed(2)}`);
+  lines.push(`position (world): ${worldPos[0].toFixed(2)}, ${worldPos[1].toFixed(2)}, ${worldPos[2].toFixed(2)}`);
+  lines.push(`rotation (yaw, pitch, roll): ${obj.yaw.toFixed(3)}, ${obj.pitch.toFixed(3)}, ${obj.roll.toFixed(3)}`);
+  lines.push('');
+  lines.push('parent chain:');
+  if (parentChain.length === 0)
+    lines.push('  (none)');
+  else
+    for (const entry of parentChain)
+      lines.push(`  ${entry}`);
+
+  lines.push('');
+  lines.push('direct children:');
+  if (directChildren.length === 0)
+    lines.push('  (none)');
+  else
+    for (const entry of directChildren)
+      lines.push(`  ${entry}`);
+
+  return lines.join('\n');
+}
+
+private refreshSelectedObjectInspectorText(): void {
+  if (this.objectInspectorPre === null)
+    return;
+
+  const selected = this.getSelectedInspectableObject();
+  if (selected === null) {
+    this.objectInspectorPre.textContent =
+      'No object selected.\n' +
+      'Use the list above to inspect a loaded SFA world object.';
+    return;
+  }
+
+  this.objectInspectorSelectedValue = String(selected.worldIndex);
+  this.objectInspectorPre.textContent =
+    this.buildObjectInspectorText(selected.worldIndex, selected.obj);
+}
+
+private focusCameraOnInspectableObject(obj: ObjectInstance): void {
+    const viewer = (window as any).viewer as {
+        camera?: Camera;
+        cameraController?: any;
+        oncamerachanged?: (force: boolean) => void;
+    } | undefined;
+
+    const camera = viewer?.camera;
+    if (!viewer || !camera)
+        return;
+
+    const objWorldPos = vec3.create();
+    obj.getPosition(objWorldPos);
+
+    const currentEye = vec3.fromValues(
+        camera.worldMatrix[12],
+        camera.worldMatrix[13],
+        camera.worldMatrix[14],
+    );
+
+    const objectRadius = Math.max(1.0, obj.cullRadius * Math.max(obj.scale, 1.0));
+    const desiredDistance = Math.max(30.0, Math.min(120.0, objectRadius * 1.4));
+    const desiredHeight = Math.max(12.0, Math.min(36.0, objectRadius * 0.35));
+
+    // Keep the current horizontal viewing side, but stop the camera from going top-down.
+    const flatDir = vec3.fromValues(
+        currentEye[0] - objWorldPos[0],
+        0.0,
+        currentEye[2] - objWorldPos[2],
+    );
+
+    if (!Number.isFinite(flatDir[0]) || !Number.isFinite(flatDir[2]) || vec3.length(flatDir) < 0.001) {
+        vec3.set(flatDir, 1.0, 0.0, 1.0);
+    }
+
+    vec3.normalize(flatDir, flatDir);
+
+    const eyeOffset = vec3.fromValues(
+        flatDir[0] * desiredDistance,
+        desiredHeight,
+        flatDir[2] * desiredDistance,
+    );
+
+    const newEye = vec3.create();
+    vec3.add(newEye, objWorldPos, eyeOffset);
+
+    const controller = viewer.cameraController as any;
+    if (controller && controller.translation && controller.translation.length >= 3) {
+        controller.translation[0] = objWorldPos[0];
+        controller.translation[1] = objWorldPos[1];
+        controller.translation[2] = objWorldPos[2];
+
+        const dir = vec3.create();
+        vec3.normalize(dir, eyeOffset);
+
+        const azimuth = Math.atan2(dir[2], dir[0]);
+        const polar = Math.acos(Math.max(-0.999, Math.min(0.999, dir[1])));
+        const zoom = -vec3.length(eyeOffset);
+
+        if ('x' in controller) controller.x = azimuth;
+        if ('y' in controller) controller.y = polar;
+        if ('z' in controller) controller.z = zoom;
+        if ('zTarget' in controller) controller.zTarget = zoom;
+
+        if ('xVel' in controller) controller.xVel = 0;
+        if ('yVel' in controller) controller.yVel = 0;
+        if ('txVel' in controller) controller.txVel = 0;
+        if ('tyVel' in controller) controller.tyVel = 0;
+        if ('orbitXVel' in controller) controller.orbitXVel = 0;
+        if ('forceUpdate' in controller) controller.forceUpdate = true;
+    }
+
+    mat4.targetTo(
+        camera.worldMatrix,
+        newEye,
+        objWorldPos,
+        vec3.fromValues(0, 1, 0),
+    );
+    mat4.invert(camera.viewMatrix, camera.worldMatrix);
+    camera.worldMatrixUpdated();
+    viewer.oncamerachanged?.(true);
+}
 
     public setEnvfx(envfxactNum: number) {
         this.world.envfxMan.loadEnvfx(envfxactNum);
@@ -566,12 +915,22 @@ private drawHitOverlay(viewerInput: Viewer.ViewerRenderInput): void {
             viewerInput,
         };
 
-        for (let i = 0; i < this.world.objectInstances.length; i++) {
-            const obj = this.world.objectInstances[i];
-            obj.update(updateCtx);
-        }
+for (let i = 0; i < this.world.objectInstances.length; i++) {
 
-        this.drawHitOverlay(viewerInput);
+const obj = this.world.objectInstances[i];
+
+obj.update(updateCtx);
+
+}
+
+this.drawHitOverlay(viewerInput);
+
+if (this.objectInspectorPre !== null) {
+  if (this.objectInspectorLastObjectCount !== this.world.objectInstances.length)
+    this.refreshObjectInspectorList(true);
+  else
+    this.refreshSelectedObjectInspectorText();
+}
     }
     
     protected override addSkyRenderInsts(device: GfxDevice, renderInstManager: GfxRenderInstManager, renderLists: SFARenderLists, sceneCtx: SceneRenderContext) {
@@ -621,10 +980,21 @@ private drawHitOverlay(viewerInput: Viewer.ViewerRenderInput): void {
 
                     obj.addRenderInsts(device, renderInstManager, renderLists, modelCtx);
 
-                    const drawLabels = false;
+const drawLabels = this.showObjectLabels;
                     if (drawLabels) {
                         obj.getPosition(scratchVec0);
-                        drawWorldSpaceText(getDebugOverlayCanvas2D(), sceneCtx.viewerInput.camera.clipFromWorldMatrix, scratchVec0, obj.getName(), undefined, undefined, {outline: 2});
+drawWorldSpaceText(
+    getDebugOverlayCanvas2D(),
+    sceneCtx.viewerInput.camera.clipFromWorldMatrix,
+    scratchVec0,
+    obj.getName(),
+    0,
+    White,
+    {
+        outline: 2,
+        font: '18px monospace',
+    },
+);
                     }
                 }
             }
@@ -650,11 +1020,22 @@ private drawHitOverlay(viewerInput: Viewer.ViewerRenderInput): void {
     }
 
 public override destroy(device: GfxDevice) {
-    cleanupSFAHitsToggleUI();
-    super.destroy(device);
-    this.world.destroy(device);
-    this.sky.destroy(device);
-    this.sphereMapMan.destroy(device);
+
+ cleanupSFAHitsToggleUI();
+
+ this.objectInspectorSelect = null;
+ this.objectInspectorPre = null;
+ this.objectInspectorSelectedValue = '';
+ this.objectInspectorLastObjectCount = -1;
+
+ super.destroy(device);
+
+ this.world.destroy(device);
+
+ this.sky.destroy(device);
+
+ this.sphereMapMan.destroy(device);
+
 }
 }
 
@@ -753,7 +1134,7 @@ public async createScene(device: GfxDevice, context: SceneContext): Promise<View
           //  console.log(`[ShowAllTextures] Bank=${useTex1 ? 'TEX1' : 'TEX0/TEXPRE'} attempted=${attempted} registered=${shown}`);
         };
 
-const defaultShowObjects = this.gameInfo.pathBase !== 'StarFoxAdventuresDemo';
+const defaultShowObjects = true;
 const renderer = new WorldRenderer(world, materialFactory, defaultShowObjects);
 
 renderer.showHits = false;

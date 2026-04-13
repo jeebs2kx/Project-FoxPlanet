@@ -8,6 +8,7 @@ import { GameInfo } from './scenes.js';
 import { GfxRenderInstManager } from "../gfx/render/GfxRenderInstManager.js";
 import { fillSceneParamsDataOnTemplate } from '../gx/gx_render.js';
 import { White } from '../Color.js';
+import * as UI from '../ui.js';
 import { DataFetcher } from '../DataFetcher.js';
 import { ModelInstance, ModelRenderContext } from './models.js';
 import { mat4, vec3 } from 'gl-matrix';
@@ -27,12 +28,18 @@ interface Keyframe {
     interp: number;
 }
 
+interface SequenceActorModel {
+    inst: ModelInstance;
+    modelNum: number;
+    modanim: DataView | null;
+    modAnimBankBases: number[];
+}
+
 interface Actor {
-    inst: ModelInstance | null;
+    insts: SequenceActorModel[];
     matrix: mat4;
     curve: { channels: Map<number, Keyframe[]>, animEvents: any[] };
-    modanim: DataView | null;
-    currentAnimIdx: number;
+    objScale: number;
     isCamera: boolean;
 }
 
@@ -48,6 +55,55 @@ function dpExtractModelNums(objBin: DataView, startOffs: number, defSize: number
         if (v < 0x4000) out.push(v | 0);
     }
     return out;
+}
+
+function dpExtractObjectScale(objBin: DataView, startOffs: number, defSize: number): number {
+    if (defSize < 0x08)
+        return 1.0;
+
+    const scale = objBin.getFloat32(startOffs + 0x04);
+    if (!Number.isFinite(scale) || scale <= 0.0 || scale > 10.0)
+        return 1.0;
+
+    return scale;
+}
+
+function buildModanimBankBases(modanim: DataView | null): number[] {
+    const bases: number[] = [0];
+
+    if (modanim === null || modanim.byteLength === 0)
+        return bases;
+
+    const count = (modanim.byteLength / 2) | 0;
+    for (let i = 0; i < count; i++) {
+        if (modanim.getUint16(i * 2) === 0xFFFF)
+            bases.push(i + 1);
+    }
+
+    return bases;
+}
+
+function resolveSequenceAnimRef(model: SequenceActorModel, activeParam: number): { animId: number, animNum: number } | null {
+    if (model.modanim === null || model.modanim.byteLength === 0)
+        return null;
+
+    const targetBank = (activeParam >> 8) & 0x0F;
+    const targetIndex = activeParam & 0xFF;
+
+    if (targetBank < 0 || targetBank >= model.modAnimBankBases.length)
+        return null;
+
+    const animNum = model.modAnimBankBases[targetBank] + targetIndex;
+    const animOffs = animNum * 2;
+
+    if (animOffs + 2 > model.modanim.byteLength)
+        return null;
+
+    const animId = model.modanim.getUint16(animOffs) & 0x7FFF;
+    if (animId <= 0)
+        return null;
+
+    return { animId, animNum };
 }
 
 async function decompressDPModel(modelId: number, tabView: DataView, binArray: Uint8Array): Promise<DataView | null> {
@@ -81,9 +137,16 @@ export class SequenceRenderer extends SFARenderer {
     private actors: Actor[] = [];
     private currentTime: number = 0;
     private animColl: AnimCollection | null = null;
-
+private currentSequenceId = 0;
+private isPlaying = true;
+private sequenceEndFrame = 1;
+private timeSlider: HTMLInputElement | null = null;
+private timeLabel: HTMLElement | null = null;
+private actorStatsLabel: HTMLElement | null = null;
     public async create(sequenceId: number, gameInfo: GameInfo, dataFetcher: DataFetcher): Promise<Viewer.SceneGfx> {
         const pathBase = gameInfo.pathBase;
+        this.currentSequenceId = sequenceId;
+this.currentTime = 0;
         const texFetcher = await SFATextureFetcher.create(gameInfo, dataFetcher, false);
         texFetcher.setModelVersion(ModelVersion.DinosaurPlanet);
 
@@ -129,143 +192,256 @@ if (cTabOffs + 8 <= cTabView.byteLength) {
                 const cEvCount = cTabView.getUint16(cTabOffs + 0x2);
                 const cBinOffs = cTabView.getUint32(cTabOffs + 0x4);
 
-                let runningTime = 0;
-                let lastTimingSync = 0;
-                
-                for (let e = 0; e < cEvCount; e++) {
-                    const evOffs = cBinOffs + (e * 4);
-                    const type = cBinView.getUint8(evOffs + 0x0);
-                    const delay = cBinView.getUint8(evOffs + 0x1);
-                    const params = cBinView.getUint16(evOffs + 0x2);
-                    
-                    if (type === 0x00) {
-                        runningTime = params;
-                        lastTimingSync = params;
-                    }
-                    
-                    actorCurve.animEvents.push({ type, time: runningTime, params });
-                    
-                    if (type !== 0x00) {
-                        runningTime += delay;
-                    }
+let runningTime = 0;
 
-                    // Skip the dummy payload slot for Subevent commands
-                    if (type === 0x0B) {
-                        e++;
-                    }
-                }
+for (let e = 0; e < cEvCount; e++) {
+    const evOffs = cBinOffs + (e * 4);
+    const type = cBinView.getUint8(evOffs + 0x0);
+    const delay = cBinView.getUint8(evOffs + 0x1);
+    const params = cBinView.getUint16(evOffs + 0x2);
 
-                // THE MISSING LOOP: This reads the movement curves so they aren't stuck at 0,0,0
-                const kfStart = cBinOffs + (cEvCount * 4);
-                for (let k = kfStart; k < cBinOffs + cSize; k += 8) {
-                    const chan = cBinView.getUint8(k + 0x5) & 0x1F;
-                    const timeOffset = cBinView.getInt16(k + 0x6);
-                    if (!actorCurve.channels.has(chan)) actorCurve.channels.set(chan, []);
-                    actorCurve.channels.get(chan)!.push({ 
-                        time: lastTimingSync + timeOffset, 
-                        value: cBinView.getFloat32(k + 0x0), 
-                        interp: cBinView.getUint8(k + 0x4) & 0x03 
-                    });
-                }
+    if (type === 0x00) {
+        runningTime = params;
+    }
+
+    actorCurve.animEvents.push({ type, time: runningTime, params });
+
+    if (type !== 0x00) {
+        runningTime += delay;
+    }
+
+    if (type === 0x0B) {
+        e++;
+    }
+}
+
+const kfStart = cBinOffs + (cEvCount * 4);
+for (let k = kfStart; k < cBinOffs + cSize; k += 8) {
+    const chan = cBinView.getUint8(k + 0x5) & 0x1F;
+    const keyTime = cBinView.getInt16(k + 0x6);
+
+    if (!actorCurve.channels.has(chan))
+        actorCurve.channels.set(chan, []);
+
+    actorCurve.channels.get(chan)!.push({
+        time: keyTime,
+        value: cBinView.getFloat32(k + 0x0),
+        interp: cBinView.getUint8(k + 0x4) & 0x03,
+    });
+}
+
+for (const keys of actorCurve.channels.values()) {
+    keys.sort((a, b) => a.time - b.time);
+}
             
             }
 
-            const actorObj: Actor = { 
-                inst: null, matrix: mat4.create(), curve: actorCurve, 
-                modanim: null, currentAnimIdx: -1, isCamera: (scnId === 0xFFFE) 
-            };
+           const actorObj: Actor = {
+    insts: [],
+    matrix: mat4.create(),
+    curve: actorCurve,
+    objScale: 1.0,
+    isCamera: (scnId === 0xFFFE),
+};
 
-            if (!actorObj.isCamera && scnId !== 0xFFFF) {
-                try {
-                    const romId = objIdx.getUint16(scnId * 2);
-                    const oOffs = objTab.getUint32(romId * 4);
-                    const nextO = (romId + 1 < objTab.byteLength / 4) ? objTab.getUint32((romId + 1) * 4) : objBin.byteLength;
-                    const models = dpExtractModelNums(objBin, oOffs, nextO - oOffs);
-                    if (models.length > 0) {
-                        const mId = models[0];
-                        const mData = await decompressDPModel(mId, modTab, modBin);
-                        if (mData) {
-                            actorObj.inst = new ModelInstance(loadModel(mData, texFetcher, this.materialFactory, ModelVersion.DinosaurPlanet));
-                            actorObj.inst.setAmap(amapColl.getAmap(mId));
-                            actorObj.modanim = modanimColl.getModanim(mId);
-                        }
-                    }
-                } catch (e) {}
-            }
+if (!actorObj.isCamera && scnId !== 0xFFFF) {
+    try {
+        const romId = objIdx.getUint16(scnId * 2);
+        const oOffs = objTab.getUint32(romId * 4);
+        const nextO = (romId + 1 < objTab.byteLength / 4) ? objTab.getUint32((romId + 1) * 4) : objBin.byteLength;
+        const defSize = nextO - oOffs;
+
+        actorObj.objScale = dpExtractObjectScale(objBin, oOffs, defSize);
+
+        const models = dpExtractModelNums(objBin, oOffs, defSize);
+        for (const mId of models) {
+            const mData = await decompressDPModel(mId, modTab, modBin);
+            if (!mData)
+                continue;
+
+            const inst = new ModelInstance(loadModel(mData, texFetcher, this.materialFactory, ModelVersion.DinosaurPlanet));
+
+            const amap = amapColl.getAmap(mId);
+            if (amap)
+                inst.setAmap(amap);
+
+            const modanim = modanimColl.getModanim(mId);
+
+            actorObj.insts.push({
+                inst,
+                modelNum: mId,
+                modanim,
+                modAnimBankBases: buildModanimBankBases(modanim),
+            });
+        }
+    } catch (e) {}
+}
+
+
             this.actors.push(actorObj);
             actorIdx++;
         }
+let maxFrame = 0;
+for (const actor of this.actors) {
+  for (const ev of actor.curve.animEvents)
+    maxFrame = Math.max(maxFrame, ev.time);
+
+  for (const keys of actor.curve.channels.values()) {
+    if (keys.length > 0)
+      maxFrame = Math.max(maxFrame, keys[keys.length - 1].time);
+  }
+}
+
+this.sequenceEndFrame = Math.max(1, Math.ceil(maxFrame) + 1);
+this.syncSequenceUI();
+
         return this;
     }
+private syncSequenceUI(): void {
+  const frame = Math.floor(this.currentTime);
 
+  if (this.timeLabel !== null) {
+    this.timeLabel.textContent =
+      `Sequence ${this.currentSequenceId} | Frame ${frame} / ${this.sequenceEndFrame}`;
+  }
+
+  if (this.timeSlider !== null) {
+    this.timeSlider.max = `${this.sequenceEndFrame}`;
+    if (document.activeElement !== this.timeSlider)
+      this.timeSlider.value = `${Math.min(frame, this.sequenceEndFrame)}`;
+  }
+
+  if (this.actorStatsLabel !== null) {
+const modelActorCount = this.actors.filter((a) => a.insts.length > 0).length;
+    const cameraActorCount = this.actors.filter((a) => a.isCamera).length;
+    this.actorStatsLabel.textContent =
+      `${this.actors.length} actors (${modelActorCount} model, ${cameraActorCount} camera)`;
+  }
+}
+
+public createPanels(): UI.Panel[] {
+  const panel = new UI.Panel();
+  panel.setTitle(UI.SAND_CLOCK_ICON, 'Sequence Player');
+  panel.elem.style.maxWidth = '360px';
+  panel.elem.style.width = '360px';
+
+  const help = document.createElement('div');
+  help.style.whiteSpace = 'pre-wrap';
+  help.style.marginBottom = '8px';
+  help.textContent =
+    'Existing DP sequence renderer with playback controls.\n' +
+    'Pause, restart, or scrub through the loaded sequence.';
+  panel.contents.appendChild(help);
+
+  const buttonRow = document.createElement('div');
+  buttonRow.style.display = 'flex';
+  buttonRow.style.gap = '8px';
+  buttonRow.style.marginBottom = '8px';
+
+  const playPauseButton = document.createElement('button');
+  playPauseButton.textContent = 'Pause';
+  playPauseButton.onclick = () => {
+    this.isPlaying = !this.isPlaying;
+    playPauseButton.textContent = this.isPlaying ? 'Pause' : 'Play';
+  };
+  buttonRow.appendChild(playPauseButton);
+
+  const restartButton = document.createElement('button');
+  restartButton.textContent = 'Restart';
+  restartButton.onclick = () => {
+    this.currentTime = 0;
+    this.syncSequenceUI();
+  };
+  buttonRow.appendChild(restartButton);
+
+  panel.contents.appendChild(buttonRow);
+
+  this.timeLabel = document.createElement('div');
+  this.timeLabel.style.marginBottom = '8px';
+  panel.contents.appendChild(this.timeLabel);
+
+  this.timeSlider = document.createElement('input');
+  this.timeSlider.type = 'range';
+  this.timeSlider.min = '0';
+  this.timeSlider.max = `${this.sequenceEndFrame}`;
+  this.timeSlider.step = '1';
+  this.timeSlider.style.width = '100%';
+  this.timeSlider.oninput = () => {
+    this.currentTime = Number(this.timeSlider!.value);
+    this.isPlaying = false;
+    playPauseButton.textContent = 'Play';
+    this.syncSequenceUI();
+  };
+  panel.contents.appendChild(this.timeSlider);
+
+  this.actorStatsLabel = document.createElement('div');
+  this.actorStatsLabel.style.marginTop = '8px';
+  this.actorStatsLabel.style.color = '#aaa';
+  panel.contents.appendChild(this.actorStatsLabel);
+
+  this.syncSequenceUI();
+  return [panel];
+}
     protected override update(viewerInput: Viewer.ViewerRenderInput) {
         super.update(viewerInput);
-        this.currentTime = (this.currentTime + (viewerInput.deltaTime / 1000) * 60) % 30000;
+if (this.isPlaying) {
+  const loopAt = Math.max(1, this.sequenceEndFrame);
+  this.currentTime = (this.currentTime + (viewerInput.deltaTime / 1000) * 60) % loopAt;
+}
 
+this.syncSequenceUI();
         for (const actor of this.actors) {
-            const x = this.sample(actor.curve, 13, this.currentTime);
-            const y = this.sample(actor.curve, 12, this.currentTime);
-            const z = this.sample(actor.curve, 11, this.currentTime);
-            const rx = this.sample(actor.curve, 8, this.currentTime) * BIN_TO_RAD;
-            const ry = this.sample(actor.curve, 7, this.currentTime) * BIN_TO_RAD;
-            const rz = this.sample(actor.curve, 6, this.currentTime) * BIN_TO_RAD;
-if (this.currentTime > 0 && this.currentTime < 2) {
-    console.log(`Actor ${this.actors.indexOf(actor)} Pos | X: ${x.toFixed(1)}, Y: ${y.toFixed(1)}, Z: ${z.toFixed(1)}`);
-}
-            if (actor.inst) {
-                let s = this.sample(actor.curve, 5, this.currentTime);
-                if (s <= 0) s = 1.0; 
-                computeModelMatrixSRT(actor.matrix, s, s, s, rx, ry, rz, x, y, z);
-                
-                if (actor.modanim && this.animColl) {
-                    let activeParam = -1, startTime = 0;
-                    for (const ev of actor.curve.animEvents) {
-                        if (ev.type === EV_PLAY_ANIM && ev.time <= this.currentTime) {
-                            activeParam = ev.params; 
-                            startTime = ev.time;
-                        }
-                    }
+    const x = this.sample(actor.curve, 13, this.currentTime);
+    const y = this.sample(actor.curve, 12, this.currentTime);
+    const z = this.sample(actor.curve, 11, this.currentTime);
 
-                    if (activeParam !== -1) {
-                        const targetBank = (activeParam >> 8) & 0x0F;
-                        const targetIndex = activeParam & 0xFF;
-                        
-                        let baseIndex = 0;
-                        let currentBank = 0;
-                        const totalModanims = actor.modanim.byteLength / 2;
-                        
-                        for (let i = 0; i < totalModanims; i++) {
-                            if (currentBank === targetBank) break;
-                            if (actor.modanim.getUint16(i * 2) === 0xFFFF) {
-                                currentBank++;
-                                baseIndex = i + 1;
-                            }
-                        }
-                        
-                        const flatIndex = baseIndex + targetIndex;
-                        const mOffs = flatIndex * 2;
+    const rx = this.sample(actor.curve, 8, this.currentTime) * BIN_TO_RAD;
+    const ry = this.sample(actor.curve, 7, this.currentTime) * BIN_TO_RAD;
+    const rz = this.sample(actor.curve, 6, this.currentTime) * BIN_TO_RAD;
 
-                        if (mOffs + 2 <= actor.modanim.byteLength) {
-                            const aId = actor.modanim.getUint16(mOffs) & 0x7FFF;
-                            if (this.currentTime > 0 && this.currentTime < 2) {
-    console.log(`Actor ${this.actors.indexOf(actor)} Anim | Param: 0x${activeParam.toString(16)} | Flat: ${flatIndex} | aId: ${aId}`);
-}
-                            if (aId > 0) {
-                                try {
-                                    const anim = this.animColl.getAnim(aId);
-                                    if (anim && anim.keyframes && anim.keyframes.length > 0) {
-applyAnimationToModel(((this.currentTime - startTime) / 60.0) * 0.60, actor.inst, anim, flatIndex);                                  }
-                                } catch (e) {}
-                                
-                            }
-                        }
-                    }
-                }
+    if (actor.insts.length > 0) {
+        let s = this.sample(actor.curve, 5, this.currentTime);
+        if (s <= 0.0)
+            s = 1.0;
+
+        s *= actor.objScale;
+
+        computeModelMatrixSRT(actor.matrix, s, s, s, rx, ry, rz, x, y, z);
+
+        let activeParam = -1;
+        let startTime = 0;
+
+        for (const ev of actor.curve.animEvents) {
+            if (ev.type === EV_PLAY_ANIM && ev.time <= this.currentTime) {
+                activeParam = ev.params;
+                startTime = ev.time;
             }
         }
-    }
 
-    private sample(curve: any, chan: number, time: number): number {
+        if (activeParam !== -1 && this.animColl) {
+            for (const model of actor.insts) {
+                const animRef = resolveSequenceAnimRef(model, activeParam);
+                if (animRef === null)
+                    continue;
+
+                try {
+                    const anim = this.animColl.getAnim(animRef.animId);
+                    if (anim && anim.keyframes && anim.keyframes.length > 0) {
+const elapsed = Math.max(0, this.currentTime - startTime);
+const animSpeed = (Number.isFinite(anim.speed) && anim.speed > 0.0) ? anim.speed : 1.0;
+const animTime = (elapsed * animSpeed) / Math.max(1, anim.keyframes.length);
+applyAnimationToModel(animTime, model.inst, anim, animRef.animNum);
+                    }
+                } catch (e) {}
+            }
+        } else {
+            for (const model of actor.insts)
+                model.inst.resetPose();
+        }
+    }
+}
+}
+private sample(curve: any, chan: number, time: number): number {
         const keys: Keyframe[] = curve.channels.get(chan);
         if (!keys || keys.length === 0) return (chan === 5) ? 1.0 : 0.0;
         if (time <= keys[0].time) return keys[0].value;
@@ -286,8 +462,10 @@ applyAnimationToModel(((this.currentTime - startTime) / 60.0) * 0.60, actor.inst
         const template = renderInstManager.pushTemplateRenderInst();
         fillSceneParamsDataOnTemplate(template, sceneCtx.viewerInput);
         const modelCtx: ModelRenderContext = { sceneCtx, showDevGeometry: false, ambienceIdx: 0, showMeshes: true, outdoorAmbientColor: White, setupLights: () => {}, cullByAabb: false };
-        for (const actor of this.actors) if (actor.inst) actor.inst.addRenderInsts(device, renderInstManager, modelCtx, renderLists, actor.matrix);
-        renderInstManager.popTemplateRenderInst();
+for (const actor of this.actors) {
+    for (const model of actor.insts)
+        model.inst.addRenderInsts(device, renderInstManager, modelCtx, renderLists, actor.matrix);
+}        renderInstManager.popTemplateRenderInst();
     }
 }
 

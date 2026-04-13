@@ -81,6 +81,18 @@ function makeLazyManualGridSceneDesc(id: string, name: string, gameInfo: GameInf
     };
 }
 
+function makeLazyDPGameTextSceneDesc(id: string, name: string, gameInfo: GameInfo): Viewer.SceneDesc {
+  return {
+    id,
+    name,
+    createScene: async (device: any, context: any) => {
+      const m = await import('./gametext.js');
+      const real = new m.DPGameTextSceneDesc(id, name, gameInfo);
+      return real.createScene(device, context);
+    },
+  };
+}
+
 function makeLazyDPSequenceSceneDesc(sequenceId: number, id: string, name: string, gameInfo: GameInfo): Viewer.SceneDesc {
     return {
         id,
@@ -93,16 +105,52 @@ function makeLazyDPSequenceSceneDesc(sequenceId: number, id: string, name: strin
     };
 }
 
+function makeLazyDPTriggerBrowserSceneDesc(id: string, name: string, gameInfo: GameInfo): Viewer.SceneDesc {
+ return {
+  id,
+  name,
+  createScene: async (device: any, context: any) => {
+   const m = await import('./dp_docs_viewers.js');
+   const real = new m.DPTriggerBrowserSceneDesc(id, name, gameInfo);
+   return real.createScene(device, context);
+  },
+ };
+}
+
+function makeLazyDPWarpSetupBrowserSceneDesc(id: string, name: string, gameInfo: GameInfo): Viewer.SceneDesc {
+ return {
+  id,
+  name,
+  createScene: async (device: any, context: any) => {
+   const m = await import('./dp_docs_viewers.js');
+   const real = new m.DPWarpSetupBrowserSceneDesc(id, name, gameInfo);
+   return real.createScene(device, context);
+  },
+ };
+}
+
+function makeLazyDPGlobalWorldExplorerSceneDesc(id: string, name: string, gameInfo: GameInfo): Viewer.SceneDesc {
+ return {
+  id,
+  name,
+  createScene: async (device: any, context: any) => {
+   const m = await import('./dp_docs_viewers.js');
+   const real = new m.DPGlobalWorldExplorerSceneDesc(id, name, gameInfo);
+   return real.createScene(device, context);
+  },
+ };
+}
 
 const sceneDescs: (string | Viewer.SceneDesc)[] = [
     'Dinosaur Planet Map + Model Viewer ',
     makeLazyDPModelExhibitSceneDesc('dp_models', 'DP: Models', DP_GAME_INFO),
-    'Textures',
-    makeLazyDPTextureExhibitSceneDesc('dp_textures', 'DP: Texture Viewer', DP_GAME_INFO),
-    'Full World Maps (experimental)',
+'Textures',
+
+makeLazyDPTextureExhibitSceneDesc('dp_textures', 'DP: Texture Viewer', DP_GAME_INFO),
+
+'Full World Maps (experimental)',
     makeLazyDPFullWorldSceneDesc('dp_full_world', 'DP: Full World', DP_GAME_INFO),
-//'Cutscenes & Sequences',
-   //makeLazyDPSequenceSceneDesc(65, 'dp_seq_0', 'DP Sequence: 0 (Test/Intro)', DP_GAME_INFO),
+
     'Ancient Maps',
     makeLazyCombinedOldIceMtSceneDesc('dp_old_icemt_combo', 'DP: Old Ice Mountain (1, 2 & 3)', DP_GAME_INFO),    
 makeLazyManualGridSceneDesc('dp_yeti_mt_multi', 'Yeti Mountain', DP_GAME_INFO), makeLazyDPMapSceneDesc(17, 'dp11_cr_traprooms',      'DP: CloudRunner - TrapRooms', DP_GAME_INFO),
@@ -160,6 +208,18 @@ makeLazyManualGridSceneDesc('dp_yeti_mt_multi', 'Yeti Mountain', DP_GAME_INFO), 
     makeLazyDPMapSceneDesc(52, 'dp34_dragrock_bottom',   'DP: Dragon Rock - Bottom', DP_GAME_INFO),
     makeLazyDPMapSceneDesc(53, 'dp35_boss_kamerian',     'DP: BOSS Kamerian Dragon', DP_GAME_INFO),
     makeLazyDPMapSceneDesc(54, 'dp36_magic_cave_small',  'DP: Magic Cave - Small', DP_GAME_INFO),
+
+'Documentation Tools',
+
+makeLazyDPTriggerBrowserSceneDesc('dp_trigger_browser', 'DP: Trigger Browser', DP_GAME_INFO),
+makeLazyDPWarpSetupBrowserSceneDesc('dp_warp_setup_browser', 'DP: Warp + Setup Browser', DP_GAME_INFO),
+makeLazyDPGlobalWorldExplorerSceneDesc('dp_global_world_explorer', 'DP: Global World Explorer', DP_GAME_INFO),
+//'Cutscenes & Sequences',    // NOT FINISHED
+  // makeLazyDPSequenceSceneDesc(65, 'dp_seq_0', 'DP Sequence: 0 (Test/Intro)', DP_GAME_INFO),
+
+//'Text', //NOT FINISHED
+//makeLazyDPGameTextSceneDesc('dp_gametext', 'DP: GameText Browser', DP_GAME_INFO),
+
 ];
 
 const id = 'dp';

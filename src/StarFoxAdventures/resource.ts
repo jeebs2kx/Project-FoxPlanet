@@ -81,13 +81,13 @@ export function getSubdir(locationNum: number, gameInfo: GameInfo): string {
 }
 
 export class ResourceCollection {
-    public texFetcher: TextureFetcher;
-    public modelFetcher: ModelFetcher;
-    public animColl: AnimCollection;
-    public amapColl: AmapCollection;
-    public modanimColl: ModanimCollection;
-    public tablesTab: DataView;
-    public tablesBin: DataView;
+    public texFetcher!: TextureFetcher;
+    public modelFetcher!: ModelFetcher;
+    public animColl!: AnimCollection;
+    public amapColl!: AmapCollection;
+    public modanimColl!: ModanimCollection;
+    public tablesTab!: DataView;
+    public tablesBin!: DataView;
 
     private constructor(private device: GfxDevice, private gameInfo: GameInfo, private subdirs: string[], private materialFactory: MaterialFactory, private animController: SFAAnimationController) {
     }

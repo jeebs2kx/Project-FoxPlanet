@@ -16,8 +16,8 @@ export abstract class BlockFetcher {
 }
 
 export class BlockCollection {
-    private tab: DataView;
-    private bin: ArrayBufferSlice;
+    private tab!: DataView;
+    private bin!: ArrayBufferSlice;
     private blockModels: (Model | undefined)[] = [];
 
     private constructor(private materialFactory: MaterialFactory, private texFetcher: TextureFetcher, private modelVersion: ModelVersion, private isCompressed: boolean) {
@@ -85,9 +85,9 @@ function getModFileNum(mod: number): number {
 }
 
 export class SFABlockFetcher implements BlockFetcher {
-    private trkblkTab: DataView;
+    private trkblkTab!: DataView;
     private blockColls: (BlockCollection | undefined)[] = [];
-    private texFetcher: TextureFetcher;
+    private texFetcher!: TextureFetcher;
 
     private constructor(private gameInfo: GameInfo, private device: GfxDevice, private materialFactory: MaterialFactory, private animController: SFAAnimationController) {
     }
@@ -143,9 +143,9 @@ export class SFABlockFetcher implements BlockFetcher {
 }
 
 export class EARLYFEAR implements BlockFetcher {
-    public trkblkTab: DataView;
+    public trkblkTab!: DataView;
     public blockColls: (BlockCollection | undefined)[] = [];
-    public texFetcher: TextureFetcher;
+    public texFetcher!: TextureFetcher;
 
     private constructor(private gameInfo: GameInfo, private device: GfxDevice, private materialFactory: MaterialFactory, private animController: SFAAnimationController) {
     }
@@ -201,9 +201,9 @@ export class EARLYFEAR implements BlockFetcher {
 }
 
 export class EARLYDFPT implements BlockFetcher {
-    public trkblkTab: DataView;
+    public trkblkTab!: DataView;
     public blockColls: (BlockCollection | undefined)[] = [];
-    public texFetcher: TextureFetcher;
+    public texFetcher!: TextureFetcher;
 
     private constructor(private gameInfo: GameInfo, private device: GfxDevice, private materialFactory: MaterialFactory, private animController: SFAAnimationController) {
     }
@@ -259,9 +259,9 @@ export class EARLYDFPT implements BlockFetcher {
 }
 
 export class EARLYDUPBLOCKFETCHER implements BlockFetcher {
-    public trkblkTab: DataView;
+    public trkblkTab!: DataView;
     public blockColls: (BlockCollection | undefined)[] = [];
-    public texFetcher: TextureFetcher;
+    public texFetcher!: TextureFetcher;
 
     private constructor(private gameInfo: GameInfo, private device: GfxDevice, private materialFactory: MaterialFactory, private animController: SFAAnimationController) {
     }
@@ -317,9 +317,9 @@ export class EARLYDUPBLOCKFETCHER implements BlockFetcher {
 }
 
 export class EARLY1BLOCKFETCHER implements BlockFetcher {
-    public trkblkTab: DataView;
+    public trkblkTab!: DataView;
     public blockColls: (BlockCollection | undefined)[] = [];
-    public texFetcher: TextureFetcher;
+    public texFetcher!: TextureFetcher;
 
     private constructor(private gameInfo: GameInfo, private device: GfxDevice, private materialFactory: MaterialFactory, private animController: SFAAnimationController) {
     }
@@ -380,9 +380,9 @@ const blockColl = await BlockCollection.create(
 }
 
 export class EARLY2BLOCKFETCHER implements BlockFetcher {
-    private trkblkTab: DataView;
+    private trkblkTab!: DataView;
     private blockColls: (BlockCollection | undefined)[] = [];
-    private texFetcher: TextureFetcher;
+    private texFetcher!: TextureFetcher;
 
     private constructor(private gameInfo: GameInfo, private device: GfxDevice, private materialFactory: MaterialFactory, private animController: SFAAnimationController) {
     }
@@ -437,9 +437,9 @@ export class EARLY2BLOCKFETCHER implements BlockFetcher {
     }
 }
 export class EARLY3BLOCKFETCHER implements BlockFetcher {
-    private trkblkTab: DataView;
+    private trkblkTab!: DataView;
     private blockColls: (BlockCollection | undefined)[] = [];
-    private texFetcher: TextureFetcher;
+    private texFetcher!: TextureFetcher;
 
     private constructor(private gameInfo: GameInfo, private device: GfxDevice, private materialFactory: MaterialFactory, private animController: SFAAnimationController) {
     }
@@ -495,9 +495,9 @@ export class EARLY3BLOCKFETCHER implements BlockFetcher {
 }
 
 export class EARLY4BLOCKFETCHER implements BlockFetcher {
-    private trkblkTab: DataView;
+    private trkblkTab!: DataView;
     private blockColls: (BlockCollection | undefined)[] = [];
-    private texFetcher: TextureFetcher;
+    private texFetcher!: TextureFetcher;
 
     private constructor(private gameInfo: GameInfo, private device: GfxDevice, private materialFactory: MaterialFactory, private animController: SFAAnimationController) {
     }
@@ -553,7 +553,7 @@ export class EARLY4BLOCKFETCHER implements BlockFetcher {
 }
 
 export class SwapcircleBlockFetcher implements BlockFetcher {
-    private blockColl: BlockCollection;
+    private blockColl!: BlockCollection;
 
     private constructor(private gameInfo: GameInfo, private materialFactory: MaterialFactory, private texFetcher: TextureFetcher) {
     }
@@ -639,7 +639,7 @@ const ANCIENT_TRKBLK: {[key: number]: number} = {
 };
 
 export class DPBlockFetcher implements BlockFetcher {
-    private trkblkTab: DataView;
+    private trkblkTab!: DataView;
     private texFetcher: TextureFetcher;
     private pathBase: string;
     private hitsTab: DataView | null = null;
@@ -745,8 +745,8 @@ export class DPBlockFetcher implements BlockFetcher {
 }
 
 export class AncientBlockFetcher implements BlockFetcher {
-    blocksTab: DataView;
-    blocksBin: ArrayBufferSlice;
+    blocksTab!: DataView;
+    blocksBin!: ArrayBufferSlice;
     texFetcher: TextureFetcher;
 
     private constructor(

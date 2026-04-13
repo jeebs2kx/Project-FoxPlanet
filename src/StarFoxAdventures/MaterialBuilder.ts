@@ -69,19 +69,19 @@ export type MtxFunc<RenderContext> = ((dst: mat4, ctx: RenderContext) => void) |
 export type ColorFunc<RenderContext> = ((dst: Color, ctx: RenderContext) => void) | undefined;
 
 export class SFAMaterialBuilder<RenderContext = undefined> {
-    private mb: GXMaterialBuilder;
-    private tevStageNum: number;
-    private indTexStageNum: number;
-    private texCoordNum: number;
+    private mb!: GXMaterialBuilder;
+    private tevStageNum!: number;
+    private indTexStageNum!: number;
+    private texCoordNum!: number;
     // This now correctly points to an array of TexFunc, as per your implementation.
-    private texMaps: TexFunc<RenderContext>[]; 
-    private texMtxs: MtxFunc<RenderContext>[];
-    private ambColors: ColorFunc<RenderContext>[];
-    private matColors: ColorFunc<RenderContext>[];
-    private postTexMtxs: MtxFunc<RenderContext>[];
-    private indTexMtxs: MtxFunc<RenderContext>[];
-    private konstColors: ColorFunc<RenderContext>[];
-    private tevRegColors: ColorFunc<RenderContext>[];
+    private texMaps!: TexFunc<RenderContext>[]; 
+    private texMtxs!: MtxFunc<RenderContext>[];
+    private ambColors!: ColorFunc<RenderContext>[];
+    private matColors!: ColorFunc<RenderContext>[];
+    private postTexMtxs!: MtxFunc<RenderContext>[];
+    private indTexMtxs!: MtxFunc<RenderContext>[];
+    private konstColors!: ColorFunc<RenderContext>[];
+    private tevRegColors!: ColorFunc<RenderContext>[];
     private texCoordUsesMtxIndex?: boolean[];
     
     private gxMaterial: GXMaterial | undefined = undefined;

@@ -45,7 +45,7 @@ export class EnvfxManager {
     public groundLight: Light = createDirectionalLight(vec3.fromValues(1.0, 1.0, 1.0), White);
     private groundLightFactor: number = 1.0;
 
-    private envfxactBin: DataView;
+    private envfxactBin!: DataView;
     private readonly ENVFX_SIZE = 0x60;
 
     public mistEnable = true;
