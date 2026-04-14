@@ -38,7 +38,7 @@ const enum SaveStatesAction { Load, LoadDefault, Save, Delete };
 class AnimationLoop implements ViewerUpdateInfo {
     public time: number = 0;
     public webXRContext: WebXRContext | null = null;
-    public onupdate: ((updateInfo: ViewerUpdateInfo) => void);
+    public onupdate!: ((updateInfo: ViewerUpdateInfo) => void);
     public useRequestPostAnimationFrame = false;
     private _timeoutCallback = (): void => { this.onupdate(this); };
     public requestPostAnimationFrame = (): void => {
@@ -183,7 +183,7 @@ function ensureLandingVersion() {
   if (!version) {
     version = document.createElement('div');
     version.id = 'landing-version';
-    version.textContent = 'Version 0.8.9';
+    version.textContent = 'Version 0.9.0';
     container.appendChild(version);
   } else if (version.parentElement !== container) {
     container.appendChild(version);
@@ -587,25 +587,25 @@ body[data-game-theme="dp"] .sfa-list-scroll::-webkit-scrollbar-thumb:hover{
 /* ========================================================================= */
 
 class Main {
-    public toplevel: HTMLElement;
-    public canvas: HTMLCanvasElement;
-    public viewer: Viewer;
-    public groups: (string | SceneGroup)[];  public ui: UI;
+    public toplevel!: HTMLElement;
+    public canvas!: HTMLCanvasElement;
+    public viewer!: Viewer;
+    public groups!: (string | SceneGroup)[];  public ui: UI;
     public saveManager = GlobalSaveManager;
 
-    private droppedFileGroup: SceneGroup;
+    private droppedFileGroup!: SceneGroup;
     private currentSceneGroup: SceneGroup | null = null;
     private currentSceneDesc: SceneDesc | null = null;
 
     private loadingSceneDesc: SceneDesc | null = null;
     private destroyablePool: Destroyable[] = [];
     private dataShare = new DataShare();
-    private dataFetcher: DataFetcher;
+    private dataFetcher!: DataFetcher;
     private lastUpdatedURLTimeSeconds: number = -1;
 
     private postAnimFrameCanvas = new AnimationLoop();
     private postAnimFrameWebXR = new AnimationLoop();
-    private webXRContext: WebXRContext;
+    private webXRContext!: WebXRContext;
 
     public sceneTimeScale = 1.0;
     public isEmbedMode = false;

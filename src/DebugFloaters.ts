@@ -123,7 +123,7 @@ export class FloatingPanel implements Widget {
     public customHeaderBackgroundColor: string = '';
     protected header: HTMLElement;
     protected headerContainer: HTMLElement;
-    protected svgIcon: SVGSVGElement;
+    protected svgIcon!: SVGSVGElement;
     protected minimizeButton: HTMLElement;
     protected minimized = false;
 

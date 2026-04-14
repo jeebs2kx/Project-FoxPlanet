@@ -114,8 +114,8 @@ class NumberDragger {
     private _anchorMouseX: number;
     private _anchorValue: number | undefined;
     private _value: number | undefined;
-    private _currentIncr: number;
-    private _showTimeout: number;
+    private _currentIncr!: number;
+    private _showTimeout!: number;
 
     constructor(private _document: HTMLDocument, private _cursorOverride: CursorOverride) {
         // User callback.
@@ -308,28 +308,28 @@ export default class CodeEditor {
     private _suffix: string;
     private _paddingTop: number;
     private _paddingBottom: number;
-    private _width: number;
-    private _minHeight: number;
-    private _lineFlairs: LineFlair[];
-    private _prefixLines: number;
-    private _suffixLines: number;
+    private _width!: number;
+    private _minHeight!: number;
+    private _lineFlairs!: LineFlair[];
+    private _prefixLines!: number;
+    private _suffixLines!: number;
 
     private _valueChanged: boolean = false;
     private _valueChangedImmediate: boolean = false;
     private _needsRecalculate: boolean = false;
 
-    private _cols: number;
-    private _height: number;
-    private _charWidth: number;
-    private _rowHeight: number;
-    private _charMarginTop: number;
-    private _gutterMargin: number;
-    private _gutterWidth: number;
-    private _textMargin: number;
-    private _lineModel: Line[];
-    private _syntaxRuns: SyntaxRun[];
-    private _textareaStyle: CSSStyleDeclaration;
-    private _draggableNumbers: Range[];
+    private _cols!: number;
+    private _height!: number;
+    private _charWidth!: number;
+    private _rowHeight!: number;
+    private _charMarginTop!: number;
+    private _gutterMargin!: number;
+    private _gutterWidth!: number;
+    private _textMargin!: number;
+    private _lineModel!: Line[];
+    private _syntaxRuns!: SyntaxRun[];
+    private _textareaStyle!: CSSStyleDeclaration;
+    private _draggableNumbers!: Range[];
     // Redraw-internal state.
     private _redraw_cursorPosition: number | undefined;
     private _redraw_cursorBlinkStart: number | undefined;
@@ -337,7 +337,7 @@ export default class CodeEditor {
     private _mouseY: number | undefined;
     private _mouseIdx: number | undefined;
     private _dragging: string | undefined;
-    private _dragStartIdx: number;
+    private _dragStartIdx!: number;
     private _draggingNumber: { start: number; end: number; value: number; } | null = null;
 
     constructor(private _document: HTMLDocument) {

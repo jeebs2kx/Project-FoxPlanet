@@ -278,8 +278,8 @@ export function parse<T>(buffer: ArrayBufferSlice, fileType: FileType = FileType
 }
 
 class GrowableBuffer {
-    public buffer: ArrayBuffer;
-    public view: DataView;
+    public buffer!: ArrayBuffer;
+    public view!: DataView;
     public userSize: number = 0;
     public bufferSize: number = 0;
 

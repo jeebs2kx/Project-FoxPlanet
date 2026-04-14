@@ -1124,12 +1124,13 @@ featuresList.style.display = 'grid';
 featuresList.style.gap = '6px';
 
 const features = [
-    'Released and beta maps',
+    'Hundreds of released and beta maps',
     'Full model viewer + beta models',
     'Animation viewer',
     'Texture viewer',
     'VR support',
-    'And more',
+    'Tons of development features for SFA and DP',
+    'And more!',
 ];
 
 for (const feature of features) {
@@ -1142,6 +1143,17 @@ for (const feature of features) {
 this.landingBlurb.appendChild(intro);
 this.landingBlurb.appendChild(featuresTitle);
 this.landingBlurb.appendChild(featuresList);
+const workInProgressNote = document.createElement('div');
+workInProgressNote.textContent = 'Please note: this viewer is still a work in progress and is being actively developed when time permits. Currently, some features may be missing or incomplete. - Jeebs2kx';
+workInProgressNote.style.marginTop = '14px';
+workInProgressNote.style.paddingTop = '12px';
+workInProgressNote.style.borderTop = '1px solid rgba(255,255,255,.10)';
+workInProgressNote.style.color = 'rgba(255,255,255,.72)';
+workInProgressNote.style.fontSize = '12px';
+workInProgressNote.style.lineHeight = '1.5';
+workInProgressNote.style.fontStyle = 'italic';
+
+this.landingBlurb.appendChild(workInProgressNote);
 this.contents.appendChild(this.landingBlurb);
         this.topBox = document.createElement('div');
         this.topBox.style.display = 'grid';

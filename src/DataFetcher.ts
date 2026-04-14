@@ -35,8 +35,8 @@ class DataFetcherRequest {
     private request: Request;
     private response: Response | null = null;
     private abortController = new AbortController();
-    private resolve: (slice: NamedArrayBufferSlice) => void;
-    private reject: (e: Error | null) => void;
+    private resolve!: (slice: NamedArrayBufferSlice) => void;
+    private reject!: (e: Error | null) => void;
     private retriesLeft = 2;
 
     constructor(private cache: Cache | null, public url: string, private options: DataFetcherOptions) {

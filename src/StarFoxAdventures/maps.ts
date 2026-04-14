@@ -126,6 +126,11 @@ const DP_LABEL_NAME_OVERRIDES: Record<number, string> = {
     0x001C: 'Fishingnet', 0x05B4: 'KPspellstone',0x05B5: 'KPlift',0x05B9: 'IceBlastspell',
    
 };
+const DP_VANILLA_COMPARE_INFO: GameInfo | null = {
+    pathBase: 'dinosaurplanet_vanilla',
+    subdirs: {},
+};
+
 export interface BlockInfo {
     mod: number;
     sub: number;
@@ -1016,6 +1021,220 @@ async function loadDPExternalObjectNames(
 
     return out;
 }
+
+type DPObjectEntry = {
+    index: number;
+    offset: number;
+    typeNum: number;
+    x: number;
+    y: number;
+    z: number;
+    size: number;
+    rawHex: string;
+    noPosHex: string;
+};
+
+type DPObjectDiff = {
+    available: boolean;
+    message: string;
+    added: DPObjectEntry[];
+    removed: DPObjectEntry[];
+    moved: Array<{ from: DPObjectEntry; to: DPObjectEntry }>;
+    changed: Array<{ base: DPObjectEntry; current: DPObjectEntry }>;
+};
+
+function dpBytesHex(view: DataView, start: number, size: number, zeroPos: boolean = false): string {
+    let s = '';
+    for (let i = 0; i < size; i++) {
+        const absolute = start + i;
+        const inXYZ = absolute >= 0x08 && absolute < 0x14;
+        const b = zeroPos && inXYZ ? 0 : view.getUint8(start + i);
+        s += b.toString(16).padStart(2, '0');
+    }
+    return s;
+}
+
+async function loadDPObjectEntriesForMap(
+    dataFetcher: DataFetcher,
+    gameInfo: GameInfo,
+    mapNum: number,
+): Promise<DPObjectEntry[]> {
+    const [tabBuf, binBuf] = await Promise.all([
+        dataFetcher.fetchData(`${gameInfo.pathBase}/MAPS.tab`, { allow404: true }),
+        dataFetcher.fetchData(`${gameInfo.pathBase}/MAPS.bin`, { allow404: true }),
+    ]);
+
+    if (tabBuf.byteLength === 0 || binBuf.byteLength === 0)
+        throw new Error(`Missing MAPS.tab/bin in ${gameInfo.pathBase}`);
+
+    const mapsTab = tabBuf.createDataView();
+    const mapsBin = binBuf.createDataView();
+    const info = getMapInfo(mapsTab, mapsBin, mapNum);
+
+    if (!info.objectsOffset || !info.objectsSize || info.objectsSize <= 0)
+        return [];
+
+    const objData = dataSubarray(info.mapsBin, info.objectsOffset, info.objectsSize);
+    const out: DPObjectEntry[] = [];
+
+    let offset = 0;
+    let index = 0;
+
+    while (offset + 4 <= objData.byteLength) {
+        const size = objData.getUint8(offset + 2) * 4;
+        if (size <= 0 || offset + size > objData.byteLength)
+            break;
+
+        const typeNum = objData.getUint16(offset + 0x00);
+        const x = size >= 0x0C ? objData.getFloat32(offset + 0x08) : 0;
+        const y = size >= 0x10 ? objData.getFloat32(offset + 0x0C) : 0;
+        const z = size >= 0x14 ? objData.getFloat32(offset + 0x10) : 0;
+
+        out.push({
+            index,
+            offset,
+            typeNum,
+            x, y, z,
+            size,
+            rawHex: dpBytesHex(objData, offset, size, false),
+            noPosHex: dpBytesHex(objData, offset, size, true),
+        });
+
+        offset += size;
+        index++;
+    }
+
+    return out;
+}
+
+function dpObjDistSq(a: DPObjectEntry, b: DPObjectEntry): number {
+    const dx = a.x - b.x;
+    const dy = a.y - b.y;
+    const dz = a.z - b.z;
+    return dx * dx + dy * dy + dz * dz;
+}
+
+async function loadDPObjectDiff(
+    dataFetcher: DataFetcher,
+    currentInfo: GameInfo,
+    baseInfo: GameInfo | null,
+    mapNum: number,
+): Promise<DPObjectDiff> {
+    if (!baseInfo) {
+        return {
+            available: false,
+            message: 'No vanilla compare folder configured.',
+            added: [],
+            removed: [],
+            moved: [],
+            changed: [],
+        };
+    }
+
+    let base: DPObjectEntry[] = [];
+    let current: DPObjectEntry[] = [];
+
+    try {
+        [base, current] = await Promise.all([
+            loadDPObjectEntriesForMap(dataFetcher, baseInfo, mapNum),
+            loadDPObjectEntriesForMap(dataFetcher, currentInfo, mapNum),
+        ]);
+    } catch (e) {
+        return {
+            available: false,
+            message: String(e),
+            added: [],
+            removed: [],
+            moved: [],
+            changed: [],
+        };
+    }
+
+    const matchedBase = new Set<number>();
+    const matchedCurrent = new Set<number>();
+    const changed: Array<{ base: DPObjectEntry; current: DPObjectEntry }> = [];
+    const moved: Array<{ from: DPObjectEntry; to: DPObjectEntry }> = [];
+    const added: DPObjectEntry[] = [];
+    const removed: DPObjectEntry[] = [];
+
+    const EPS_SQ = 2.0 * 2.0;
+
+    for (let ci = 0; ci < current.length; ci++) {
+        const c = current[ci];
+
+        let bestBI = -1;
+        let bestD = Infinity;
+
+        for (let bi = 0; bi < base.length; bi++) {
+            if (matchedBase.has(bi))
+                continue;
+
+            const b = base[bi];
+            if (b.typeNum !== c.typeNum)
+                continue;
+
+            const d = dpObjDistSq(b, c);
+            if (d < bestD) {
+                bestD = d;
+                bestBI = bi;
+            }
+        }
+
+        if (bestBI >= 0 && bestD <= EPS_SQ) {
+            matchedBase.add(bestBI);
+            matchedCurrent.add(ci);
+
+            const b = base[bestBI];
+            if (b.rawHex !== c.rawHex)
+                changed.push({ base: b, current: c });
+        }
+    }
+
+    for (let ci = 0; ci < current.length; ci++) {
+        if (matchedCurrent.has(ci))
+            continue;
+
+        const c = current[ci];
+
+        let movedBI = -1;
+        for (let bi = 0; bi < base.length; bi++) {
+            if (matchedBase.has(bi))
+                continue;
+
+            const b = base[bi];
+            if (b.typeNum === c.typeNum && b.noPosHex === c.noPosHex) {
+                movedBI = bi;
+                break;
+            }
+        }
+
+        if (movedBI >= 0) {
+            matchedBase.add(movedBI);
+            matchedCurrent.add(ci);
+            moved.push({ from: base[movedBI], to: c });
+        }
+    }
+
+    for (let ci = 0; ci < current.length; ci++) {
+        if (!matchedCurrent.has(ci))
+            added.push(current[ci]);
+    }
+
+    for (let bi = 0; bi < base.length; bi++) {
+        if (!matchedBase.has(bi))
+            removed.push(base[bi]);
+    }
+
+    return {
+        available: true,
+        message: `Compared Dinosaur Planet Vanilla -> 2025_01_26 patched version     `,
+        added,
+        removed,
+        moved,
+        changed,
+    };
+}
+
 function getModelDebugMaterials(modelInst: ModelInstance | undefined): any[] {
     return (((modelInst as any)?.model as any)?.debugMaterialInfo ?? []) as any[];
 }
@@ -1697,6 +1916,7 @@ this.objects.push(objInst);
         const block = this.blocks[bz][bx];
         return block === undefined ? null : block;
     }
+
 public getObjectWorldPosition(obj: ObjectInstance, dst: vec3 = vec3.create()): vec3 {
     const x = obj.position[0];
     const y = obj.position[1];
@@ -1922,7 +2142,115 @@ private map!: MapInstance;
 private currentGameInfo!: GameInfo;
 private currentTexFetcher: any;
 private dpOverlayUIHidden = false;
+private drawDPObjectDiffOverlay(viewerInput: Viewer.ViewerRenderInput): void {
+    this.projectedDiffLabels = [];
 
+    if (this.dpOverlayUIHidden)
+        return;
+    if (!this.isDPMapScene)
+        return;
+    if (!this.showObjectDiff)
+        return;
+
+    const diff = this.dpObjectDiff;
+    if (!diff?.available)
+        return;
+
+    const ctx = getDebugOverlayCanvas2D() as CanvasRenderingContext2D | null;
+    if (!ctx)
+        return;
+
+    const canvas = ctx.canvas;
+    const clipFromWorld = getClipFromWorldMatrix(viewerInput);
+    if (!clipFromWorld)
+        return;
+
+    const mapMtx = this.map.getMapMatrix();
+    const [ox, oz] = this.map.info.getOrigin();
+
+    ctx.save();
+    ctx.font = '12px monospace';
+    ctx.textBaseline = 'middle';
+
+    const drawPoint = (
+        e: DPObjectEntry,
+        label: string,
+        fill: string,
+        lines: string[],
+    ) => {
+        const localX = e.x + ox * 640;
+        const localY = e.y;
+        const localZ = e.z + oz * 640;
+
+        const world = transformMapPoint(mapMtx, localX, localY, localZ);
+        const p = projectWorldToCanvas(clipFromWorld, canvas, world[0], world[1] + 25, world[2]);
+        if (!p)
+            return;
+
+        ctx.fillStyle = fill;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.strokeStyle = 'rgba(0,0,0,0.95)';
+        ctx.lineWidth = 3;
+        ctx.strokeText(label, p.x + 8, p.y);
+
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(label, p.x + 8, p.y);
+
+        this.projectedDiffLabels.push({
+            x: p.x,
+            y: p.y,
+            w: Math.ceil(ctx.measureText(label).width),
+            h: 16,
+            lines,
+        });
+    };
+
+    const diffLabel = (tag: string, typeNum: number): string => {
+        const hex = `0x${dpHex(typeNum).toUpperCase()}`;
+        const name = this.getDPObjectNameForType(typeNum);
+        return name ? `${tag} ${hex} ${name}` : `${tag} ${hex}`;
+    };
+
+    for (const e of diff.added.slice(0, 150))
+        drawPoint(e, diffLabel('ADD', e.typeNum), '#00ff55', this.buildDPDiffLines('ADD', e));
+
+    for (const e of diff.removed.slice(0, 150))
+        drawPoint(e, diffLabel('DEL', e.typeNum), '#ff3333', this.buildDPDiffLines('DEL', e));
+
+    for (const e of diff.changed.slice(0, 150))
+        drawPoint(e.current, diffLabel('CHG', e.current.typeNum), '#ffe100', this.buildDPDiffLines('CHG', e.current, e.base));
+
+    for (const e of diff.moved.slice(0, 150))
+        drawPoint(e.to, diffLabel('MOV', e.to.typeNum), '#55aaff', this.buildDPDiffLines('MOV', e.to, e.from));
+
+    if (this.selectedDiffLines) {
+ctx.font = '14px monospace';
+const lineH = 18;
+let boxW = 380;
+        for (const line of this.selectedDiffLines)
+            boxW = Math.max(boxW, Math.ceil(ctx.measureText(line).width) + 16);
+
+        const boxH = 10 + this.selectedDiffLines.length * lineH + 8;
+const boxX = (this.isDPMapScene && this.showMinimap) ? 400 : 8;
+const boxY = canvas.height - boxH - 8;
+
+        ctx.fillStyle = 'rgba(0,0,0,0.82)';
+        ctx.fillRect(boxX, boxY, boxW, boxH);
+
+        ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+        ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+        for (let i = 0; i < this.selectedDiffLines.length; i++) {
+            ctx.fillStyle = i === 0 ? '#ffeb3b' : '#ffffff';
+            ctx.fillText(this.selectedDiffLines[i], boxX + 8, boxY + 12 + i * lineH);
+        }
+    }
+
+    ctx.restore();
+}
 private readonly onDPOverlayHideHotkey = (ev: KeyboardEvent) => {
     if (!this.isDPMapScene)
         return;
@@ -1973,6 +2301,36 @@ public showObjectLabels = false;
 public showHits = false;
 public showHitVolumes = false;
 public showMapWireframe = false;
+public showObjectDiff = false;
+private dpObjectDiff: DPObjectDiff | null = null;
+private dpCurrentObjects: ObjectInstance[] | null = null;
+private dpVanillaObjectMap: MapInstance | null = null;
+private dpUsingVanillaObjects = false;
+public setDPObjectDiff(diff: DPObjectDiff | null): void {
+    this.dpObjectDiff = diff;
+}
+
+public setDPVanillaObjectMap(vanillaMap: MapInstance | null): void {
+    this.dpVanillaObjectMap = vanillaMap;
+}
+
+public setDPUseVanillaObjects(enabled: boolean): void {
+    if (!this.isDPMapScene)
+        return;
+
+    if (!this.dpCurrentObjects)
+        this.dpCurrentObjects = this.map.objects;
+
+    const useVanilla = enabled && this.dpVanillaObjectMap !== null;
+
+    this.dpUsingVanillaObjects = useVanilla;
+    this.map.objects = useVanilla
+        ? this.dpVanillaObjectMap!.objects
+        : this.dpCurrentObjects;
+
+    this.clearSelectedDebugObject();
+}
+
 public showCurves = false;
 public showCurveLabels = true;
 
@@ -1995,6 +2353,14 @@ private dpFbfxState = {
     lastCamZ: 0,
 };
 private selectedObject: ObjectInstance | null = null;
+private selectedDiffLines: string[] | null = null;
+private projectedDiffLabels: Array<{
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    lines: string[];
+}> = [];
 private projectedObjectLabels: Array<{
     obj: ObjectInstance;
     x: number;
@@ -2005,9 +2371,10 @@ private projectedObjectLabels: Array<{
     h: number;
 }> = [];    private debugOverlayCanvas: HTMLCanvasElement | null = null;
 
-    public clearSelectedDebugObject(): void {
-        this.selectedObject = null;
-    }
+public clearSelectedDebugObject(): void {
+    this.selectedObject = null;
+    this.selectedDiffLines = null;
+}
 
 private debugMouseDownX = 0;
 private debugMouseDownY = 0;
@@ -2050,6 +2417,36 @@ private pickDebugObjectAtClientPos(clientX: number, clientY: number): ObjectInst
     return best ? best.obj : null;
 }
 
+private pickDPDiffAtClientPos(clientX: number, clientY: number): string[] | null {
+    if (!this.showObjectDiff || this.projectedDiffLabels.length === 0)
+        return null;
+
+    const canvas = this.debugOverlayCanvas;
+    if (!canvas)
+        return null;
+
+    const rect = canvas.getBoundingClientRect();
+    const mx = (clientX - rect.left) * (canvas.width / rect.width);
+    const my = (clientY - rect.top) * (canvas.height / rect.height);
+
+    for (const e of this.projectedDiffLabels) {
+        const dx = e.x - mx;
+        const dy = e.y - my;
+
+        const hitMarker = (dx * dx + dy * dy) <= 18 * 18;
+        const hitText =
+            mx >= e.x + 6 &&
+            mx <= e.x + 6 + e.w + 8 &&
+            my >= e.y - 12 &&
+            my <= e.y + 12;
+
+        if (hitMarker || hitText)
+            return e.lines;
+    }
+
+    return null;
+}
+
 private readonly onDebugOverlayMouseDown = (ev: MouseEvent) => {
     if (ev.button !== 0)
         return;
@@ -2072,15 +2469,25 @@ private readonly onDebugOverlayMouseUp = (ev: MouseEvent) => {
     if ((dx * dx + dy * dy) > (5 * 5))
         return;
 
-    this.selectedObject = this.pickDebugObjectAtClientPos(ev.clientX, ev.clientY);
+const diffLines = this.pickDPDiffAtClientPos(ev.clientX, ev.clientY);
+if (diffLines) {
+    this.selectedDiffLines = diffLines;
+    this.selectedObject = null;
+    return;
+}
+
+this.selectedDiffLines = null;
+this.selectedObject = this.pickDebugObjectAtClientPos(ev.clientX, ev.clientY);
 };
 
-    private readonly onDebugOverlayContextMenu = (ev: MouseEvent) => {
-        if (!this.selectedObject)
-            return;
-        ev.preventDefault();
-        this.selectedObject = null;
-    };
+private readonly onDebugOverlayContextMenu = (ev: MouseEvent) => {
+    if (!this.selectedObject && !this.selectedDiffLines)
+        return;
+
+    ev.preventDefault();
+    this.selectedObject = null;
+    this.selectedDiffLines = null;
+};
 
 private installObjectDebugPicking(): void {
     if (this.debugOverlayCanvas)
@@ -2097,6 +2504,64 @@ private installObjectDebugPicking(): void {
     window.addEventListener('contextmenu', this.onDebugOverlayContextMenu, true);
 }
 
+private buildDPDiffLines(kind: string, entry: DPObjectEntry, other?: DPObjectEntry): string[] {
+    const name = this.getDPObjectNameForType(entry.typeNum);
+    const title = `${kind} 0x${dpHex(entry.typeNum).toUpperCase()}${name ? ` ${name}` : ''}`;
+
+    const lines = [
+        title,
+        `index=${entry.index} off=0x${entry.offset.toString(16)} size=0x${entry.size.toString(16)}`,
+        `pos=(${entry.x.toFixed(2)}, ${entry.y.toFixed(2)}, ${entry.z.toFixed(2)})`,
+    ];
+
+    if (other && kind === 'MOV') {
+        lines.push(
+            `from=(${other.x.toFixed(2)}, ${other.y.toFixed(2)}, ${other.z.toFixed(2)})`,
+            `to=(${entry.x.toFixed(2)}, ${entry.y.toFixed(2)}, ${entry.z.toFixed(2)})`,
+        );
+    }
+
+    if (other && kind === 'CHG') {
+        let count = 0;
+        const maxBytes = Math.min(other.rawHex.length, entry.rawHex.length) >>> 1;
+
+        for (let i = 0; i < maxBytes && count < 16; i++) {
+            const a = other.rawHex.slice(i * 2, i * 2 + 2);
+            const b = entry.rawHex.slice(i * 2, i * 2 + 2);
+            if (a !== b) {
+                lines.push(`+0x${i.toString(16).padStart(2, '0')}: ${a} -> ${b}`);
+                count++;
+            }
+        }
+
+        if (count === 16)
+            lines.push('...more byte changes');
+    }
+
+    return lines;
+}
+
+private getDPObjectNameForType(typeNum: number): string {
+    const scnId = typeNum & 0xFFFF;
+
+    const extNameMap: Map<number, string> | undefined =
+        (this.map.mapOpts?.objectManager as any)?._dpExternalNameMap;
+
+    const extName = extNameMap?.get(scnId);
+    if (extName && extName !== 'NULL')
+        return extName;
+
+    try {
+        const ot = this.map.mapOpts?.objectManager?.getObjectType?.(scnId, false);
+        const name = String((ot as any)?.name ?? (ot as any)?.objName ?? '').trim();
+
+        if (name && name !== 'NULL')
+            return name;
+    } catch (e) {
+    }
+
+    return '';
+}
 private buildObjectDebugLines(obj: ObjectInstance): string[] {
     const typeNum = ((((obj as any)._dpTypeNum ?? -1) as number) & 0xFFFF);
     const ot = this.map.mapOpts?.objectManager?.getObjectType?.(typeNum, false);
@@ -2879,7 +3344,7 @@ public async create(info: MapSceneInfo, gameInfo: GameInfo, dataFetcher: DataFet
 
     await this.map.reloadBlocks(dataFetcher);
 
-    const texFetcher = (blockFetcher as any).texFetcher;
+    const texFetcher = (blockFetcher as any)['texFetcher'];
         this.currentGameInfo = gameInfo;
         this.currentTexFetcher = texFetcher;
         if (texFetcher?.textureHolder)
@@ -2966,6 +3431,7 @@ protected override update(viewerInput: Viewer.ViewerRenderInput) {
     }
 
 this.drawObjectDebugOverlay(viewerInput);
+this.drawDPObjectDiffOverlay(viewerInput);
 this.drawDPObjectHitOverlay(viewerInput);
 this.drawDPHitOverlay(viewerInput);
 this.drawDPMinimapOverlay(viewerInput);
@@ -3038,10 +3504,20 @@ public override destroy(device: GfxDevice) {
         this.dpFbfxCanvas = null;
         this.dpFbfxCtx = null;
     }
+const vanillaObjectMap = this.dpVanillaObjectMap;
+
+if (this.dpCurrentObjects)
+    this.map.objects = this.dpCurrentObjects;
+
+this.dpVanillaObjectMap = null;
+this.dpUsingVanillaObjects = false;
+
     super.destroy(device);
     if (this.sky) { this.sky.destroy(device); this.sky = null; }
     if (this.envfxMan) this.envfxMan.destroy(device);
     this.map.destroy(device);
+    if (vanillaObjectMap)
+    vanillaObjectMap.destroy(device);
 }
 }
 function cleanupDPUI(): void {
@@ -3054,7 +3530,10 @@ function cleanupDPUI(): void {
     document.getElementById('dp-fbfx-toggle')?.remove();
 
     document.getElementById('dp-top-toggle-bar')?.remove();
+document.getElementById('dp-object-diff-toggle')?.remove();
+document.getElementById('dp-object-diff-ui')?.remove();
 
+(window as any).__dpObjectDiffToggle = undefined;
     (window as any).__dpObjectsToggle = undefined;
     (window as any).__dpDevObjectsToggle = undefined;
     (window as any).__dpObjectLabelsToggle = undefined;
@@ -3158,6 +3637,100 @@ function ensureDPWireframeUI(
   };
 
   state.cb.addEventListener('change', state.handler);
+}
+
+function ensureDPObjectDiffUI(
+    diff: DPObjectDiff | null,
+    onChange: (enabled: boolean) => void | Promise<void>,
+): void {
+    type State = {
+        wrap: HTMLDivElement;
+        panel: HTMLDivElement;
+        cb: HTMLInputElement;
+        handler: ((e: Event) => void) | null;
+    };
+
+    let state = (window as any).__dpObjectDiffToggle as State | undefined;
+
+    if (!state) {
+        const wrap = document.createElement('div');
+        wrap.id = 'dp-object-diff-toggle';
+        wrap.style.padding = '1px 3px';
+        wrap.style.background = 'rgba(0,0,0,0.5)';
+        wrap.style.color = '#fff';
+        wrap.style.font = '11px sans-serif';
+        wrap.style.borderRadius = '2px';
+        wrap.style.display = 'flex';
+        wrap.style.alignItems = 'center';
+        wrap.style.height = '20px';
+        wrap.style.boxSizing = 'border-box';
+        wrap.style.order = '8';
+
+        const label = document.createElement('label');
+        label.style.cursor = 'pointer';
+        label.style.display = 'flex';
+        label.style.alignItems = 'center';
+
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.style.marginRight = '1px';
+
+        label.appendChild(cb);
+        label.appendChild(document.createTextNode('VanillaDPdiff'));
+        wrap.appendChild(label);
+        getDPTopToggleBar().appendChild(wrap);
+
+        const panel = document.createElement('div');
+        panel.id = 'dp-object-diff-ui';
+        panel.style.position = 'fixed';
+panel.style.right = '4px';
+panel.style.top = '28px';
+        panel.style.width = '360px';
+        panel.style.maxHeight = '50vh';
+        panel.style.overflow = 'auto';
+        panel.style.zIndex = '10000';
+        panel.style.background = 'rgba(0,0,0,0.88)';
+        panel.style.color = '#fff';
+        panel.style.font = '12px monospace';
+        panel.style.padding = '8px';
+        panel.style.border = '1px solid rgba(255,255,255,0.18)';
+        panel.style.borderRadius = '8px';
+        panel.style.display = 'none';
+
+        document.body.appendChild(panel);
+
+        state = { wrap, panel, cb, handler: null };
+        (window as any).__dpObjectDiffToggle = state;
+    }
+
+    const d = diff;
+    state.cb.disabled = !d?.available;
+
+    if (!d?.available) {
+        state.panel.textContent = `Object diff unavailable:\n${d?.message ?? 'No diff loaded'}`;
+    } else {
+        state.panel.textContent =
+            `DP object diff\n` +
+            `${d.message}\n\n` +
+            `added:   ${d.added.length}\n` +
+            `removed: ${d.removed.length}\n` +
+            `moved:   ${d.moved.length}\n` +
+            `changed: ${d.changed.length}\n\n` +
+            `Overlay colors:\n` +
+            `ADD green\nDEL red\nMOV blue\nCHG yellow`;
+    }
+
+    if (state.handler)
+        state.cb.removeEventListener('change', state.handler);
+
+    state.cb.checked = false;
+
+    state.handler = async () => {
+        state!.panel.style.display = state!.cb.checked ? 'block' : 'none';
+        await onChange(state!.cb.checked);
+    };
+
+    state.cb.addEventListener('change', state.handler);
 }
 
 function ensureDPFbfxUI(
@@ -5103,10 +5676,8 @@ const fakeWorld: any = {
         applyDPObjectManagerPatch(objectManager, objTab, objBin, objIdx, modelInd);
 (objectManager as any)._dpExternalNameMap = dpExternalNameMap;
 
-        const objData = mapSceneInfo.getObjectsData?.();
-        if (objData) {
-            const requiredModels = new Set<number>();
-            
+const requiredModels = new Set<number>();
+
 requiredModels.add(335);
 requiredModels.add(336);
 requiredModels.add(0x03B1);
@@ -5118,19 +5689,45 @@ requiredModels.add(0x03FC);
 requiredModels.add(0x03E4);
 requiredModels.add(0x03FE);
 requiredModels.add(0x03EB);
-            
-            let offset = 0;
-            while (offset < objData.byteLength) {
-                const size = objData.getUint8(offset + 2) * 4;
-                if (size === 0) break;
-                try {
-                    const ot = objectManager.getObjectType(objData.getUint16(offset), false);
-                    ot.modelNums.forEach(m => requiredModels.add(m));
-                } catch(e) {}
-                offset += size;
-            }
-            await dpModelFetcher.preloadModels(Array.from(requiredModels));
+
+const collectModelsFromObjects = (objData: DataView | null | undefined) => {
+    if (!objData)
+        return;
+
+    let offset = 0;
+    while (offset < objData.byteLength) {
+        const size = objData.getUint8(offset + 2) * 4;
+        if (size === 0)
+            break;
+
+        try {
+            const typeNum = objData.getUint16(offset);
+            const ot = objectManager.getObjectType(typeNum, false);
+            ot.modelNums.forEach((m: number) => requiredModels.add(m));
+        } catch (e) {
         }
+
+        offset += size;
+    }
+};
+
+collectModelsFromObjects(mapSceneInfo.getObjectsData?.());
+
+try {
+    if (DP_VANILLA_COMPARE_INFO) {
+        const vanillaPreloadInfo = await loadMap(
+            DP_VANILLA_COMPARE_INFO,
+            context.dataFetcher,
+            this.mapNum,
+        );
+
+        collectModelsFromObjects(vanillaPreloadInfo.getObjectsData?.());
+    }
+} catch (e) {
+    console.warn(`[DP VANILLA PRELOAD] failed for map ${this.mapNum}`, e);
+}
+
+await dpModelFetcher.preloadModels(Array.from(requiredModels));
 
   
         if (!texFetcher.textureHolder) texFetcher.textureHolder = { viewerTextures: [], onnewtextures: null };
@@ -5187,7 +5784,46 @@ await mapRenderer.create(mapSceneInfo, gInfo, context.dataFetcher, blockFetcher,
     dpMapScene: true,
     
 });
+
+try {
+    if (DP_VANILLA_COMPARE_INFO) {
+        const vanillaMapSceneInfo = await loadMap(
+            DP_VANILLA_COMPARE_INFO,
+            context.dataFetcher,
+            this.mapNum,
+        );
+
+        const vanillaObjectMap = new MapInstance(
+            vanillaMapSceneInfo,
+            blockFetcher,
+            {
+                objectManager,
+                dpMapScene: true,
+            },
+        );
+
+        mapRenderer.setDPVanillaObjectMap(vanillaObjectMap);
+    }
+} catch (e) {
+    console.warn(`[DP VANILLA OBJECTS] failed for map ${this.mapNum}`, e);
+}
+
 await ensureDPMPEGVoiceUI(context.dataFetcher, gInfo);
+
+const dpObjectDiff = await loadDPObjectDiff(
+    context.dataFetcher,
+    gInfo,
+    DP_VANILLA_COMPARE_INFO,
+    this.mapNum,
+);
+
+mapRenderer.setDPObjectDiff(dpObjectDiff);
+
+ensureDPObjectDiffUI(dpObjectDiff, async (enabled: boolean) => {
+    mapRenderer.showObjectDiff = enabled;
+    mapRenderer.setDPUseVanillaObjects(enabled);
+});
+
 //ensureTextureToggleUI(async (enabled: boolean) => {
     //texFetcher.setTexturesEnabled(enabled);
     //(materialFactory as any).texturesEnabled = enabled;
