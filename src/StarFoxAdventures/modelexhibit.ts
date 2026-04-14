@@ -78,6 +78,21 @@ function dedupeViewerTextures(holder: UI.TextureListHolder): void {
         holder.onnewtextures();
 }
 
+async function loadModelSubdirsStable(
+    modelFetcher: ModelFetcher,
+    subdirs: string[],
+    dataFetcher: DataFetcher,
+): Promise<void> {
+    for (const subdir of subdirs) {
+        try {
+            // loadSubdir is private in TS, but exists at runtime.
+            await (modelFetcher as any).loadSubdir(subdir, dataFetcher);
+        } catch (e) {
+            console.warn(`[ModelExhibit] Failed to load model subdir "${subdir}"`, e);
+        }
+    }
+}
+
 async function warmAllTexturesIntoViewer(
     texFetcher: any,
     materialFactory: MaterialFactory,
@@ -578,7 +593,11 @@ if (this.modelVersion === ModelVersion.DinosaurPlanet && !this.dpAnimsEnabled) {
     canAnimate = false;
 }
 
-if (this.modelVersion === ModelVersion.Demo || this.modelVersion === ModelVersion.cloudtreasure) {
+if (
+    this.modelVersion === ModelVersion.Demo ||
+    this.modelVersion === ModelVersion.cloudtreasure ||
+    this.modelVersion === ModelVersion.Beta
+) {
     canAnimate = false;
 }
 
@@ -1007,8 +1026,11 @@ const selectedSubdirs = this.subdirs ?? (isBeta
         await texFetcher.loadSubdirs(selectedSubdirs, context.dataFetcher);
 
         const modelFetcher = await ModelFetcher.create(this.gameInfo, Promise.resolve(texFetcher), materialFactory, animController, this.modelVersion);
-        await modelFetcher.loadSubdirs(selectedSubdirs, context.dataFetcher);
-
+if (isBeta) {
+    await loadModelSubdirsStable(modelFetcher, selectedSubdirs, context.dataFetcher);
+} else {
+    await modelFetcher.loadSubdirs(selectedSubdirs, context.dataFetcher);
+}
         const animColl = await AnimCollection.create(this.gameInfo, context.dataFetcher, selectedSubdirs);
 
         return new ModelExhibitRenderer(context, animController, materialFactory, texFetcher, modelFetcher, animColl, amapColl, modanimColl, this.gameInfo, this.modelVersion);

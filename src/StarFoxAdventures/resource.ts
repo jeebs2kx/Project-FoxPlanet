@@ -112,10 +112,8 @@ export class ResourceCollection {
         this.tablesTab = tablesTab.createDataView();
         this.tablesBin = tablesBin.createDataView();
         
-        await Promise.all([
-            this.texFetcher.loadSubdirs(this.subdirs, dataFetcher),
-            this.modelFetcher.loadSubdirs(this.subdirs, dataFetcher),
-        ]);
+await this.texFetcher.loadSubdirs(this.subdirs, dataFetcher);
+await this.modelFetcher.loadSubdirs(this.subdirs, dataFetcher);
     }
 
     public static async create(device: GfxDevice, gameInfo: GameInfo, dataFetcher: DataFetcher, subdirs: string[], materialFactory: MaterialFactory, animController: SFAAnimationController): Promise<ResourceCollection> {

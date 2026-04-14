@@ -133,18 +133,10 @@ public static async create(dataFetcher: DataFetcher, path: string, allowMissing:
 }
 
 public hasAnim(num: number): boolean {
-    if (num < 0 || (num + 1) * 4 > this.tab.byteLength) {
+    if (num < 0 || (num + 1) * 4 > this.tab.byteLength)
         return false;
-    }
-    
-    const val = this.tab.getUint32(num * 4);
-    const nextVal = this.tab.getUint32((num + 1) * 4);
-    
-    const isSFA = (val & 0xFF000000) === 0x10000000;
-    const offs = isSFA ? (val & 0x0FFFFFFF) : val;
-    const nextOffs = isSFA ? (nextVal & 0x0FFFFFFF) : nextVal;
-    
-    return (nextOffs - offs) > 0;
+
+    return (this.tab.getUint32(num * 4) & 0xff000000) === 0x10000000;
 }
 
 public getAnim(num: number): Anim {
