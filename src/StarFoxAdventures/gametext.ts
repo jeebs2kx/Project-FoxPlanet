@@ -18,7 +18,21 @@ const LANGUAGE_NAMES = [
   'Español',
   'Italiano',
 ];
+const DP_FONT_DINO_SUBTITLE_FONT_1 = 1;
+const DP_FONT_DINO_SUBTITLE_FONT_2 = 2;
 
+const DP_SUBTITLE_FONT_ID = DP_FONT_DINO_SUBTITLE_FONT_1;
+const DP_GAMETEXT_OVERLAY_ID = 'dp-gametext-overlay';
+const DP_GAMETEXT_FLOATING_PANEL_ID = 'dp-gametext-floating-panel';
+const DP_FONT_SIZE = 0x8C0;
+const DP_FONT_TEXTURE_IDS_OFFS = 0x40;
+const DP_FONT_X_OFFS = 0x20;
+const DP_FONT_Y_OFFS = 0x22;
+const DP_FONT_CHAR_WIDTH_OFFS = 0x24;
+const DP_FONT_CHAR_HEIGHT_OFFS = 0x26;
+
+const DP_FONT_GLYPHS_OFFS = 0x1C0;
+const DP_FONT_GLYPH_COUNT = 224;
 type ParagraphAlign = 'center' | 'left';
 
 interface ParsedTextRun {
@@ -57,11 +71,16 @@ interface DPFontGlyph {
 }
 
 interface DPSubtitleFont {
-  name: string;
-  textureIds: number[];
-  glyphs: DPFontGlyph[];
-  lineHeight: number;
-  spaceAdvance: number;
+    name: string;
+    x: number;
+    y: number;
+    charWidth: number;
+    charHeight: number;
+    textureIds: number[];
+    glyphs: DPFontGlyph[];
+    lineHeight: number;
+    spaceAdvance: number;
+    atlasCanvases: Map<number, HTMLCanvasElement>;
 }
 
 type CanvasLineItem =
@@ -82,7 +101,13 @@ class DPGameTextRenderer extends SFARenderer {
   private resultsLabel: HTMLElement | null = null;
   private rawPre: HTMLPreElement | null = null;
   private entryIdInput: HTMLInputElement | null = null;
-
+private floatingPanelRoot: HTMLDivElement | null = null;
+private floatingEntryIdInput: HTMLInputElement | null = null;
+private floatingSearchInput: HTMLInputElement | null = null;
+private floatingResultsLabel: HTMLDivElement | null = null;
+private floatingPlayPauseButton: HTMLButtonElement | null = null;
+private floatingLoopCheckbox: HTMLInputElement | null = null;
+private floatingSpeedSelect: HTMLSelectElement | null = null;
   private overlayRoot: HTMLDivElement | null = null;
   private overlayCanvas: HTMLCanvasElement | null = null;
   private overlayCtx: CanvasRenderingContext2D | null = null;
@@ -100,18 +125,19 @@ class DPGameTextRenderer extends SFARenderer {
   private paragraphTimeLeftMs = 0;
   private paragraphDurationMs = 0;
 
-  private readonly subtitleScale = 2;
-
+  private readonly subtitleScale = 3.0;
+private subtitleDurationScale = 2.3;
+private readonly subtitleMaxTextWidth = 634;
 public async create(gameInfo: GameInfo, dataFetcher: DataFetcher): Promise<Viewer.SceneGfx> {
   this.gameInfo = gameInfo;
   this.dataFetcher = dataFetcher;
 
+  this.removeStaleDOM();
   this.ensureOverlay();
+  this.ensureFloatingPanel();
 
-  // Load gametext immediately so the scene becomes usable right away.
   await this.loadLanguage(0);
 
-  // Load DinoSubtitleFont1 in the background so scene creation does not stall.
   void this.loadSubtitleFont().then(() => {
     this.updateOverlay();
   }).catch((e) => {
@@ -120,6 +146,8 @@ public async create(gameInfo: GameInfo, dataFetcher: DataFetcher): Promise<Viewe
 
   return this;
 }
+
+
 
   public override destroy(device: GfxDevice): void {
     this.subtitleFontFetcher?.destroy(this.materialFactory.device);
@@ -149,7 +177,7 @@ public async create(gameInfo: GameInfo, dataFetcher: DataFetcher): Promise<Viewe
         if (!this.loopPlayback) {
           this.currentParagraphIndex = entry.paragraphs.length - 1;
           this.paragraphTimeLeftMs = 0;
-          this.paragraphDurationMs = entry.paragraphs[this.currentParagraphIndex].durationMs;
+this.paragraphDurationMs = this.scaleDurationMs(entry.paragraphs[this.currentParagraphIndex].durationMs);
           this.updateOverlay();
           return;
         }
@@ -168,6 +196,15 @@ public async create(gameInfo: GameInfo, dataFetcher: DataFetcher): Promise<Viewe
       return null;
     return this.visibleEntries[this.currentVisibleIndex];
   }
+
+private removeStaleDOM(): void {
+  document.getElementById(DP_GAMETEXT_OVERLAY_ID)?.remove();
+  document.getElementById(DP_GAMETEXT_FLOATING_PANEL_ID)?.remove();
+}
+
+private scaleDurationMs(durationMs: number): number {
+  return Math.max(1, Math.round(durationMs * this.subtitleDurationScale));
+}
 
   private async loadLanguage(languageId: number): Promise<void> {
     const pathBase = this.gameInfo.pathBase;
@@ -210,6 +247,8 @@ public async create(gameInfo: GameInfo, dataFetcher: DataFetcher): Promise<Viewe
     this.rebuildVisibleEntries();
   }
 
+
+  
   private parseEntry(
     bin: DataView,
     id: number,
@@ -304,28 +343,27 @@ public async create(gameInfo: GameInfo, dataFetcher: DataFetcher): Promise<Viewe
     return `0x${u.toString(16).toUpperCase().padStart(4, '0')}`;
   }
 
-  private subtitleColorFromCommand(cmd: number): string | null {
+private subtitleColorFromCommand(cmd: number): string | null {
     if (cmd >= 0 || cmd < -255)
       return null;
+    const payload = ((cmd & 0xFF) - 1) & 0xFF;
 
-    let colourValueSigned = cmd & 0xFF;
-    if (colourValueSigned >= 0x80)
-      colourValueSigned -= 0x100;
+    const rawR2 = (payload & 0b11000000) >> 6;
+    const rawG2 = (payload & 0b00110000) >> 4;
+    const rawB2 = (payload & 0b00001100) >> 2;
+    const rawA2 = (payload & 0b00000011);
 
-    const colour8 = Math.abs(colourValueSigned) - 1;
-
-    const r2 = (colour8 & 0b11000000) >> 6;
-    const g2 = (colour8 & 0b00110000) >> 4;
-    const b2 = (colour8 & 0b00001100) >> 2;
-    const a2 = (colour8 & 0b00000011);
+    const r2 = 3 - rawR2;
+    const g2 = 3 - rawG2;
+    const b2 = 3 - rawB2;
 
     const rgb2Possibilities = [0, 72, 150, 255];
-    const a2Possibilities = [128, 192, 255, 64];
+    const a2Possibilities = [255, 191, 127, 63];
 
     const r = rgb2Possibilities[r2];
     const g = rgb2Possibilities[g2];
     const b = rgb2Possibilities[b2];
-    const a = a2Possibilities[a2] / 255.0;
+    const a = a2Possibilities[rawA2] / 255.0;
 
     return `rgba(${r}, ${g}, ${b}, ${a})`;
   }
@@ -536,139 +574,126 @@ public async create(gameInfo: GameInfo, dataFetcher: DataFetcher): Promise<Viewe
       this.currentParagraphIndex = 0;
 
     const paragraph = entry.paragraphs[this.currentParagraphIndex];
-    this.paragraphDurationMs = paragraph.durationMs;
-    this.paragraphTimeLeftMs = paragraph.durationMs;
+   this.paragraphDurationMs = this.scaleDurationMs(paragraph.durationMs);
+this.paragraphTimeLeftMs = this.paragraphDurationMs;
     this.updateOverlay();
   }
 
-  private parseDinoSubtitleFont(fontsDv: DataView): DPSubtitleFont {
-    const fontCount = fontsDv.getUint32(0);
-    if (fontCount < 2)
-      throw new Error('FONTS.bin does not contain DinoSubtitleFont1');
+private parseDinoSubtitleFont(fontsDv: DataView): Omit<DPSubtitleFont, 'atlasCanvases'> {
+  const fontCount = fontsDv.getUint32(0);
+  if (DP_SUBTITLE_FONT_ID < 0 || DP_SUBTITLE_FONT_ID >= fontCount)
+    throw new Error(`FONTS.bin does not contain subtitle font index ${DP_SUBTITLE_FONT_ID}`);
 
-    const FONT_SIZE = 2240;
-    const FONT_INDEX = 1;
-    const fontBase = 4 + (FONT_INDEX * FONT_SIZE);
+  const fontBase = 4 + (DP_SUBTITLE_FONT_ID * DP_FONT_SIZE);
 
-    const name = this.readAsciiZ(fontsDv, fontBase + 0x00, 0x22);
+  const name = this.readAsciiZ(fontsDv, fontBase + 0x00, 0x20);
 
-    const textureIds: number[] = [];
-    for (let i = 0; i < 64; i++)
-      textureIds.push(fontsDv.getInt16(fontBase + 0x40 + (i * 2)));
+  const x = fontsDv.getUint16(fontBase + DP_FONT_X_OFFS);
+  const y = fontsDv.getUint16(fontBase + DP_FONT_Y_OFFS);
+  const charWidth = fontsDv.getUint16(fontBase + DP_FONT_CHAR_WIDTH_OFFS);
+  const charHeight = fontsDv.getUint16(fontBase + DP_FONT_CHAR_HEIGHT_OFFS);
 
-    const glyphs: DPFontGlyph[] = [];
-    let maxGlyphHeight = 0;
+  const textureIds: number[] = [];
+  for (let i = 0; i < 64; i++)
+    textureIds.push(fontsDv.getInt16(fontBase + DP_FONT_TEXTURE_IDS_OFFS + (i * 2)));
 
-    for (let i = 0; i < 256; i++) {
-      const offs = fontBase + 0xC0 + (i * 8);
-const glyph: DPFontGlyph = {
-  textureIndex: fontsDv.getUint8(offs + 0),
-  kerning: fontsDv.getInt8(offs + 1),
-  offsetX: fontsDv.getInt8(offs + 2),
-  offsetY: fontsDv.getInt8(offs + 3),
-  textureU: fontsDv.getUint8(offs + 4),
-  textureV: fontsDv.getUint8(offs + 5),
-  width: fontsDv.getUint8(offs + 6),
-  height: fontsDv.getUint8(offs + 7),
-};
+  const glyphs: DPFontGlyph[] = [];
 
-      glyphs.push(glyph);
-maxGlyphHeight = Math.max(maxGlyphHeight, glyph.height + Math.max(0, glyph.offsetY));
-    }
+  for (let i = 0; i < DP_FONT_GLYPH_COUNT; i++) {
+    const offs = fontBase + DP_FONT_GLYPHS_OFFS + (i * 8);
 
-    const spaceGlyph = glyphs[0x20];
-    const spaceAdvance =
-      spaceGlyph.kerning !== 0
-        ? spaceGlyph.kerning
-        : Math.max(4, spaceGlyph.width !== 0 ? spaceGlyph.width : Math.floor(maxGlyphHeight / 3));
-
-    return {
-      name,
-      textureIds,
-      glyphs,
-      lineHeight: Math.max(1, maxGlyphHeight),
-      spaceAdvance,
+    const glyph: DPFontGlyph = {
+      textureIndex: fontsDv.getUint8(offs + 0),
+      kerning: fontsDv.getUint8(offs + 1),
+      offsetX: fontsDv.getInt8(offs + 2),
+      offsetY: fontsDv.getInt8(offs + 3),
+      textureU: fontsDv.getUint8(offs + 4),
+      textureV: fontsDv.getUint8(offs + 5),
+      width: fontsDv.getUint8(offs + 6),
+      height: fontsDv.getUint8(offs + 7),
     };
+
+    glyphs.push(glyph);
   }
 
-  private tryGetDecodedTextureRGBA(texId: number): { width: number; height: number; pixels: Uint8ClampedArray } | null {
-    const fetcherAny = this.subtitleFontFetcher as any;
-    const dpDecoded: Map<number, { width: number; height: number; pixels: Uint8Array }> | undefined = fetcherAny?.dpDecoded;
-    const hit = dpDecoded?.get(texId);
-    if (!hit)
-      return null;
+  return {
+    name,
+    x,
+    y,
+    charWidth,
+    charHeight,
+    textureIds,
+    glyphs,
+    lineHeight: y,
+    spaceAdvance: charWidth,
+  };
+}
 
-    return {
-      width: hit.width,
-      height: hit.height,
-      pixels: new Uint8ClampedArray(hit.pixels),
-    };
-  }
+private getGlyphForCharCode(charCode: number): DPFontGlyph | null {
+  if (this.subtitleFont === null)
+    return null;
 
-  private async waitForDecodedTextureRGBA(
-    texId: number,
-    alwaysUseTex1: boolean,
-    timeoutMs: number = 4000,
-  ): Promise<{ width: number; height: number; pixels: Uint8ClampedArray } | null> {
-    if (this.subtitleFontFetcher === null)
-      return null;
+  if (charCode <= 0x20 || charCode >= 0x100)
+    return null;
 
-    void this.subtitleFontFetcher.getTexture(this.materialFactory.cache, texId, alwaysUseTex1);
+  const glyphIndex = charCode - 0x20;
+  const glyph = this.subtitleFont.glyphs[glyphIndex];
 
-    const startTime = performance.now();
+  if (glyph === undefined || glyph.textureIndex === 0xFF)
+    return null;
 
-    for (;;) {
-      const hit = this.tryGetDecodedTextureRGBA(texId);
-      if (hit !== null)
-        return hit;
-
-      if ((performance.now() - startTime) >= timeoutMs)
-        return null;
-
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 16));
-      void this.subtitleFontFetcher.getTexture(this.materialFactory.cache, texId, alwaysUseTex1);
-    }
-  }
+  return glyph;
+}
 
 private async loadSubtitleFont(): Promise<void> {
   try {
     const fontsBin = await this.dataFetcher.fetchData(`${this.gameInfo.pathBase}/FONTS.bin`);
-    this.subtitleFont = this.parseDinoSubtitleFont(fontsBin.createDataView());
+    const parsedFont = this.parseDinoSubtitleFont(fontsBin.createDataView());
 
-    console.warn(
-      'DinoSubtitleFont1 textureIds',
-      this.subtitleFont?.textureIds.filter((id) => id >= 0).slice(0, 16),
+    console.log(
+      'DinoSubtitleFont1 parsed',
+      parsedFont.name,
+      'textureIds',
+      parsedFont.textureIds.filter((id) => id >= 0).slice(0, 32),
     );
 
     this.subtitleFontFetcher = await SFATextureFetcher.create(this.gameInfo, this.dataFetcher, false);
     this.subtitleAtlasCanvases.clear();
 
-    for (const texId of this.subtitleFont.textureIds) {
-      if (texId < 0)
+    const neededTextureIds = new Set<number>();
+
+    // Load every page used by the subtitle font.
+    for (const texId of parsedFont.textureIds) {
+      if (texId >= 0)
+        neededTextureIds.add(texId);
+    }
+
+    console.log('DinoSubtitleFont1 needed TEX pages', [...neededTextureIds]);
+
+    for (const texId of neededTextureIds) {
+      const canvas = await waitForDPFontTextureCanvas(
+        this.subtitleFontFetcher,
+        this.materialFactory.cache,
+        texId,
+        4000,
+      );
+
+      if (canvas === null) {
+        console.warn('DinoSubtitleFont1 missing TEX page', texId);
         continue;
-
-      const decoded = await this.waitForDecodedTextureRGBA(texId, false, 4000);
-      if (decoded === null)
-        continue;
-
-      const canvas = document.createElement('canvas');
-      canvas.width = decoded.width;
-      canvas.height = decoded.height;
-
-      const ctx = canvas.getContext('2d');
-      if (ctx === null)
-        continue;
-
-      const imageData = ctx.createImageData(decoded.width, decoded.height);
-      imageData.data.set(decoded.pixels);
-      ctx.putImageData(imageData, 0, 0);
+      }
 
       this.subtitleAtlasCanvases.set(texId, canvas);
     }
 
+    this.subtitleFont = {
+      ...parsedFont,
+      atlasCanvases: this.subtitleAtlasCanvases,
+    };
+
     console.log(
-      'DinoSubtitleFont1',
-      this.subtitleFont?.name,
+      'DinoSubtitleFont1 ready',
+      this.subtitleFont.name,
       'atlasCount',
       this.subtitleAtlasCanvases.size,
     );
@@ -683,15 +708,19 @@ private async loadSubtitleFont(): Promise<void> {
   }
 }
 
-  private getGlyphAdvance(glyph: DPFontGlyph): number {
-    if (glyph.kerning !== 0)
-      return glyph.kerning;
+private getGlyphAdvance(glyph: DPFontGlyph): number {
+  const font = this.subtitleFont;
+  if (font === null)
+    return 8;
 
-    if (glyph.width !== 0)
-      return glyph.width;
+  if (font.x !== 0)
+    return font.x;
 
-    return this.subtitleFont !== null ? this.subtitleFont.spaceAdvance : 8;
-  }
+  if (glyph.kerning !== 0)
+    return glyph.kerning;
+
+  return font.charWidth;
+}
 
   private getButtonAdvance(token: string): number {
     const label = token.startsWith('[') && token.endsWith(']') ? token.slice(1, -1) : token;
@@ -704,6 +733,157 @@ private async loadSubtitleFont(): Promise<void> {
 
     return 42;
   }
+
+private getLineItemAdvance(item: CanvasLineItem): number {
+  return item.advance;
+}
+
+private measureLineItems(items: CanvasLineItem[]): number {
+  let width = 0;
+  for (const item of items)
+    width += this.getLineItemAdvance(item);
+  return width;
+}
+
+private buildCanvasLineItems(paragraph: ParsedParagraph, font: DPSubtitleFont, scale: number): CanvasLineItem[] {
+  const items: CanvasLineItem[] = [];
+
+  for (const run of paragraph.runs) {
+    if (run.isIcon) {
+      items.push({
+        kind: 'icon',
+        token: run.text,
+        color: run.color,
+        advance: this.getButtonAdvance(run.text),
+      });
+      continue;
+    }
+
+    for (let i = 0; i < run.text.length; i++) {
+      const ch = run.text.charAt(i);
+
+      if (ch === '\n') {
+        items.push({
+          kind: 'icon',
+          token: '\n',
+          color: run.color,
+          advance: -1,
+        });
+        continue;
+      }
+
+      if (ch === '\r')
+        continue;
+
+      if (ch === '\t') {
+        items.push({
+          kind: 'space',
+          advance: font.charHeight * scale,
+        });
+        continue;
+      }
+
+      if (ch === ' ') {
+        items.push({
+          kind: 'space',
+          advance: font.charWidth * scale,
+        });
+        continue;
+      }
+
+      const charCode = run.text.charCodeAt(i) & 0xFF;
+      const glyph = this.getGlyphForCharCode(charCode);
+
+      if (glyph === null) {
+        items.push({
+          kind: 'space',
+          advance: font.charWidth * scale,
+        });
+        continue;
+      }
+
+      const texId = font.textureIds[glyph.textureIndex] ?? -1;
+      if (texId < 0 || glyph.width === 0 || glyph.height === 0) {
+        items.push({
+          kind: 'space',
+          advance: font.charWidth * scale,
+        });
+        continue;
+      }
+
+      items.push({
+        kind: 'glyph',
+        glyph,
+        texId,
+        color: run.color,
+        advance: this.getGlyphAdvance(glyph) * scale,
+      });
+    }
+  }
+
+  return items;
+}
+
+private wrapCanvasLineItems(items: CanvasLineItem[], maxWidth: number): CanvasLineItem[][] {
+  const lines: CanvasLineItem[][] = [];
+  let line: CanvasLineItem[] = [];
+  let lineWidth = 0;
+
+  let word: CanvasLineItem[] = [];
+  let wordWidth = 0;
+
+  const flushWord = (): void => {
+    if (word.length === 0)
+      return;
+    if (line.length > 0 && lineWidth + wordWidth >= maxWidth) {
+      lines.push(line);
+      line = [];
+      lineWidth = 0;
+    }
+
+    line.push(...word);
+    lineWidth += wordWidth;
+
+    word = [];
+    wordWidth = 0;
+  };
+
+  const pushLine = (): void => {
+    flushWord();
+    lines.push(line);
+    line = [];
+    lineWidth = 0;
+  };
+
+  for (const item of items) {
+    if (item.kind === 'icon' && item.token === '\n' && item.advance === -1) {
+      pushLine();
+      continue;
+    }
+
+    if (item.kind === 'space') {
+      flushWord();
+
+      // The game suppresses the wrapping-space advance right after a wrap.
+      if (line.length > 0) {
+        line.push(item);
+        lineWidth += item.advance;
+      }
+
+      continue;
+    }
+
+    word.push(item);
+    wordWidth += item.advance;
+  }
+
+  flushWord();
+
+  if (line.length > 0 || lines.length === 0)
+    lines.push(line);
+
+  return lines;
+}
 
   private fillRoundRect(
     ctx: CanvasRenderingContext2D,
@@ -758,48 +938,103 @@ private async loadSubtitleFont(): Promise<void> {
     ctx.restore();
   }
 
-  private drawTintedGlyph(
-    texId: number,
-    glyph: DPFontGlyph,
-    color: string,
-    dx: number,
-    dy: number,
-    scale: number,
-    alpha: number,
-  ): void {
-    if (this.overlayCtx === null || this.glyphScratchCanvas === null || this.glyphScratchCtx === null)
-      return;
+private parseRGBAColor(color: string): { r: number; g: number; b: number; a: number } {
+  const m = color.match(/rgba?\s*\(\s*([0-9.]+)\s*,\s*([0-9.]+)\s*,\s*([0-9.]+)(?:\s*,\s*([0-9.]+))?\s*\)/);
 
-    const atlas = this.subtitleAtlasCanvases.get(texId);
-    if (atlas === undefined)
-      return;
-
-    const sw = glyph.width;
-    const sh = glyph.height;
-    if (sw <= 0 || sh <= 0)
-      return;
-
-    this.glyphScratchCanvas.width = sw;
-    this.glyphScratchCanvas.height = sh;
-
-    const sctx = this.glyphScratchCtx;
-    sctx.clearRect(0, 0, sw, sh);
-    sctx.globalCompositeOperation = 'source-over';
-    sctx.drawImage(atlas, glyph.textureU, glyph.textureV, sw, sh, 0, 0, sw, sh);
-    sctx.globalCompositeOperation = 'source-in';
-    sctx.fillStyle = color;
-    sctx.fillRect(0, 0, sw, sh);
-    sctx.globalCompositeOperation = 'source-over';
-
-    this.overlayCtx.save();
-    this.overlayCtx.globalAlpha = alpha;
-    this.overlayCtx.drawImage(
-      this.glyphScratchCanvas,
-      0, 0, sw, sh,
-      dx, dy, sw * scale, sh * scale,
-    );
-    this.overlayCtx.restore();
+  if (m === null) {
+    return { r: 255, g: 255, b: 255, a: 1 };
   }
+
+  return {
+    r: Math.max(0, Math.min(255, Number(m[1]))),
+    g: Math.max(0, Math.min(255, Number(m[2]))),
+    b: Math.max(0, Math.min(255, Number(m[3]))),
+    a: m[4] !== undefined ? Math.max(0, Math.min(1, Number(m[4]))) : 1,
+  };
+}
+
+private drawTintedGlyph(
+  texId: number,
+  glyph: DPFontGlyph,
+  color: string,
+  dx: number,
+  dy: number,
+  scale: number,
+  alpha: number,
+): void {
+  if (this.overlayCtx === null || this.glyphScratchCanvas === null || this.glyphScratchCtx === null)
+    return;
+
+  const atlas = this.subtitleAtlasCanvases.get(texId);
+  if (atlas === undefined)
+    return;
+
+  const sw = glyph.width;
+  const sh = glyph.height;
+  if (sw <= 0 || sh <= 0)
+    return;
+
+  const scratch = this.glyphScratchCanvas;
+  const sctx = this.glyphScratchCtx;
+
+  scratch.width = sw;
+  scratch.height = sh;
+
+  sctx.clearRect(0, 0, sw, sh);
+  sctx.globalCompositeOperation = 'source-over';
+  sctx.drawImage(
+    atlas,
+    glyph.textureU,
+    glyph.textureV,
+    sw,
+    sh,
+    0,
+    0,
+    sw,
+    sh,
+  );
+
+  const env = this.parseRGBAColor(color);
+  const envA = env.a;
+
+  const imageData = sctx.getImageData(0, 0, sw, sh);
+  const data = imageData.data;
+
+  for (let p = 0; p < data.length; p += 4) {
+    const texR = data[p + 0];
+    const texG = data[p + 1];
+    const texB = data[p + 2];
+    const texA = data[p + 3];
+
+    if (texA === 0)
+      continue;
+
+    data[p + 0] = Math.round(texR + ((env.r - texR) * envA));
+    data[p + 1] = Math.round(texG + ((env.g - texG) * envA));
+    data[p + 2] = Math.round(texB + ((env.b - texB) * envA));
+    data[p + 3] = texA;
+  }
+
+  sctx.putImageData(imageData, 0, 0);
+
+  this.overlayCtx.save();
+  this.overlayCtx.globalAlpha = alpha;
+  this.overlayCtx.imageSmoothingEnabled = false;
+
+  this.overlayCtx.drawImage(
+    scratch,
+    0,
+    0,
+    sw,
+    sh,
+    dx,
+    dy,
+    sw * scale,
+    sh * scale,
+  );
+
+  this.overlayCtx.restore();
+}
 
   private getCurrentOverlayAlpha(): number {
     if (this.paragraphDurationMs <= 0)
@@ -812,51 +1047,256 @@ private async loadSubtitleFont(): Promise<void> {
     return Math.max(0, this.paragraphTimeLeftMs / fadeWindowMs);
   }
 
-  private ensureOverlay(): void {
-    if (this.overlayRoot !== null)
-      return;
 
-    this.overlayRoot = document.createElement('div');
-    this.overlayRoot.style.position = 'fixed';
-    this.overlayRoot.style.left = '50%';
-    this.overlayRoot.style.bottom = '28px';
-    this.overlayRoot.style.transform = 'translateX(-50%)';
-    this.overlayRoot.style.width = '72vw';
-    this.overlayRoot.style.maxWidth = '1100px';
-    this.overlayRoot.style.pointerEvents = 'none';
-    this.overlayRoot.style.zIndex = '100000';
-    this.overlayRoot.style.display = 'none';
 
-    this.overlayCanvas = document.createElement('canvas');
-    this.overlayCanvas.width = 1100;
-    this.overlayCanvas.height = 240;
-    this.overlayCanvas.style.display = 'block';
-    this.overlayCanvas.style.width = '100%';
-    this.overlayCanvas.style.height = '240px';
 
-    this.overlayCtx = this.overlayCanvas.getContext('2d');
-    if (this.overlayCtx !== null)
-      this.overlayCtx.imageSmoothingEnabled = false;
 
-    this.glyphScratchCanvas = document.createElement('canvas');
-    this.glyphScratchCanvas.width = 64;
-    this.glyphScratchCanvas.height = 64;
-    this.glyphScratchCtx = this.glyphScratchCanvas.getContext('2d');
 
-    this.overlayRoot.appendChild(this.overlayCanvas);
-    document.body.appendChild(this.overlayRoot);
+private ensureOverlay(): void {
+  if (this.overlayRoot !== null)
+    return;
+
+  this.overlayRoot = document.createElement('div');
+  this.overlayRoot.id = DP_GAMETEXT_OVERLAY_ID;
+  this.overlayRoot.style.position = 'fixed';
+  this.overlayRoot.style.left = '50%';
+  this.overlayRoot.style.bottom = '18px';
+  this.overlayRoot.style.transform = 'translateX(-50%)';
+  this.overlayRoot.style.width = '72vw';
+  this.overlayRoot.style.maxWidth = '1100px';
+  this.overlayRoot.style.pointerEvents = 'none';
+  this.overlayRoot.style.zIndex = '10';
+  this.overlayRoot.style.display = 'none';
+
+  this.overlayCanvas = document.createElement('canvas');
+  this.overlayCanvas.width = 1100;
+  this.overlayCanvas.height = 240;
+  this.overlayCanvas.style.display = 'block';
+  this.overlayCanvas.style.width = '100%';
+  this.overlayCanvas.style.height = '240px';
+
+  this.overlayCtx = this.overlayCanvas.getContext('2d');
+  if (this.overlayCtx !== null)
+    this.overlayCtx.imageSmoothingEnabled = false;
+
+  this.glyphScratchCanvas = document.createElement('canvas');
+  this.glyphScratchCanvas.width = 64;
+  this.glyphScratchCanvas.height = 64;
+  this.glyphScratchCtx = this.glyphScratchCanvas.getContext('2d');
+
+  this.overlayRoot.appendChild(this.overlayCanvas);
+  document.body.appendChild(this.overlayRoot);
+}
+
+private ensureFloatingPanel(): void {
+  if (this.floatingPanelRoot !== null)
+    return;
+
+  const root = document.createElement('div');
+  this.floatingPanelRoot = root;
+root.id = DP_GAMETEXT_FLOATING_PANEL_ID;
+root.style.position = 'fixed';
+root.style.top = '72px';
+root.style.right = '10px';
+root.style.width = '280px';
+root.style.zIndex = '11';
+root.style.pointerEvents = 'auto';
+root.style.padding = '8px';
+root.style.borderRadius = '10px';
+root.style.background = 'rgba(0, 0, 0, 0.72)';
+root.style.border = '1px solid rgba(255, 255, 255, 0.18)';
+root.style.color = 'white';
+root.style.font = '12px sans-serif';
+root.style.boxShadow = '0 8px 24px rgba(0, 0, 0, 0.45)';
+
+  const title = document.createElement('div');
+  title.textContent = 'DP GameText';
+  title.style.fontWeight = 'bold';
+  title.style.marginBottom = '6px';
+  root.appendChild(title);
+
+  const languageRow = document.createElement('div');
+  languageRow.style.display = 'flex';
+languageRow.style.gap = '4px';
+languageRow.style.marginBottom = '5px';
+
+  const languageSelect = document.createElement('select');
+  languageSelect.style.flex = '1';
+
+  for (let i = 0; i < LANGUAGE_NAMES.length; i++) {
+    const option = document.createElement('option');
+    option.value = `${i}`;
+    option.textContent = LANGUAGE_NAMES[i];
+    languageSelect.appendChild(option);
   }
 
-  private destroyOverlay(): void {
-    if (this.overlayRoot !== null && this.overlayRoot.parentElement !== null)
-      this.overlayRoot.parentElement.removeChild(this.overlayRoot);
+  languageSelect.value = `${this.languageId}`;
+  languageSelect.onchange = async () => {
+    await this.loadLanguage(Number(languageSelect.value));
+  };
 
-    this.overlayRoot = null;
-    this.overlayCanvas = null;
-    this.overlayCtx = null;
-    this.glyphScratchCanvas = null;
-    this.glyphScratchCtx = null;
+  languageRow.appendChild(languageSelect);
+  root.appendChild(languageRow);
+
+  const searchInput = document.createElement('input');
+  this.floatingSearchInput = searchInput;
+  searchInput.placeholder = 'Search text or entry id';
+  searchInput.style.width = '100%';
+  searchInput.style.boxSizing = 'border-box';
+  searchInput.style.marginBottom = '5px';
+  searchInput.oninput = () => {
+    this.searchText = searchInput.value;
+    this.rebuildVisibleEntries();
+  };
+  root.appendChild(searchInput);
+
+  const navRow = document.createElement('div');
+  navRow.style.display = 'flex';
+navRow.style.gap = '4px';
+navRow.style.marginBottom = '5px';
+
+  const prevButton = document.createElement('button');
+  prevButton.textContent = 'Prev';
+  prevButton.onclick = () => this.selectVisibleIndex(this.currentVisibleIndex - 1);
+  navRow.appendChild(prevButton);
+
+  const nextButton = document.createElement('button');
+  nextButton.textContent = 'Next';
+  nextButton.onclick = () => this.selectVisibleIndex(this.currentVisibleIndex + 1);
+  navRow.appendChild(nextButton);
+
+  const entryInput = document.createElement('input');
+  this.floatingEntryIdInput = entryInput;
+  entryInput.type = 'number';
+  entryInput.min = '0';
+  entryInput.style.width = '64px';
+  navRow.appendChild(entryInput);
+
+  const goButton = document.createElement('button');
+  goButton.textContent = 'Go';
+  goButton.onclick = () => {
+    const id = Number(entryInput.value);
+    if (!Number.isNaN(id))
+      this.selectEntryById(id);
+  };
+  navRow.appendChild(goButton);
+
+  root.appendChild(navRow);
+
+  const playbackRow = document.createElement('div');
+  playbackRow.style.display = 'flex';
+playbackRow.style.gap = '4px';
+  playbackRow.style.alignItems = 'center';
+  playbackRow.style.marginBottom = '5px';
+
+  const playPauseButton = document.createElement('button');
+  this.floatingPlayPauseButton = playPauseButton;
+  playPauseButton.textContent = 'Pause';
+  playPauseButton.onclick = () => {
+    this.isPlaying = !this.isPlaying;
+    playPauseButton.textContent = this.isPlaying ? 'Pause' : 'Play';
+    this.updateOverlay();
+  };
+  playbackRow.appendChild(playPauseButton);
+
+  const restartButton = document.createElement('button');
+  restartButton.textContent = 'Restart';
+  restartButton.onclick = () => {
+    this.resetPlayback();
+    this.syncUI();
+  };
+  playbackRow.appendChild(restartButton);
+
+  const loopLabel = document.createElement('label');
+  loopLabel.style.display = 'inline-flex';
+  loopLabel.style.alignItems = 'center';
+  loopLabel.style.gap = '4px';
+
+  const loopCheckbox = document.createElement('input');
+  this.floatingLoopCheckbox = loopCheckbox;
+  loopCheckbox.type = 'checkbox';
+  loopCheckbox.checked = this.loopPlayback;
+  loopCheckbox.onchange = () => {
+    this.loopPlayback = loopCheckbox.checked;
+  };
+
+  loopLabel.appendChild(loopCheckbox);
+  loopLabel.appendChild(document.createTextNode('Loop'));
+  playbackRow.appendChild(loopLabel);
+
+  root.appendChild(playbackRow);
+
+  const speedRow = document.createElement('div');
+  speedRow.style.display = 'flex';
+  speedRow.style.gap = '4px';
+
+  speedRow.style.alignItems = 'center';
+  speedRow.style.marginBottom = '5px';
+
+  const speedLabel = document.createElement('span');
+  speedLabel.textContent = 'Speed:';
+  speedRow.appendChild(speedLabel);
+
+  const speedSelect = document.createElement('select');
+  this.floatingSpeedSelect = speedSelect;
+
+const speedOptions: Array<[string, number]> = [
+  ['Fast', 1.0],
+  ['Medium', 1.6],
+  ['Slow', 2.0],
+  ['Normal / Game-like', 2.3],
+];
+
+  for (const [label, value] of speedOptions) {
+    const option = document.createElement('option');
+    option.value = `${value}`;
+    option.textContent = label;
+    speedSelect.appendChild(option);
   }
+
+  speedSelect.value = `${this.subtitleDurationScale}`;
+  speedSelect.onchange = () => {
+    this.subtitleDurationScale = Number(speedSelect.value);
+    this.startCurrentParagraph(true);
+    this.updateOverlay();
+  };
+
+  speedRow.appendChild(speedSelect);
+  root.appendChild(speedRow);
+
+  const resultLabel = document.createElement('div');
+  this.floatingResultsLabel = resultLabel;
+  resultLabel.style.color = '#ddd';
+  resultLabel.style.fontSize = '11px';
+  resultLabel.style.whiteSpace = 'normal';
+  root.appendChild(resultLabel);
+
+document.body.appendChild(root);
+this.syncUI();
+}
+
+
+private destroyOverlay(): void {
+  this.overlayRoot?.remove();
+  this.floatingPanelRoot?.remove();
+
+  document.getElementById(DP_GAMETEXT_OVERLAY_ID)?.remove();
+  document.getElementById(DP_GAMETEXT_FLOATING_PANEL_ID)?.remove();
+
+  this.overlayRoot = null;
+  this.overlayCanvas = null;
+  this.overlayCtx = null;
+  this.glyphScratchCanvas = null;
+  this.glyphScratchCtx = null;
+
+  this.floatingPanelRoot = null;
+  this.floatingEntryIdInput = null;
+  this.floatingSearchInput = null;
+  this.floatingResultsLabel = null;
+  this.floatingPlayPauseButton = null;
+  this.floatingLoopCheckbox = null;
+  this.floatingSpeedSelect = null;
+}
 
   private hideOverlay(): void {
     if (this.overlayRoot !== null)
@@ -960,66 +1400,23 @@ if (this.subtitleFont === null || this.subtitleAtlasCanvases.size === 0) {
     const font = this.subtitleFont;
     const scale = this.subtitleScale;
 
-    const lines: CanvasLineItem[][] = [[]];
-    let currentLine = lines[0];
+    const boxPadX = 36;
+    const boxPadY = 20;
 
-    for (const run of paragraph.runs) {
-      if (run.isIcon) {
-        currentLine.push({
-          kind: 'icon',
-          token: run.text,
-          color: run.color,
-          advance: this.getButtonAdvance(run.text),
-        });
-        continue;
-      }
 
-      for (let i = 0; i < run.text.length; i++) {
-        const ch = run.text.charAt(i);
+    const maxTextWidth = Math.min(
+  this.subtitleMaxTextWidth,
+  canvas.width - 96 - (boxPadX * 2),
+);
 
-        if (ch === '\n') {
-          currentLine = [];
-          lines.push(currentLine);
-          continue;
-        }
+    const flatItems = this.buildCanvasLineItems(paragraph, font, scale);
+    const lines = this.wrapCanvasLineItems(flatItems, maxTextWidth);
 
-        if (ch === ' ') {
-          currentLine.push({
-            kind: 'space',
-            advance: font.spaceAdvance * scale,
-          });
-          continue;
-        }
-
-        const charCode = run.text.charCodeAt(i) & 0xFF;
-        const glyph = font.glyphs[charCode];
-        const texId = font.textureIds[glyph.textureIndex] ?? -1;
-
-        if (glyph.width === 0 || glyph.height === 0 || texId < 0) {
-          currentLine.push({
-            kind: 'space',
-            advance: font.spaceAdvance * scale,
-          });
-          continue;
-        }
-
-        currentLine.push({
-          kind: 'glyph',
-          glyph,
-          texId,
-          color: run.color,
-          advance: this.getGlyphAdvance(glyph) * scale,
-        });
-      }
-    }
-
-    const lineWidths = lines.map((line) => line.reduce((sum, item) => sum + item.advance, 0));
+    const lineWidths = lines.map((line) => this.measureLineItems(line));
     const maxLineWidth = Math.max(1, ...lineWidths);
-    const lineHeight = Math.ceil((font.lineHeight * scale) + 8);
+    const lineHeight = Math.ceil(font.y * scale);
     const blockHeight = lines.length * lineHeight;
 
-    const boxPadX = 28;
-    const boxPadY = 18;
     const boxWidth = Math.min(canvas.width - 32, maxLineWidth + (boxPadX * 2));
     const boxHeight = blockHeight + (boxPadY * 2);
     const boxX = paragraph.align === 'center' ? Math.floor((canvas.width - boxWidth) / 2) : 20;
@@ -1051,8 +1448,10 @@ if (this.subtitleFont === null || this.subtitleAtlasCanvases.size === 0) {
         }
 
         if (item.kind === 'icon') {
-          this.drawButtonToken(ctx, item.token, x, y, lineHeight, alpha);
-          x += item.advance;
+          if (item.token !== '\n')
+            this.drawButtonToken(ctx, item.token, x, y, lineHeight, alpha);
+
+          x += Math.max(0, item.advance);
           continue;
         }
 
@@ -1092,7 +1491,7 @@ if (this.subtitleFont === null || this.subtitleAtlasCanvases.size === 0) {
       this.overlayRoot.style.transform = 'translate(-50%, -50%)';
     } else {
       this.overlayRoot.style.top = 'auto';
-      this.overlayRoot.style.bottom = '28px';
+      this.overlayRoot.style.bottom = '18px';
       this.overlayRoot.style.transform = 'translateX(-50%)';
     }
 
@@ -1120,6 +1519,31 @@ if (this.subtitleFont === null || this.subtitleAtlasCanvases.size === 0) {
           `${current.commands.some((c) => c > 0) ? 'timed subtitle' : 'static text'}`;
       }
     }
+
+if (this.floatingEntryIdInput !== null && current !== null)
+  this.floatingEntryIdInput.value = `${current.id}`;
+
+if (this.floatingSearchInput !== null && this.floatingSearchInput.value !== this.searchText)
+  this.floatingSearchInput.value = this.searchText;
+
+if (this.floatingPlayPauseButton !== null)
+  this.floatingPlayPauseButton.textContent = this.isPlaying ? 'Pause' : 'Play';
+
+if (this.floatingLoopCheckbox !== null)
+  this.floatingLoopCheckbox.checked = this.loopPlayback;
+
+if (this.floatingSpeedSelect !== null)
+  this.floatingSpeedSelect.value = `${this.subtitleDurationScale}`;
+
+if (this.floatingResultsLabel !== null) {
+  if (current === null) {
+    this.floatingResultsLabel.textContent = `0 matches | ${LANGUAGE_NAMES[this.languageId]}`;
+  } else {
+    this.floatingResultsLabel.textContent =
+      `${this.currentVisibleIndex + 1} / ${this.visibleEntries.length} | ` +
+      `Entry ${current.id} | ${current.paragraphs.length} paragraph(s)`;
+  }
+}
 
     if (this.rawPre !== null) {
       if (current === null) {
@@ -1307,4 +1731,64 @@ export class DPGameTextSceneDesc implements Viewer.SceneDesc {
     await renderer.create(this.gameInfo, context.dataFetcher);
     return renderer;
   }
+}
+function getDPDecodedTexture(
+    textureFetcher: SFATextureFetcher,
+    texId: number,
+): { width: number; height: number; pixels: Uint8Array } | null {
+    const fetcherAny = textureFetcher as any;
+
+    const dpDecoded:
+        | Map<number, { width: number; height: number; pixels: Uint8Array }>
+        | undefined = fetcherAny.dpDecoded;
+
+    const hit = dpDecoded?.get(texId);
+    if (hit === undefined)
+        return null;
+
+    return hit;
+}
+
+function decodedTextureToCanvas(decoded: { width: number; height: number; pixels: Uint8Array }): HTMLCanvasElement {
+    const canvas = document.createElement('canvas');
+    canvas.width = decoded.width;
+    canvas.height = decoded.height;
+
+    const ctx = canvas.getContext('2d');
+    if (ctx === null)
+        throw new Error('Could not create DP subtitle font texture canvas context');
+
+    const imageData = ctx.createImageData(decoded.width, decoded.height);
+    imageData.data.set(new Uint8ClampedArray(decoded.pixels));
+    ctx.putImageData(imageData, 0, 0);
+
+    return canvas;
+}
+
+async function waitForDPFontTextureCanvas(
+    textureFetcher: SFATextureFetcher,
+    materialCache: any,
+    texId: number,
+    timeoutMs: number = 4000,
+): Promise<HTMLCanvasElement | null> {
+    const fetcherAny = textureFetcher as any;
+
+    if (typeof fetcherAny.getDPTex0BinTextureArray === 'function')
+        void fetcherAny.getDPTex0BinTextureArray(materialCache, texId);
+
+    const startTime = performance.now();
+
+    for (;;) {
+        const decoded = getDPDecodedTexture(textureFetcher, texId);
+        if (decoded !== null)
+            return decodedTextureToCanvas(decoded);
+
+        if (typeof fetcherAny.getDPTex0BinTextureArray === 'function')
+            void fetcherAny.getDPTex0BinTextureArray(materialCache, texId);
+
+        if ((performance.now() - startTime) >= timeoutMs)
+            return null;
+
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 16));
+    }
 }

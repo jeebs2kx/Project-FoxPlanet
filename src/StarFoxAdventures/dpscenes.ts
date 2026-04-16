@@ -19,7 +19,16 @@ function makeLazyDPMapSceneDesc(mapId: number, id: string, name: string, gameInf
         createScene: async (device: any, context: any) => {
             const m = await import('./maps.js');
             const real = new m.DPMapSceneDesc(mapId, id, name, gameInfo);
-            return real.createScene(device, context);
+            const scene = await real.createScene(device, context);
+            const levelName = await import('./dp_levelname_overlay.js');
+            void levelName.showDPLevelNameForScene(
+                mapId,
+                gameInfo,
+                context.dataFetcher,
+                (scene as any).materialFactory?.cache,
+            );
+
+            return scene;
         },
     };
 }
@@ -223,14 +232,12 @@ makeLazyManualGridSceneDesc('dp_yeti_mt_multi', 'Yeti Mountain', DP_GAME_INFO), 
 
 'Documentation Tools',
 makeLazyDPBlockGallerySceneDesc('dp_block_gallery', 'DP: Block Gallery', DP_GAME_INFO),
+makeLazyDPGameTextSceneDesc('dp_gametext', 'DP: Full GameText/Subtitles', DP_GAME_INFO),
 makeLazyDPTriggerBrowserSceneDesc('dp_trigger_browser', 'DP: Trigger Browser', DP_GAME_INFO),
 makeLazyDPWarpSetupBrowserSceneDesc('dp_warp_setup_browser', 'DP: Warp + Setup Browser', DP_GAME_INFO),
 makeLazyDPGlobalWorldExplorerSceneDesc('dp_global_world_explorer', 'DP: Global World Explorer', DP_GAME_INFO),
 //'Cutscenes & Sequences',    // NOT FINISHED
   // makeLazyDPSequenceSceneDesc(65, 'dp_seq_0', 'DP Sequence: 0 (Test/Intro)', DP_GAME_INFO),
-
-//'Text', //NOT FINISHED
-//makeLazyDPGameTextSceneDesc('dp_gametext', 'DP: GameText Browser', DP_GAME_INFO),
 
 ];
 
