@@ -30,7 +30,7 @@ export interface Shader {
     attrFlags: number;
 forceOpaqueNoAlphaTest?: boolean;
     hasHemisphericProbe: boolean;
-
+dpMapBlockMaterialFix?: boolean;
     hasReflectiveProbe: boolean;
     reflectiveProbeMaskTexId: number | null;
     reflectiveProbeIdx: number;
@@ -292,6 +292,35 @@ export abstract class StandardMaterial extends MaterialBase {
         this.enableReflectiveProbe = this.shader.hasReflectiveProbe;
 
         this.rebuildSpecialized();
+
+if (this.shader.dpMapBlockMaterialFix) {
+    const isAlphaCompare = !!(this.shader.flags & ShaderFlags.AlphaCompare);
+    const isTransparent =
+        !!(this.shader.flags & 0x40000000) ||
+        !!(this.shader.flags & 0x20000000);
+
+    if (isTransparent) {
+        this.mb.setCullMode(GX.CullMode.NONE);
+        this.mb.setBlendMode(GX.BlendMode.BLEND, GX.BlendFactor.SRCALPHA, GX.BlendFactor.INVSRCALPHA, GX.LogicOp.NOOP);
+        this.mb.setZMode(true, GX.CompareType.LEQUAL, false);
+        this.mb.setAlphaCompare(GX.CompareType.ALWAYS, 0, GX.AlphaOp.AND, GX.CompareType.ALWAYS, 0);
+        return;
+    }
+
+    if (isAlphaCompare) {
+        this.mb.setCullMode(GX.CullMode.NONE);
+        this.mb.setBlendMode(GX.BlendMode.NONE, GX.BlendFactor.ONE, GX.BlendFactor.ZERO, GX.LogicOp.NOOP);
+        this.mb.setZMode(true, GX.CompareType.LEQUAL, true);
+        this.mb.setAlphaCompare(GX.CompareType.GREATER, 0x08, GX.AlphaOp.AND, GX.CompareType.ALWAYS, 0);
+        return;
+    }
+
+    this.mb.setCullMode((this.shader.flags & ShaderFlags.CullBackface) ? GX.CullMode.BACK : GX.CullMode.NONE);
+    this.mb.setBlendMode(GX.BlendMode.NONE, GX.BlendFactor.ONE, GX.BlendFactor.ZERO, GX.LogicOp.NOOP);
+    this.mb.setZMode(true, GX.CompareType.LEQUAL, true);
+    this.mb.setAlphaCompare(GX.CompareType.ALWAYS, 0, GX.AlphaOp.AND, GX.CompareType.ALWAYS, 0);
+    return;
+}
 
 const isTrueTrans = !!(this.shader.flags & 0x40000000) || !!(this.shader.flags & 0x20000000); // beams/glass/effects
 const isCutout    = !!(this.shader.flags & ShaderFlags.AlphaCompare) || this.shader.flags === 0; // foliage/cards often have flags==0
@@ -1902,6 +1931,20 @@ export class FaultyTVMaterial extends MaterialBase {
 }
 
 export class MaterialFactory {
+private dpMapBlockBuildDepth = 0;
+
+public beginDPMapBlockBuild(): void {
+    this.dpMapBlockBuildDepth++;
+}
+
+public endDPMapBlockBuild(): void {
+    this.dpMapBlockBuildDepth = Math.max(0, this.dpMapBlockBuildDepth - 1);
+}
+
+private isBuildingDPMapBlock(): boolean {
+    return this.dpMapBlockBuildDepth > 0;
+}
+
   public texturesEnabled = true;
     public initialize() {
         this.rampTexture = this.getRampTexture();
@@ -1950,13 +1993,19 @@ export class MaterialFactory {
         return this.scrollSlots.length - 1;
     }
 
-    public buildObjectMaterial(shader: Shader, texFetcher: TextureFetcher, hasSkeleton: boolean): SFAMaterial {
-        return new StandardObjectMaterial(this.cache, this, shader, texFetcher, hasSkeleton);
-    }
+public buildObjectMaterial(shader: Shader, texFetcher: TextureFetcher, hasSkeleton: boolean): SFAMaterial {
+    if (this.isBuildingDPMapBlock())
+        shader = { ...shader, dpMapBlockMaterialFix: true };
 
-    public buildMapMaterial(shader: Shader, texFetcher: TextureFetcher): SFAMaterial {
-        return new StandardMapMaterial(this.cache, this, shader, texFetcher);
-    }
+    return new StandardObjectMaterial(this.cache, this, shader, texFetcher, hasSkeleton);
+}
+
+public buildMapMaterial(shader: Shader, texFetcher: TextureFetcher): SFAMaterial {
+    if (this.isBuildingDPMapBlock())
+        shader = { ...shader, dpMapBlockMaterialFix: true };
+
+    return new StandardMapMaterial(this.cache, this, shader, texFetcher);
+}
     
     public buildWaterMaterial(shader: Shader): SFAMaterial {
         return new WaterMaterial(this);

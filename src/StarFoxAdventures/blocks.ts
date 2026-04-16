@@ -737,7 +737,12 @@ export class DPBlockFetcher implements BlockFetcher {
         
         try {
             const buffer = await dataFetcher.fetchData(url);
-            return loadModel(buffer.createDataView(), this.texFetcher, this.materialFactory, ModelVersion.DinosaurPlanet);
+this.materialFactory.beginDPMapBlockBuild();
+try {
+    return loadModel(buffer.createDataView(), this.texFetcher, this.materialFactory, ModelVersion.DinosaurPlanet);
+} finally {
+    this.materialFactory.endDPMapBlockBuild();
+}
         } catch (e) {
             return null;
         }

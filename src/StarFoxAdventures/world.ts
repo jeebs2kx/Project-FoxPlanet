@@ -317,9 +317,17 @@ public static async create(
         const posInMap = vec3.clone(pos);
         vec3.add(posInMap, posInMap, mapObjectOrigin);
 
-        const obj = this.objectMan.createObjectInstance(typeNum, objParams, posInMap);
-        obj.setParent(parent);
-        this.objectInstances.push(obj);
+const obj = this.objectMan.createObjectInstance(typeNum, objParams, posInMap);
+
+if (this.gameInfo.pathBase === 'StarFoxAdventuresDemo') {
+    const name = obj.getName().toLowerCase();
+    if (name.includes('curve')) {
+        obj.getType().isDevObject = true;
+    }
+}
+
+obj.setParent(parent);
+this.objectInstances.push(obj);
 
         try {
             obj.mount();
@@ -517,7 +525,7 @@ const showObjectLabels = new UI.Checkbox('Show object labels', this.showObjectLa
 showObjectLabels.onchanged = () => {
   this.showObjectLabels = showObjectLabels.checked;
 };
-objectPanel.contents.appendChild(showObjectLabels.elem);
+layerPanel.contents.appendChild(showObjectLabels.elem);
 
 const objectSelectLabel = document.createElement('div');
 objectSelectLabel.textContent = 'Loaded objects';

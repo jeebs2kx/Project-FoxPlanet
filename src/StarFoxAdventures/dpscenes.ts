@@ -24,6 +24,18 @@ function makeLazyDPMapSceneDesc(mapId: number, id: string, name: string, gameInf
     };
 }
 
+function makeLazyDPBlockGallerySceneDesc(id: string, name: string, gameInfo: GameInfo): Viewer.SceneDesc {
+    return {
+        id,
+        name,
+        createScene: async (device: any, context: any) => {
+            const m = await import('./maps.js');
+            const real = new m.DPBlockGallerySceneDesc(id, name, gameInfo);
+            return real.createScene(device, context);
+        },
+    };
+}
+
 function makeLazyDPFullWorldSceneDesc(id: string, name: string, gameInfo: GameInfo): Viewer.SceneDesc {
     return {
         id,
@@ -210,7 +222,7 @@ makeLazyManualGridSceneDesc('dp_yeti_mt_multi', 'Yeti Mountain', DP_GAME_INFO), 
     makeLazyDPMapSceneDesc(54, 'dp36_magic_cave_small',  'DP: Magic Cave - Small', DP_GAME_INFO),
 
 'Documentation Tools',
-
+makeLazyDPBlockGallerySceneDesc('dp_block_gallery', 'DP: Block Gallery', DP_GAME_INFO),
 makeLazyDPTriggerBrowserSceneDesc('dp_trigger_browser', 'DP: Trigger Browser', DP_GAME_INFO),
 makeLazyDPWarpSetupBrowserSceneDesc('dp_warp_setup_browser', 'DP: Warp + Setup Browser', DP_GAME_INFO),
 makeLazyDPGlobalWorldExplorerSceneDesc('dp_global_world_explorer', 'DP: Global World Explorer', DP_GAME_INFO),
