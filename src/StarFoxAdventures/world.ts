@@ -1,6 +1,6 @@
 import { mat4, vec3 } from 'gl-matrix';
 import * as UI from '../ui.js';
-
+import { exportPlacedModelInstancesToGLB } from './gltf_export.js';
 import { DataFetcher } from '../DataFetcher.js';
 import * as Viewer from '../viewer.js';
 import { SFABlockFetcher, BlockFetcher, SwapcircleBlockFetcher, AncientBlockFetcher, EARLY1BLOCKFETCHER, EARLY2BLOCKFETCHER, EARLY3BLOCKFETCHER, EARLY4BLOCKFETCHER  } from './blocks.js';
@@ -592,7 +592,77 @@ this.objectInspectorPre = objectInfoPre;
 
 this.refreshObjectInspectorList(false);
 
-return [timePanel, layerPanel, objectPanel];
+const exportPanel = new UI.Panel();
+exportPanel.setTitle(UI.LAYER_ICON, 'Export');
+
+const layerModeLabel = document.createElement('div');
+layerModeLabel.textContent = 'Texture Layer Source';
+layerModeLabel.style.fontSize = '12px';
+layerModeLabel.style.marginBottom = '4px';
+
+const layerModeSelect = document.createElement('select');
+layerModeSelect.style.display = 'block';
+layerModeSelect.style.marginBottom = '8px';
+
+for (const [value, label] of [
+    ['auto', 'Auto'],
+    ['tex0', 'Prefer TEX0'],
+    ['tex1', 'Prefer TEX1'],
+    ['last', 'Prefer Last Layer'],
+] as const) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    layerModeSelect.appendChild(option);
+}
+layerModeSelect.value = 'auto';
+
+const exportFastButton = document.createElement('button');
+exportFastButton.textContent = 'Export Current World Map as GLB (Fast)';
+exportFastButton.style.display = 'block';
+exportFastButton.style.marginBottom = '6px';
+
+const exportTexturedButton = document.createElement('button');
+exportTexturedButton.textContent = 'Export Current World Map as GLB (With Textures)';
+exportTexturedButton.style.display = 'block';
+exportTexturedButton.style.marginBottom = '6px';
+
+const exportNote = document.createElement('div');
+exportNote.textContent = 'Textured export may take a couple of minutes. Auto usually prefers TEX1/UV1 when present.';
+exportNote.style.fontSize = '12px';
+exportNote.style.opacity = '0.8';
+
+const setExportButtonsDisabled = (disabled: boolean) => {
+    exportFastButton.disabled = disabled;
+    exportTexturedButton.disabled = disabled;
+    layerModeSelect.disabled = disabled;
+};
+
+exportFastButton.onclick = async () => {
+    setExportButtonsDisabled(true);
+    try {
+        await this.exportCurrentWorldMapGLB(false, layerModeSelect.value as 'auto' | 'tex0' | 'tex1' | 'last');
+    } finally {
+        setExportButtonsDisabled(false);
+    }
+};
+
+exportTexturedButton.onclick = async () => {
+    setExportButtonsDisabled(true);
+    try {
+        await this.exportCurrentWorldMapGLB(true, layerModeSelect.value as 'auto' | 'tex0' | 'tex1' | 'last');
+    } finally {
+        setExportButtonsDisabled(false);
+    }
+};
+
+exportPanel.contents.append(layerModeLabel);
+exportPanel.contents.append(layerModeSelect);
+exportPanel.contents.append(exportFastButton);
+exportPanel.contents.append(exportTexturedButton);
+exportPanel.contents.append(exportNote);
+
+return [timePanel, layerPanel, objectPanel, exportPanel];
     }
 
 private getInspectableObjects(): Array<{ worldIndex: number; obj: ObjectInstance }> {
@@ -852,6 +922,45 @@ private focusCameraOnInspectableObject(obj: ObjectInstance): void {
     public setEnvfx(envfxactNum: number) {
         this.world.envfxMan.loadEnvfx(envfxactNum);
     }
+
+public async exportCurrentWorldMapGLB(
+    includeTextures: boolean = true,
+    textureLayerMode: 'auto' | 'tex0' | 'tex1' | 'last' = 'auto',
+): Promise<void> {
+    const map = this.world.mapInstance;
+    if (!map)
+        return;
+
+    const entries: Array<{ name: string; modelInst: any; placementMatrix: mat4 }> = [];
+    const mapMatrix = map.getMapMatrix();
+
+    for (const b of map.iterateBlocks()) {
+        const placement = mat4.create();
+        mat4.fromTranslation(placement, [640 * b.x, 0, 640 * b.z]);
+        mat4.mul(placement, mapMatrix, placement);
+
+        entries.push({
+            name: `block_${b.z}_${b.x}`,
+            modelInst: b.block,
+            placementMatrix: placement,
+        });
+    }
+
+    if (entries.length === 0)
+        return;
+
+    const safeWorldName = (this.world.subdirs.join('_') || 'world').replace(/[^A-Za-z0-9._-]+/g, '_');
+    const suffix = includeTextures ? `_textured_${textureLayerMode}` : '_fast';
+
+    await exportPlacedModelInstancesToGLB(
+        `world_${safeWorldName}${suffix}.glb`,
+        entries,
+        this.materialFactory,
+        this.world.resColl.texFetcher,
+        { includeTextures, textureLayerMode },
+    );
+}
+
 private drawHitOverlay(viewerInput: Viewer.ViewerRenderInput): void {
     const ctx = getDebugOverlayCanvas2D() as CanvasRenderingContext2D | null;
     if (!ctx)

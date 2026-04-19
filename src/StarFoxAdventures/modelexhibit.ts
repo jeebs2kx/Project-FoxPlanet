@@ -4,6 +4,7 @@ import * as Viewer from "../viewer.js";
 import { GfxDevice } from '../gfx/platform/GfxPlatform.js';
 import { GfxRenderInstManager } from "../gfx/render/GfxRenderInstManager.js";
 import { SceneContext } from '../SceneBase.js';
+//import { exportModelInstanceToGLB } from './gltf_export.js';
 import { White, colorNewCopy } from '../Color.js';
 import { getDebugOverlayCanvas2D, drawWorldSpaceLine, drawWorldSpacePoint } from '../DebugJunk.js';
 import { fillSceneParamsDataOnTemplate } from "../gx/gx_render.js";
@@ -318,6 +319,17 @@ private dpAnimsEnabled = false;
         modelButtonContainer.appendChild(prevModelButton);
         modelButtonContainer.appendChild(nextModelButton);
         panel.contents.append(modelButtonContainer);
+  //      const exportModelButton = document.createElement('button');
+//exportModelButton.textContent = 'Export Current Model as GLB';
+//exportModelButton.onclick = async () => {
+ //   exportModelButton.disabled = true;
+ //   try {
+  //      await this.exportCurrentModelGLB();
+  //  } finally {
+    //    exportModelButton.disabled = false;
+   // }
+//};
+//panel.contents.append(exportModelButton);
         
 if (this.modelVersion === ModelVersion.DinosaurPlanet) {
    // const dpAnimToggle = new UI.Checkbox("Enable DP Animations", this.dpAnimsEnabled);
@@ -440,6 +452,20 @@ private isBetaDevCube(inst: any): boolean {
             );
         }
     }
+
+//public async exportCurrentModelGLB(): Promise<void> {
+   // if (this.modelInst === null || this.modelInst === undefined)
+    //    return;
+
+   //const safeModelNum = String(this.modelNum).replace(/[^A-Za-z0-9._-]+/g, '_');
+   // await exportModelInstanceToGLB(
+   //     `model_${safeModelNum}.glb`,
+   //     this.modelInst,
+   //     this.materialFactory,
+  //      this.texFetcher,
+   // );
+//}
+
 
     private getGlobalAnimNum(modelAnimNum: number): number | undefined {
         if (!this.modanim) return undefined;

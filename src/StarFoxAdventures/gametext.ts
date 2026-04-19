@@ -88,7 +88,7 @@ type CanvasLineItem =
   | { kind: 'space'; advance: number; }
   | { kind: 'icon'; token: string; color: string; advance: number; };
 
-class DPGameTextRenderer extends SFARenderer {
+export class DPGameTextRenderer extends SFARenderer {
   private gameInfo!: GameInfo;
   private dataFetcher!: DataFetcher;
 
@@ -128,6 +128,7 @@ private floatingSpeedSelect: HTMLSelectElement | null = null;
   private readonly subtitleScale = 3.0;
 private subtitleDurationScale = 2.3;
 private readonly subtitleMaxTextWidth = 634;
+private uiVisible = true;
 public async create(gameInfo: GameInfo, dataFetcher: DataFetcher): Promise<Viewer.SceneGfx> {
   this.gameInfo = gameInfo;
   this.dataFetcher = dataFetcher;
@@ -145,6 +146,24 @@ public async create(gameInfo: GameInfo, dataFetcher: DataFetcher): Promise<Viewe
   });
 
   return this;
+}
+
+public setUIVisible(visible: boolean): void {
+  this.uiVisible = visible;
+
+  if (this.floatingPanelRoot !== null)
+    this.floatingPanelRoot.style.display = visible ? 'block' : 'none';
+
+  if (!visible) {
+    this.hideOverlay();
+    return;
+  }
+
+  this.updateOverlay();
+}
+
+public tick(viewerInput: Viewer.ViewerRenderInput): void {
+  this.update(viewerInput);
 }
 
 
@@ -650,12 +669,12 @@ private async loadSubtitleFont(): Promise<void> {
     const fontsBin = await this.dataFetcher.fetchData(`${this.gameInfo.pathBase}/FONTS.bin`);
     const parsedFont = this.parseDinoSubtitleFont(fontsBin.createDataView());
 
-    console.log(
-      'DinoSubtitleFont1 parsed',
-      parsedFont.name,
-      'textureIds',
-      parsedFont.textureIds.filter((id) => id >= 0).slice(0, 32),
-    );
+    //console.log(
+    //  'DinoSubtitleFont1 parsed',
+    //  parsedFont.name,
+   //   'textureIds',
+   //   parsedFont.textureIds.filter((id) => id >= 0).slice(0, 32),
+  //  );
 
     this.subtitleFontFetcher = await SFATextureFetcher.create(this.gameInfo, this.dataFetcher, false);
     this.subtitleAtlasCanvases.clear();
@@ -668,7 +687,7 @@ private async loadSubtitleFont(): Promise<void> {
         neededTextureIds.add(texId);
     }
 
-    console.log('DinoSubtitleFont1 needed TEX pages', [...neededTextureIds]);
+  //  console.log('DinoSubtitleFont1 needed TEX pages', [...neededTextureIds]);
 
     for (const texId of neededTextureIds) {
       const canvas = await waitForDPFontTextureCanvas(
@@ -679,7 +698,7 @@ private async loadSubtitleFont(): Promise<void> {
       );
 
       if (canvas === null) {
-        console.warn('DinoSubtitleFont1 missing TEX page', texId);
+      //  console.warn('DinoSubtitleFont1 missing TEX page', texId);
         continue;
       }
 
@@ -691,16 +710,16 @@ private async loadSubtitleFont(): Promise<void> {
       atlasCanvases: this.subtitleAtlasCanvases,
     };
 
-    console.log(
-      'DinoSubtitleFont1 ready',
-      this.subtitleFont.name,
-      'atlasCount',
-      this.subtitleAtlasCanvases.size,
-    );
+   // console.log(
+    //  'DinoSubtitleFont1 ready',
+    //  this.subtitleFont.name,
+    //  'atlasCount',
+   //   this.subtitleAtlasCanvases.size,
+   // );
 
     this.updateOverlay();
   } catch (e) {
-    console.warn('Failed to load DinoSubtitleFont1', e);
+   // console.warn('Failed to load DinoSubtitleFont1', e);
     this.subtitleFont = null;
     this.subtitleFontFetcher?.destroy(this.materialFactory.device);
     this.subtitleFontFetcher = null;
@@ -1473,6 +1492,11 @@ if (this.subtitleFont === null || this.subtitleAtlasCanvases.size === 0) {
   }
 
   private updateOverlay(): void {
+    if (!this.uiVisible) {
+      this.hideOverlay();
+      return;
+    }
+
     if (this.overlayRoot === null || this.overlayCanvas === null || this.overlayCtx === null)
       return;
 

@@ -355,6 +355,14 @@ export class ModelInstance {
         this.modelShapes = model.createInstanceShapes();
     }
 
+public getModelShapes(): ModelShapes {
+    return this.modelShapes;
+}
+
+public prepareForExport(): void {
+    this.updateSkinning();
+}
+
 public getAmap(modelAnimNum: number): DataView {
         const a = Math.max(0, this.model.joints.length - 1);
         const stride = (a & ~0x7) + 0x8;

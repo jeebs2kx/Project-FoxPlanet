@@ -121,6 +121,10 @@ export class ShapeGeometry {
         this.verticesDirty = true;
     }
 
+public getLoadedVertexLayout() {
+    return this.vtxLoader.loadedVertexLayout;
+}
+
     public setBoundingBox(aabb: AABB) {
         this.aabb = aabb.clone();
     }
@@ -275,6 +279,10 @@ export class ShapeMaterial {
 
         this.material.setOnMaterialParams(params, this.matCtx);
     }
+
+public getExportMaterial(): SFAMaterial {
+    return this.material;
+}
 
     public getGXMaterialHelper() {
         return this.material.getGXMaterialHelper();

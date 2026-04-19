@@ -1,12 +1,14 @@
 import * as Viewer from '../viewer.js';
 import * as UI from '../ui.js';
 import { Sky } from './Sky.js';
+import { DPGameTextRenderer } from './gametext.js';
 import { ObjectManager, ObjectInstance } from './objects.js';import { GfxrGraphBuilder, GfxrRenderTargetID, GfxrRenderTargetDescription } from '../gfx/render/GfxRenderGraph.js';
 import { getSubdir } from './resource.js';
 import { DataFetcher } from '../DataFetcher.js';
+import { exportPlacedModelInstancesToGLB } from './gltf_export.js';
 import { GfxRenderInstManager } from "../gfx/render/GfxRenderInstManager.js";
 import { fillSceneParamsDataOnTemplate } from '../gx/gx_render.js';
-import { GfxDevice } from '../gfx/platform/GfxPlatform.js';
+import { GfxDevice, GfxWrapMode, GfxTexFilterMode, GfxMipFilterMode } from '../gfx/platform/GfxPlatform.js';
 import { SceneContext } from '../SceneBase.js';
 import { mat4, vec3 } from 'gl-matrix';
 import { nArray } from '../util.js';
@@ -2374,6 +2376,8 @@ private readonly onDPOverlayHideHotkey = (ev: KeyboardEvent) => {
 
         if (this.dpOverlayUIHidden)
             this.clearSelectedDebugObject();
+
+        this.dpGameTextRenderer?.setUIVisible(this.showGameText && !this.dpOverlayUIHidden);
     }
 };
 private pendingSkyRebuild = false;
@@ -2404,7 +2408,9 @@ public showObjectLabels = false;
 public showHits = false;
 public showHitVolumes = false;
 public showMapWireframe = false;
+public showGameText = false;
 public showObjectDiff = false;
+private dpGameTextRenderer: DPGameTextRenderer | null = null;
 private dpObjectDiff: DPObjectDiff | null = null;
 private dpCurrentObjects: ObjectInstance[] | null = null;
 private dpVanillaObjectMap: MapInstance | null = null;
@@ -3495,7 +3501,6 @@ const boxY = canvas.height - boxH - 8;
     constructor(public context: SceneContext, animController: SFAAnimationController, materialFactory: MaterialFactory) {
         super(context, animController, materialFactory);
     }
-
     public async reloadForTextureToggle(): Promise<void> {
         if (!this.dataFetcher) return;
         if (this.blockFetcherFactory) {
@@ -3503,6 +3508,26 @@ const boxY = canvas.height - boxH - 8;
             this.map.setBlockFetcher(fresh);
         }
         await this.map.reloadBlocks(this.dataFetcher);
+    }
+
+    public async initDPGameText(gameInfo: GameInfo, dataFetcher: DataFetcher): Promise<void> {
+        if (this.dpGameTextRenderer !== null)
+            return;
+
+        const renderer = new DPGameTextRenderer(
+            this.context,
+            new SFAAnimationController(),
+            new MaterialFactory(this.context.device),
+        );
+
+        await renderer.create(gameInfo, dataFetcher);
+        renderer.setUIVisible(this.showGameText && !this.dpOverlayUIHidden);
+        this.dpGameTextRenderer = renderer;
+    }
+
+    public setDPGameTextVisible(enabled: boolean): void {
+        this.showGameText = enabled;
+        this.dpGameTextRenderer?.setUIVisible(enabled && !this.dpOverlayUIHidden);
     }
 
 public async create(info: MapSceneInfo, gameInfo: GameInfo, dataFetcher: DataFetcher, blockFetcher: BlockFetcher, mapOpts?: MapInstanceOptions): Promise<Viewer.SceneGfx> {
@@ -3588,12 +3613,147 @@ envPanel.contents.append(this.envSelect.elem);
         panels.push(envPanel);
     }
 
+if (!this.isDPMapScene) {
+    const exportPanel = new UI.Panel();
+    exportPanel.setTitle(UI.LAYER_ICON, 'Export');
+
+    const layerModeLabel = document.createElement('div');
+    layerModeLabel.textContent = 'Texture Layer Source';
+    layerModeLabel.style.fontSize = '12px';
+    layerModeLabel.style.marginBottom = '4px';
+
+    const layerModeSelect = document.createElement('select');
+    layerModeSelect.style.display = 'block';
+    layerModeSelect.style.marginBottom = '8px';
+
+    for (const [value, label] of [
+        ['auto', 'Auto'],
+        ['tex0', 'Prefer TEX0'],
+        ['tex1', 'Prefer TEX1'],
+        ['last', 'Prefer Last Layer'],
+    ] as const) {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = label;
+        layerModeSelect.appendChild(option);
+    }
+    layerModeSelect.value = 'auto';
+
+    const exportFastButton = document.createElement('button');
+    exportFastButton.textContent = 'Export Current Map as GLB';
+    exportFastButton.style.display = 'block';
+    exportFastButton.style.marginBottom = '6px';
+
+    const exportTexturedButton = document.createElement('button');
+    exportTexturedButton.textContent = 'Export Current Map as GLB (With Textures)';
+    exportTexturedButton.style.display = 'block';
+    exportTexturedButton.style.marginBottom = '6px';
+
+    const exportNote = document.createElement('div');
+    exportNote.textContent = 'Auto usually prefers TEX1/UV1 when present.';
+    exportNote.style.fontSize = '12px';
+    exportNote.style.opacity = '0.8';
+
+    const setExportButtonsDisabled = (disabled: boolean) => {
+        exportFastButton.disabled = disabled;
+        exportTexturedButton.disabled = disabled;
+        layerModeSelect.disabled = disabled;
+    };
+
+    exportFastButton.onclick = async () => {
+        setExportButtonsDisabled(true);
+        try {
+            await this.exportCurrentMapGLB(false, layerModeSelect.value as 'auto' | 'tex0' | 'tex1' | 'last');
+        } finally {
+            setExportButtonsDisabled(false);
+        }
+    };
+
+    exportTexturedButton.onclick = async () => {
+        setExportButtonsDisabled(true);
+        try {
+            await this.exportCurrentMapGLB(true, layerModeSelect.value as 'auto' | 'tex0' | 'tex1' | 'last');
+        } finally {
+            setExportButtonsDisabled(false);
+        }
+    };
+
+    exportPanel.contents.append(layerModeLabel);
+    exportPanel.contents.append(layerModeSelect);
+    exportPanel.contents.append(exportFastButton);
+    exportPanel.contents.append(exportTexturedButton);
+    exportPanel.contents.append(exportNote);
+    panels.push(exportPanel);
+}
     return panels;
 }
 
     public setMatrix(matrix: mat4) {
         this.map.setMatrix(matrix);
     }
+
+public async exportCurrentMapGLB(
+    includeTextures: boolean = true,
+    textureLayerMode: 'auto' | 'tex0' | 'tex1' | 'last' = 'auto',
+): Promise<void> {
+    if (!this.currentTexFetcher)
+        return;
+
+    const entries: Array<{ name: string; modelInst: ModelInstance; placementMatrix: mat4 }> = [];
+    const mapMatrix = this.map.getMapMatrix();
+
+    for (const b of this.map.iterateBlocks()) {
+        const placement = mat4.create();
+
+        if (this.map.mapOpts?.galleryCenterBlock) {
+            const bounds = dpGetBlockLocalXYZBounds(b.block);
+
+            if (bounds) {
+                const cx = (bounds.minX + bounds.maxX) * 0.5;
+                const cy = (bounds.minY + bounds.maxY) * 0.5;
+                const cz = (bounds.minZ + bounds.maxZ) * 0.5;
+
+                const sx = Math.max(1, bounds.maxX - bounds.minX);
+                const sy = Math.max(1, bounds.maxY - bounds.minY);
+                const sz = Math.max(1, bounds.maxZ - bounds.minZ);
+                const longest = Math.max(sx, sy, sz);
+
+                const scale = Math.min(2.5, Math.max(0.15, 720 / longest));
+
+                mat4.fromScaling(placement, [scale, scale, scale]);
+                placement[12] = (-cx * scale) + 900;
+                placement[13] = (-cy * scale) - 100;
+                placement[14] = (-cz * scale) + 1200;
+            } else {
+                mat4.fromTranslation(placement, [-320, -120, -320]);
+            }
+        } else {
+            mat4.fromTranslation(placement, [640 * b.x, 0, 640 * b.z]);
+        }
+
+        mat4.mul(placement, mapMatrix, placement);
+
+        entries.push({
+            name: `block_${b.z}_${b.x}`,
+            modelInst: b.block,
+            placementMatrix: placement,
+        });
+    }
+
+    if (entries.length === 0)
+        return;
+
+    const safeMapName = String(this.mapNum ?? 'map').replace(/[^A-Za-z0-9._-]+/g, '_');
+    const suffix = includeTextures ? `_textured_${textureLayerMode}` : '_fast';
+
+    await exportPlacedModelInstancesToGLB(
+        `map_${safeMapName}${suffix}.glb`,
+        entries,
+        this.materialFactory,
+        this.currentTexFetcher,
+        { includeTextures, textureLayerMode },
+    );
+}
 
 protected override update(viewerInput: Viewer.ViewerRenderInput) {
     super.update(viewerInput);
@@ -3602,6 +3762,9 @@ protected override update(viewerInput: Viewer.ViewerRenderInput) {
     if (this.envfxMan) {
         this.envfxMan.update(this.context.device, { viewerInput });
     }
+
+    if (this.dpGameTextRenderer !== null)
+        this.dpGameTextRenderer.tick(viewerInput);
 
 this.drawObjectDebugOverlay(viewerInput);
 this.drawDPObjectDiffOverlay(viewerInput);
@@ -3662,10 +3825,14 @@ const modelCtx = {
     }
 
 public override destroy(device: GfxDevice) {
+    if (this.dpGameTextRenderer !== null) {
+        this.dpGameTextRenderer.destroy(device);
+        this.dpGameTextRenderer = null;
+    }
+
     if (this.isDPMapScene)
         cleanupDPUI();
     window.removeEventListener('keydown', this.onDPOverlayHideHotkey, true);
-
     if (this.debugOverlayCanvas) {
         window.removeEventListener('mousedown', this.onDebugOverlayMouseDown, true);
         window.removeEventListener('mouseup', this.onDebugOverlayMouseUp, true);
@@ -3695,7 +3862,9 @@ this.dpUsingVanillaObjects = false;
 }
 function cleanupDPUI(): void {
     stopDPMPEGVoicePreview();
-
+document.getElementById('dp-export-toggle')?.remove();
+document.getElementById('dp-export-ui')?.remove();
+(window as any).__dpExportUIState = undefined;
     document.getElementById('dp-mpeg-voice-ui')?.remove();
     document.getElementById('dp-mpeg-voice-toggle')?.remove();
 
@@ -3713,6 +3882,7 @@ cleanupDPBlockGalleryUI();
     (window as any).__dpHitsToggle = undefined;
     (window as any).__dpHitVolumesToggle = undefined;
     (window as any).__dpWireframeToggle = undefined;
+    (window as any).__dpGameTextToggle = undefined;
     (window as any).__dpFbfxToggle = undefined;
     (window as any).__dpFbfxUIState = undefined;
 }
@@ -4029,6 +4199,184 @@ function ensureDPFbfxUI(
   state.playBtn.addEventListener('click', state.handlerPlay);
 }
 
+function ensureDPExportUI(
+  onExport: (includeTextures: boolean, textureLayerMode: 'auto' | 'tex0' | 'tex1' | 'last') => void | Promise<void>,
+  initialOpen: boolean = false
+): void {
+  type ExportUIState = {
+    toggleWrap: HTMLDivElement;
+    panel: HTMLDivElement;
+    cb: HTMLInputElement;
+    layerModeSelect: HTMLSelectElement;
+    exportFastButton: HTMLButtonElement;
+    exportTexturedButton: HTMLButtonElement;
+    handlerToggle: ((e: Event) => void) | null;
+    handlerFast: ((e: Event) => void) | null;
+    handlerTextured: ((e: Event) => void) | null;
+    open: boolean;
+  };
+
+  let state = (window as any).__dpExportUIState as ExportUIState | undefined;
+
+  if (!state) {
+    const toggleWrap = document.createElement('div');
+    toggleWrap.id = 'dp-export-toggle';
+    toggleWrap.style.padding = '1px 3px';
+    toggleWrap.style.background = 'rgba(0,0,0,0.5)';
+    toggleWrap.style.color = '#fff';
+    toggleWrap.style.font = '11px sans-serif';
+    toggleWrap.style.borderRadius = '2px';
+    toggleWrap.style.display = 'flex';
+    toggleWrap.style.alignItems = 'center';
+    toggleWrap.style.height = '20px';
+    toggleWrap.style.boxSizing = 'border-box';
+    toggleWrap.style.order = '9';
+
+    const label = document.createElement('label');
+    label.style.cursor = 'pointer';
+    label.style.display = 'flex';
+    label.style.alignItems = 'center';
+    label.style.lineHeight = '1';
+
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.style.marginRight = '1px';
+
+    label.appendChild(cb);
+    label.appendChild(document.createTextNode('Export Map'));
+    toggleWrap.appendChild(label);
+    getDPTopToggleBar().appendChild(toggleWrap);
+
+    const panel = document.createElement('div');
+    panel.id = 'dp-export-ui';
+    panel.style.position = 'fixed';
+    panel.style.right = '8px';
+    panel.style.top = '28px';
+    panel.style.width = '280px';
+    panel.style.zIndex = '10000';
+    panel.style.background = 'rgba(0,0,0,0.88)';
+    panel.style.color = '#fff';
+    panel.style.font = '12px sans-serif';
+    panel.style.padding = '8px';
+    panel.style.border = '1px solid rgba(255,255,255,0.18)';
+    panel.style.borderRadius = '8px';
+    panel.style.display = 'none';
+
+    const title = document.createElement('div');
+    title.textContent = 'Export Map';
+    title.style.fontWeight = 'bold';
+    title.style.marginBottom = '6px';
+    panel.appendChild(title);
+
+    const layerModeLabel = document.createElement('div');
+    layerModeLabel.textContent = 'Texture Layer Source';
+    layerModeLabel.style.fontSize = '12px';
+    layerModeLabel.style.marginBottom = '4px';
+    panel.appendChild(layerModeLabel);
+
+    const layerModeSelect = document.createElement('select');
+    layerModeSelect.style.display = 'block';
+    layerModeSelect.style.width = '100%';
+    layerModeSelect.style.marginBottom = '8px';
+
+    for (const [value, text] of [
+      ['auto', 'Auto'],
+      ['tex0', 'Prefer TEX0'],
+      ['tex1', 'Prefer TEX1'],
+      ['last', 'Prefer Last Layer'],
+    ] as const) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = text;
+      layerModeSelect.appendChild(option);
+    }
+
+    layerModeSelect.value = 'auto';
+    panel.appendChild(layerModeSelect);
+
+    const exportFastButton = document.createElement('button');
+    exportFastButton.textContent = 'Export Current Map as GLB (Fast)';
+    exportFastButton.style.display = 'block';
+    exportFastButton.style.width = '100%';
+    exportFastButton.style.marginBottom = '6px';
+    panel.appendChild(exportFastButton);
+
+    const exportTexturedButton = document.createElement('button');
+    exportTexturedButton.textContent = 'Export Current Map as GLB (With Textures)';
+    exportTexturedButton.style.display = 'block';
+    exportTexturedButton.style.width = '100%';
+    exportTexturedButton.style.marginBottom = '6px';
+    panel.appendChild(exportTexturedButton);
+
+    const exportNote = document.createElement('div');
+    exportNote.textContent = 'Textured export may take a couple of minutes. Auto usually prefers TEX1/UV1 when present.';
+    exportNote.style.fontSize = '12px';
+    exportNote.style.opacity = '0.8';
+    panel.appendChild(exportNote);
+
+    document.body.appendChild(panel);
+
+    state = {
+      toggleWrap,
+      panel,
+      cb,
+      layerModeSelect,
+      exportFastButton,
+      exportTexturedButton,
+      handlerToggle: null,
+      handlerFast: null,
+      handlerTextured: null,
+      open: false,
+    };
+
+    (window as any).__dpExportUIState = state;
+  }
+
+  if (state.handlerToggle)
+    state.cb.removeEventListener('change', state.handlerToggle);
+  if (state.handlerFast)
+    state.exportFastButton.removeEventListener('click', state.handlerFast);
+  if (state.handlerTextured)
+    state.exportTexturedButton.removeEventListener('click', state.handlerTextured);
+
+  const setDisabled = (disabled: boolean) => {
+    state!.layerModeSelect.disabled = disabled;
+    state!.exportFastButton.disabled = disabled;
+    state!.exportTexturedButton.disabled = disabled;
+  };
+
+  state.open = initialOpen;
+  state.cb.checked = initialOpen;
+  state.panel.style.display = initialOpen ? 'block' : 'none';
+
+  state.handlerToggle = () => {
+    state!.open = state!.cb.checked;
+    state!.panel.style.display = state!.open ? 'block' : 'none';
+  };
+
+  state.handlerFast = async () => {
+    setDisabled(true);
+    try {
+      await onExport(false, state!.layerModeSelect.value as 'auto' | 'tex0' | 'tex1' | 'last');
+    } finally {
+      setDisabled(false);
+    }
+  };
+
+  state.handlerTextured = async () => {
+    setDisabled(true);
+    try {
+      await onExport(true, state!.layerModeSelect.value as 'auto' | 'tex0' | 'tex1' | 'last');
+    } finally {
+      setDisabled(false);
+    }
+  };
+
+  state.cb.addEventListener('change', state.handlerToggle);
+  state.exportFastButton.addEventListener('click', state.handlerFast);
+  state.exportTexturedButton.addEventListener('click', state.handlerTextured);
+}
+
 function ensureDPObjectsUI(
   onChange: (enabled: boolean) => void | Promise<void>,
   initial?: boolean
@@ -4239,6 +4587,65 @@ function ensureDPHitsUI(
 
     state = { wrap, cb, handler: null, last: false };
     (window as any).__dpHitsToggle = state;
+  }
+
+  if (state.handler)
+    state.cb.removeEventListener('change', state.handler);
+
+  const desired = (typeof initial === 'boolean') ? initial : (state.last ?? false);
+  state.cb.checked = desired;
+
+  state.handler = async () => {
+    state!.last = state!.cb.checked;
+    await onChange(state!.cb.checked);
+  };
+
+  state.cb.addEventListener('change', state.handler);
+}
+
+function ensureDPGameTextUI(
+  onChange: (enabled: boolean) => void | Promise<void>,
+  initial?: boolean
+): void {
+  type ToggleState = {
+    wrap: HTMLDivElement;
+    cb: HTMLInputElement;
+    handler: ((e: Event) => void) | null;
+    last?: boolean;
+  };
+
+  let state = (window as any).__dpGameTextToggle as ToggleState | undefined;
+
+  if (!state) {
+    const wrap = document.createElement('div');
+    wrap.style.padding = '1px 3px';
+    wrap.style.background = 'rgba(0,0,0,0.5)';
+    wrap.style.color = '#fff';
+    wrap.style.font = '11px sans-serif';
+    wrap.style.borderRadius = '2px';
+    wrap.style.display = 'flex';
+    wrap.style.alignItems = 'center';
+    wrap.style.height = '20px';
+    wrap.style.boxSizing = 'border-box';
+    wrap.style.order = '7';
+
+    const label = document.createElement('label');
+    label.style.cursor = 'pointer';
+    label.style.display = 'flex';
+    label.style.alignItems = 'center';
+    label.style.lineHeight = '1';
+
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.style.marginRight = '1px';
+
+    label.appendChild(cb);
+    label.appendChild(document.createTextNode('GameText/Subs'));
+    wrap.appendChild(label);
+    getDPTopToggleBar().appendChild(wrap);
+
+    state = { wrap, cb, handler: null, last: false };
+    (window as any).__dpGameTextToggle = state;
   }
 
   if (state.handler)
@@ -6219,15 +6626,29 @@ const dpLogMapId = `dp_${this.mapNum}`;
                 this.textureHolder.onnewtextures();
         }
 
-        const cutoutTextures = [0];
-        if (cutoutTextures.includes(id)) {
-            if (!pointSampler) {
-                pointSampler = cache.device.createSampler({
-                    wrapS: 1, wrapT: 1, minFilter: 0, magFilter: 0, mipFilter: 0, minLOD: 0, maxLOD: 100,
-                });
-            }
-            res.gfxSampler = pointSampler;
-        }
+const cutoutTextures = [0];
+if (cutoutTextures.includes(id)) {
+    if (!pointSampler) {
+        pointSampler = cache.device.createSampler({
+            wrapS: GfxWrapMode.Repeat,
+            wrapT: GfxWrapMode.Repeat,
+            minFilter: GfxTexFilterMode.Point,
+            magFilter: GfxTexFilterMode.Point,
+            mipFilter: GfxMipFilterMode.Nearest,
+            minLOD: 0,
+            maxLOD: 100,
+        });
+    }
+
+    res.gfxSampler = pointSampler;
+    (res as any).__exportSampler = {
+        wrapS: GfxWrapMode.Repeat,
+        wrapT: GfxWrapMode.Repeat,
+        minFilter: GfxTexFilterMode.Point,
+        magFilter: GfxTexFilterMode.Point,
+        mipFilter: GfxMipFilterMode.Nearest,
+    };
+}
     }
 
     return res;
@@ -6321,9 +6742,24 @@ ensureDPHitsUI(async (enabled: boolean) => {
     mapRenderer.showHits = enabled;
 }, false);
 
+await mapRenderer.initDPGameText(gInfo, context.dataFetcher);
+mapRenderer.showGameText = false;
+ensureDPGameTextUI(async (enabled: boolean) => {
+    mapRenderer.setDPGameTextVisible(enabled);
+}, false);
+
 mapRenderer.showMapWireframe = false;
 ensureDPWireframeUI(async (enabled: boolean) => {
     mapRenderer.showMapWireframe = enabled;
+}, false);
+
+mapRenderer.showMapWireframe = false;
+ensureDPWireframeUI(async (enabled: boolean) => {
+    mapRenderer.showMapWireframe = enabled;
+}, false);
+
+ensureDPExportUI(async (includeTextures, textureLayerMode) => {
+    await mapRenderer.exportCurrentMapGLB(includeTextures, textureLayerMode);
 }, false);
 
 ensureDPFbfxUI(async (effectId: number) => {

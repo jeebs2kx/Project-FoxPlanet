@@ -232,7 +232,6 @@ makeLazyManualGridSceneDesc('dp_yeti_mt_multi', 'Yeti Mountain', DP_GAME_INFO), 
 
 'Documentation Tools',
 makeLazyDPBlockGallerySceneDesc('dp_block_gallery', 'DP: Block Gallery', DP_GAME_INFO),
-makeLazyDPGameTextSceneDesc('dp_gametext', 'DP: Full GameText/Subtitles', DP_GAME_INFO),
 makeLazyDPTriggerBrowserSceneDesc('dp_trigger_browser', 'DP: Trigger Browser', DP_GAME_INFO),
 makeLazyDPWarpSetupBrowserSceneDesc('dp_warp_setup_browser', 'DP: Warp + Setup Browser', DP_GAME_INFO),
 makeLazyDPGlobalWorldExplorerSceneDesc('dp_global_world_explorer', 'DP: Global World Explorer', DP_GAME_INFO),

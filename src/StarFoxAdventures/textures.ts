@@ -306,13 +306,34 @@ type OverrideOpts = {
   mipFilter?: GfxMipFilterMode;
 };
 
+type ExportSamplerInfo = {
+    wrapS: GfxWrapMode;
+    wrapT: GfxWrapMode;
+    minFilter: GfxTexFilterMode;
+    magFilter: GfxTexFilterMode;
+    mipFilter: GfxMipFilterMode;
+};
+
+function applyExportSamplerInfo(tex: any, info: ExportSamplerInfo): void {
+    tex.__exportSampler = {
+        wrapS: info.wrapS,
+        wrapT: info.wrapT,
+        minFilter: info.minFilter,
+        magFilter: info.magFilter,
+        mipFilter: info.mipFilter,
+    };
+}
+
 export class SFATexture {
+
     public viewerTexture?: Viewer.Texture;
+    public exportTextureInput?: GX_Texture.TextureInputGX;
+
     public mappings: TextureMapping[] = [];
+
     public lodBias: number = 0.0;
 
     constructor(public gfxTexture: GfxTexture, public gfxSampler: GfxSampler, public width: number, public height: number) {}
-
     public static create(cache: GfxRenderCache, width: number, height: number) {
         const device = cache.device;
         const gfxTexture = device.createTexture(makeTextureDescriptor2D(GfxFormat.U8_RGBA_NORM, width, height, 1));
@@ -391,30 +412,40 @@ function loadTexture(cache: GfxRenderCache, texData: ArrayBufferSlice, isBeta: b
 
     const mipChain = GX_Texture.calcMipChain(textureInput, textureInput.mipCount);
     const loadedTexture = loadTextureFromMipChain(cache.device, mipChain);
-    const [minFilter, mipFilter] = translateTexFilterGfx(fields.minFilt);
+const [minFilter, mipFilter] = translateTexFilterGfx(fields.minFilt);
+const magFilter = translateTexFilterGfx(fields.magFilt)[0];
 
-    const gfxSampler = cache.createSampler({
-        wrapS: translateWrapModeGfx(fields.wrapS),
-        wrapT: translateWrapModeGfx(fields.wrapT),
-        minFilter: minFilter,
-        magFilter: translateTexFilterGfx(fields.magFilt)[0],
-        mipFilter: mipFilter,
-        minLOD: 0,
-        maxLOD: 100,
-    });
+const samplerInfo: ExportSamplerInfo = {
+    wrapS: translateWrapModeGfx(fields.wrapS),
+    wrapT: translateWrapModeGfx(fields.wrapT),
+    minFilter,
+    magFilter,
+    mipFilter,
+};
 
-    const texture = new SFATexture(
-        loadedTexture.gfxTexture,
-        gfxSampler,
-        textureInput.width,
-        textureInput.height,
-    );
+const gfxSampler = cache.createSampler({
+    wrapS: samplerInfo.wrapS,
+    wrapT: samplerInfo.wrapT,
+    minFilter: samplerInfo.minFilter,
+    magFilter: samplerInfo.magFilter,
+    mipFilter: samplerInfo.mipFilter,
+    minLOD: 0,
+    maxLOD: 100,
+});
 
-    texture.viewerTexture = loadedTexture.viewerTexture;
+const texture = new SFATexture(
+    loadedTexture.gfxTexture,
+    gfxSampler,
+    textureInput.width,
+    textureInput.height,
+);
 
-    texture.lodBias = -1.0;
+texture.viewerTexture = loadedTexture.viewerTexture;
+texture.exportTextureInput = textureInput;
+texture.lodBias = -1.0;
+applyExportSamplerInfo(texture, samplerInfo);
 
-    return texture;
+return texture;
 }
 
 function isValidTextureTabValue(tabValue: number) {
@@ -535,14 +566,58 @@ async function decodePNGToRGBA(input: Uint8Array | ArrayBufferLike): Promise<{ w
 
 async function createSFATextureFromPNG(cache: GfxRenderCache, pngBytes: Uint8Array | ArrayBufferLike, opts?: OverrideOpts): Promise<SFATexture> {
   const { width, height, pixels } = await decodePNGToRGBA(pngBytes);
+
+  const rgba = new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength);
   const gfxTexture = cache.device.createTexture(makeTextureDescriptor2D(GfxFormat.U8_RGBA_NORM, width, height, 1));
-  cache.device.uploadTextureData(gfxTexture, 0, [new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength)]);
-  const gfxSampler = cache.createSampler({
-    wrapS: opts?.wrap ?? GfxWrapMode.Repeat, wrapT: opts?.wrap ?? GfxWrapMode.Repeat,
-    minFilter: opts?.minFilter ?? GfxTexFilterMode.Bilinear, magFilter: opts?.magFilter ?? GfxTexFilterMode.Bilinear,
-    mipFilter: opts?.mipFilter ?? GfxMipFilterMode.Nearest, minLOD: 0, maxLOD: 100,
-  });
-  return new SFATexture(gfxTexture, gfxSampler, width, height);
+  cache.device.uploadTextureData(gfxTexture, 0, [rgba]);
+
+const samplerInfo: ExportSamplerInfo = {
+    wrapS: opts?.wrap ?? GfxWrapMode.Repeat,
+    wrapT: opts?.wrap ?? GfxWrapMode.Repeat,
+    minFilter: opts?.minFilter ?? GfxTexFilterMode.Bilinear,
+    magFilter: opts?.magFilter ?? GfxTexFilterMode.Bilinear,
+    mipFilter: opts?.mipFilter ?? GfxMipFilterMode.Nearest,
+};
+
+const gfxSampler = cache.createSampler({
+    wrapS: samplerInfo.wrapS,
+    wrapT: samplerInfo.wrapT,
+    minFilter: samplerInfo.minFilter,
+    magFilter: samplerInfo.magFilter,
+    mipFilter: samplerInfo.mipFilter,
+    minLOD: 0,
+    maxLOD: 100,
+});
+
+const tex = new SFATexture(gfxTexture, gfxSampler, width, height);
+applyExportSamplerInfo(tex, samplerInfo);
+
+  const surface: HTMLCanvasElement | OffscreenCanvas =
+    (typeof OffscreenCanvas !== 'undefined')
+      ? new OffscreenCanvas(width, height)
+      : (() => {
+          const c = document.createElement('canvas');
+          c.width = width;
+          c.height = height;
+          return c;
+        })();
+
+const ctx = surface.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
+if (!ctx)
+    throw new Error('Could not get 2D context for PNG override');
+
+const imgPixels = new Uint8ClampedArray(width * height * 4);
+imgPixels.set(pixels);
+
+const img = new ImageData(imgPixels, width, height);
+ctx.putImageData(img, 0, 0);
+
+  tex.viewerTexture = {
+    name: `PNG Override`,
+    surfaces: [surface],
+  } as any;
+
+  return tex;
 }
 
 const early1TextureIdMap: Record<number, number> = { 5: 5555, 24: 24, 57: 60, 58: 61, 146: 980, 154: 980, 157: 130, 162: 146, 177: 157, 176: 999, 268: 398, 427: 179, 428: 186, 457: 563, 310: 256, 311: 257, 312: 253, 313: 258, 332: 483, 349: 486, 358: 1014, 361: 491, 362: 491, 487: 483, 488: 486, 489: 485, 490: 486, 491: 487, 492: 487, 493: 490, 494: 491, 495: 492, 496: 492, 497: 5555, 499: 501, 500: 489, 502: 515, 503: 490, 504: 486, 505: 251, 515: 486, 547: 770, 634: 1984, 639: 488, 898: 977, 901: 993, 912: 1005, 417: 178, 425: 181, 530: 522, 532: 592, 533: 593, 534: 594, 536: 532, 541: 533, 542: 533, 546: 534, 549: 568, 553: 1006, 555: 412, 556: 532, 559: 532, 560: 535, 561: 559, 562: 1123, 563: 561, 564: 562, 565: 561, 566: 561, 567: 564, 568: 564, 569: 565, 570: 565, 571: 566, 572: 567, 573: 567, 574: 565, 576: 534, 638: 926, 640: 183, 654: 654, 657: 642, 674: 1012, 675: 666, 691: 549, 705: 674, 706: 565, 707: 559, 708: 674, 709: 565, 710: 654, 711: 674, 767: 766, 856: 943, 860: 948, 862: 949, 871: 786, 896: 980, 897: 991, 900: 975, 902: 1004, 903: 1005, 904: 1005, 905: 975, 906: 976, 907: 977, 908: 978, 909: 977, 910: 980, 913: 1007, 916: 1006, 917: 982, 918: 1009, 933: 951, 943: 951, 946: 1042, 947: 948, 948: 942, 949: 951, 951: 537, 952: 553, 954: 951, 974: 980, 975: 974, 977: 980, 978: 978, 980: 1083, 981: 1084, 982: 1086, 983: 1085, 984: 1086, 985: 1087, 986: 1087, 987: 1088, 989: 1090, 990: 1091, 991: 1092, 992: 1090, 993: 1090, 994: 1096, 995: 1097, 997: 1093, 1000: 1102, 1001: 1103, 1002: 1104, 1003: 1106, 1007: 1112, 1008: 1113, 1009: 1114, 1090: 979, 1100: 398, 2024: 2373, 2141: 187, 2206: 2205, 2435: 2001, 2635: 2222, 535: 897, 651: 897, 660: 898, 719: 880, 720: 881, 721: 879, 722: 879, 807: 899, 810: 908, 812: 900, 813: 910, 814: 909, 815: 910, 816: 530, 1812: 1761, 1814: 406, 1815: 879, 2094: 903, 155: 977, 605: 398, 606: 301, 607: 323, 608: 398, 609: 398, 611: 398, 610: 398, 612: 592, 613: 593, 614: 594, 615: 595, 616: 398, 617: 1101, 618: 398, 619: 398, 620: 1337, 621: 398, 622: 595, 623: 398, 624: 1337, 666: 1337, 668: 1294, 899: 2373, 976: 1346, 998: 1348, 1006: 1010, 1010: 1115, 1245: 1306, 1246: 1307, 1252: 1314, 1253: 1315, 1254: 1315, 1255: 1317, 1258: 1320, 1261: 1321, 1269: 1330, 1270: 1331, 1271: 1332, 1272: 1333, 1275: 1336, 1276: 1337, 1277: 1338, 1282: 1344, 1283: 1347, 1287: 1349, 1288: 1353, 1289: 1345, 1307: 1337, 1345: 1337, 21: 64, 27: 44, 30: 45, 31: 45, 32: 45, 33: 45, 34: 45, 36: 47, 37: 65, 45: 64, 46: 51, 49: 45, 59: 62, 61: 63, 62: 66, 67: 72, 68: 73, 69: 62, 70: 1472, 71: 74, 136: 61, 811: 71, 914: 65, 915: 67, 1294: 35, 1295: 35, 2056: 54, 2640: 54, 473: 957, 508: 722, 509: 723, 510: 724, 517: 725, 522: 724, 665: 726, 859: 726, 861: 726, 920: 726, 1101: 726, 1105: 5555, 1109: 1088, 1906: 726, 2139: 726, 73: 402, 80: 85, 82: 84, 83: 85, 84: 86, 85: 87, 86: 88, 87: 89, 88: 90, 89: 91, 90: 92, 91: 93, 92: 94, 93: 1038, 94: 97, 95: 98, 96: 99, 97: 100, 98: 1071, 99: 101, 100: 103, 101: 104, 103: 105, 414: 2761, 415: 396, 416: 396, 418: 397, 419: 109, 422: 2761, 424: 415, 911: 978, 1491: 400, 1492: 2761, 2018: 2761, 2020: 2761, 2595: 2761, 2761: 93, 1466: 1528, 1467: 1529, 1468: 1530, 1469: 1531, 1470: 1532, 1471: 1533, 1472: 1533, 1473: 1535, 1474: 1536, 1475: 1537, 1524: 177, 1922: 406, 9: 405, 147: 5555, 577: 571, 579: 1170, 580: 574, 581: 5555, 582: 589, 583: 590, 584: 1163, 585: 1163, 586: 577, 587: 578, 588: 590, 589: 582, 590: 584, 591: 585, 592: 586, 593: 591, 595: 576, 596: 589, 597: 590, 598: 993, 599: 588, 600: 580, 601: 579, 602: 575, 603: 5555, 988: 570, 999: 1100, 604: 571, 1035: 5555, 1036: 5555, 1051: 571, 1054: 503, 1057: 5555, 1058: 5555, 1061: 1163, 1062: 1163, 1063: 579, 1066: 1146, 1068: 572, 1073: 5555, 1074: 580, 1075: 5555, 1076: 5555, 1080: 5555, 1532: 5555, 523: 523, 524: 522, 525: 524, 526: 524, 527: 525, 528: 522, 529: 526, 531: 1649, 539: 952, 944: 543, 199: 15, 200: 19, 391: 8, 392: 9, 757: 12, 550: 10, 554: 13, 717: 17, 809: 14, 968: 6, 1018: 7, 1019: 20, 2163: 16, 1013: 1083, 1014: 1084, 1016: 1085, 1017: 1086, 1020: 1089, 1021: 1090, 1026: 1096, 1027: 1097, 1028: 1100, 1030: 1102, 1031: 1103, 1032: 1104, 1033: 1106, 1034: 1108, 1038: 1114, 1039: 1115, 384: 437, 385: 438, 386: 439, 545: 614, 551: 620, 552: 621, 557: 627, 558: 628, 637: 713, 690: 765, 718: 799, 942: 1026, 956: 1040, 1042: 5, 7: 755, 543: 769, 544: 779, 763: 759, 764: 760, 766: 765, 768: 755, 769: 767, 771: 770, 772: 771, 773: 772, 775: 777, 776: 778, 777: 1956, 778: 779, 779: 781, 781: 782, 782: 784, 783: 784, 784: 785, 785: 787, 787: 780, 1156: 755, 1811: 769, 1011: 5, 1005: 1108, 996: 1035, 137: 1221, 197: 1645, 387: 1094, 388: 1247, 389: 5555, 390: 1115, 1106: 1093, 1107: 1094, 1108: 1188, 1110: 1088, 1111: 1094, 1112: 1180, 1113: 1248, 1114: 1197, 1115: 2358, 1116: 1648, 1117: 1196, 1118: 1197, 1119: 1214, 1120: 1648, 1121: 1198, 1122: 1188, 1123: 1227, 1124: 553, 1125: 1227, 1126: 1093, 1127: 1227, 1128: 1241, 1129: 1088, 1130: 1088, 1131: 2358, 1133: 1089, 1134: 1089, 1135: 1211, 1136: 1105, 1138: 1180, 1139: 1198, 1141: 1180, 1143: 1240, 1145: 1082, 1146: 1094, 1147: 1213, 1148: 3500, 1149: 5555, 1150: 1868, 1151: 1220, 1152: 1090, 1153: 1206, 1154: 1091, 1155: 1091, 1161: 3501, 1157: 1092, 1158: 3611, 1159: 1093, 1160: 3000, 1168: 1248, 1187: 1096, 1188: 1094, 1189: 1095, 1190: 1248, 1191: 1095, 1192: 1221, 1193: 1096, 1194: 5555, 1196: 5555, 1197: 5555, 1198: 5555, 1206: 5555, 1211: 5555, 1213: 5555, 1214: 5555, 1449: 5555, 1489: 5555, 1685: 5555, 1692: 1866, 1695: 539, 1696: 2358, 1988: 1130, 1989: 1130, 1990: 1130, 1991: 1130, 2621: 1128, 2624: 1115, 2625: 1115, 56: 59, 220: 5555, 221: 465, 437: 3612, 438: 206, 439: 468, 440: 3612, 442: 219, 443: 219, 449: 205, 450: 206, 451: 461, 454: 461, 455: 216, 458: 214, 461: 457, 462: 457, 463: 206, 465: 216, 466: 461, 468: 3613, 469: 222, 470: 221, 471: 220, 472: 233, 475: 466, 476: 467, 477: 219, 478: 224, 480: 197, 484: 197, 485: 238, 486: 206, 703: 219, 704: 206, 2047: 5555 };
@@ -732,7 +807,136 @@ public getDPTintedTexId(baseId: number, r: number, g: number, b: number): number
     public textureHolder: UI.TextureListHolder = { viewerTextures: [], onnewtextures: null };
 
     private constructor(private gameInfo: GameInfo, private isBeta: boolean) { super(); }
+private registerTextureArray(textureArray: SFATextureArray, isNewlyLoaded: boolean): void {
+    if (!isNewlyLoaded)
+        return;
 
+    for (const t of textureArray.textures) {
+        if (t.viewerTexture && this.textureHolder.viewerTextures.indexOf(t.viewerTexture) === -1)
+            this.textureHolder.viewerTextures.push(t.viewerTexture);
+    }
+
+    if (this.textureHolder.onnewtextures)
+        this.textureHolder.onnewtextures();
+}
+
+private getTextureArrayDirectInternal(cache: GfxRenderCache, texNum: number, useTex1: boolean): SFATextureArray | null {
+    const pngHit = this.preloadedPngTextures.get(texNum);
+    if (pngHit)
+        return pngHit;
+
+    const loadFromFile = (file: TextureFile | null, num: number): SFATextureArray | null => {
+        if (!file || !file.hasTexture(num))
+            return null;
+
+        const isNewlyLoaded = !file.isTextureLoaded(num);
+        const textureArray = file.getTextureArray(cache, num);
+        if (textureArray !== null)
+            this.registerTextureArray(textureArray, isNewlyLoaded);
+        return textureArray;
+    };
+
+    for (const s in this.subdirTextureFiles) {
+        const file = useTex1 ? this.subdirTextureFiles[s].tex1 : this.subdirTextureFiles[s].tex0;
+        const hit = loadFromFile(file, texNum);
+        if (hit)
+            return hit;
+    }
+
+    if (!useTex1) {
+        const texpreHit = loadFromFile(this.texpre, texNum);
+        if (texpreHit)
+            return texpreHit;
+    }
+
+    const root = useTex1 ? this.rootTex1 : this.rootTex0;
+    const rootHit = loadFromFile(root, texNum);
+    if (rootHit)
+        return rootHit;
+
+    return null;
+}
+
+private resolveMappedTextureId(texId: number): {
+    texId: number;
+    useDPBin?: boolean;
+    forceUseTex1?: boolean;
+    pathBaseOverride?: string;
+} | null {
+    if (this.modelVersion === ModelVersion.DinosaurPlanet)
+        return { texId, useDPBin: true };
+
+    if (this.modelVersion === ModelVersion.Early1) {
+        const per = EARLY1_PER_MODEL_REMAP[this.currentModelID];
+        if (per && per[texId] !== undefined) texId = per[texId];
+        else if (early1TextureIdMap[texId] !== undefined) texId = early1TextureIdMap[texId];
+        else return null;
+    } else if (this.modelVersion === ModelVersion.AncientMap) {
+        const per = ANCIENT_DP_PER_MODEL_REMAP[this.currentModelID];
+        const dpHit = per ? per[texId] : undefined;
+
+        if (dpHit !== undefined) {
+            return {
+                texId: dpHit.id,
+                useDPBin: true,
+                forceUseTex1: dpHit.useTex1,
+                pathBaseOverride: DP_GAME_INFO.pathBase,
+            };
+        }
+
+        if (!(texId in ancientMapTextureIdMap))
+            return null;
+
+        texId = ancientMapTextureIdMap[texId];
+    } else if (this.modelVersion === ModelVersion.dup) {
+        const per = EARLYDUP_PER_MODEL_REMAP[this.currentModelID];
+        if (per && per[texId] !== undefined) texId = per[texId];
+        else if (earlydupTextureIdMap[texId] !== undefined) texId = earlydupTextureIdMap[texId];
+        else return null;
+    } else if (this.modelVersion === ModelVersion.fear) {
+        if (!(texId in fearMapTextureIdMap)) return null;
+        texId = fearMapTextureIdMap[texId];
+    } else if (this.modelVersion === ModelVersion.dfpt) {
+        if (!(texId in dftpmap)) return null;
+        texId = dftpmap[texId];
+    } else if (this.modelVersion === ModelVersion.Early2) {
+        if (!(texId in early2TextureIdMap)) return null;
+        texId = early2TextureIdMap[texId];
+    } else if (this.modelVersion === ModelVersion.Early4) {
+        const per = EARLY4_PER_MODEL_REMAP[this.currentModelID];
+        if (per && per[texId] !== undefined) texId = per[texId];
+        else if (early4TextureIdMap[texId] !== undefined) texId = early4TextureIdMap[texId];
+        else return null;
+    } else if (this.modelVersion === ModelVersion.Early3) {
+        if (!(texId in early3TextureIdMap)) return null;
+        texId = early3TextureIdMap[texId];
+    }
+
+    return { texId };
+}
+
+public getDirectTextureByID(cache: GfxRenderCache, texId: number, useTex1: boolean): SFATexture | null {
+    if (texId < 0)
+        return null;
+
+    const mapped = this.resolveMappedTextureId(texId);
+    if (!mapped)
+        return null;
+
+    if (mapped.useDPBin)
+        return this.getDPBinTextureArray(
+            cache,
+            mapped.texId,
+            mapped.forceUseTex1 ?? useTex1,
+            mapped.pathBaseOverride,
+        )?.textures[0] ?? null;
+
+    const direct = this.getTextureArrayDirectInternal(cache, mapped.texId, useTex1);
+    if (direct)
+        return direct.textures[0] ?? null;
+
+    return this.getTexture(cache, mapped.texId, useTex1);
+}
     public static async create(gameInfo: GameInfo, dataFetcher: DataFetcher, isBeta: boolean): Promise<SFATextureFetcher> {
         const self = new SFATextureFetcher(gameInfo, isBeta);
         self.dataFetcherRef = dataFetcher;
@@ -889,21 +1093,29 @@ private async loadDPBinTexture(
                     this.buildDPDerivedTexture(cache, derivedId);
             }
 
-            const gfxSampler = cache.createSampler({
-                wrapS,
-                wrapT,
-                minFilter: GfxTexFilterMode.Bilinear,
-                magFilter: GfxTexFilterMode.Bilinear,
-                mipFilter: GfxMipFilterMode.Nearest,
-                minLOD: 0,
-                maxLOD: 0,
-            });
+const samplerInfo: ExportSamplerInfo = {
+    wrapS,
+    wrapT,
+    minFilter: GfxTexFilterMode.Bilinear,
+    magFilter: GfxTexFilterMode.Bilinear,
+    mipFilter: GfxMipFilterMode.Nearest,
+};
+
+const gfxSampler = cache.createSampler({
+    wrapS: samplerInfo.wrapS,
+    wrapT: samplerInfo.wrapT,
+    minFilter: samplerInfo.minFilter,
+    magFilter: samplerInfo.magFilter,
+    mipFilter: samplerInfo.mipFilter,
+    minLOD: 0,
+    maxLOD: 0,
+});
 
             const cachedArray = targetCache.get(texId);
             if (cachedArray && cachedArray.textures[0]) {
                 const fakeTex = cachedArray.textures[0];
                 fakeTex.updateTextureAndNotify(gfxTexture, decoded.width, decoded.height, gfxSampler);
-
+    applyExportSamplerInfo(fakeTex, samplerInfo);
                 const canvas = document.createElement('canvas');
                 canvas.width = decoded.width;
                 canvas.height = decoded.height;
@@ -978,20 +1190,29 @@ private buildDPDerivedTexture(cache: GfxRenderCache, derivedId: number) {
     const gfxTexture = device.createTexture(makeTextureDescriptor2D(GfxFormat.U8_RGBA_NORM, base.width, base.height, 1));
     device.uploadTextureData(gfxTexture, 0, [pixels]);
 
-    const gfxSampler = cache.createSampler({
-        wrapS: base.wrapS,
-        wrapT: base.wrapT,
-        minFilter: GfxTexFilterMode.Bilinear,
-        magFilter: GfxTexFilterMode.Bilinear,
-        mipFilter: GfxMipFilterMode.Nearest,
-        minLOD: 0,
-        maxLOD: 0,
-    });
+const samplerInfo: ExportSamplerInfo = {
+    wrapS: base.wrapS,
+    wrapT: base.wrapT,
+    minFilter: GfxTexFilterMode.Bilinear,
+    magFilter: GfxTexFilterMode.Bilinear,
+    mipFilter: GfxMipFilterMode.Nearest,
+};
+
+const gfxSampler = cache.createSampler({
+    wrapS: samplerInfo.wrapS,
+    wrapT: samplerInfo.wrapT,
+    minFilter: samplerInfo.minFilter,
+    magFilter: samplerInfo.magFilter,
+    mipFilter: samplerInfo.mipFilter,
+    minLOD: 0,
+    maxLOD: 0,
+});
 
     const arr = this.dpBinCache.get(derivedId);
-    if (arr && arr.textures[0]) {
-        arr.textures[0].updateTextureAndNotify(gfxTexture, base.width, base.height, gfxSampler);
-    }
+if (arr && arr.textures[0]) {
+    arr.textures[0].updateTextureAndNotify(gfxTexture, base.width, base.height, gfxSampler);
+    applyExportSamplerInfo(arr.textures[0], samplerInfo);
+}
 }
 
 private getDPBinTextureArray(cache: GfxRenderCache, texId: number, useTex1: boolean, pathBaseOverride?: string): SFATextureArray | null {
@@ -1009,99 +1230,86 @@ private getDPBinTextureArray(cache: GfxRenderCache, texId: number, useTex1: bool
     return mutableArray;
 }
 
-    public getTextureArray(cache: GfxRenderCache, texId: number, useTex1: boolean): SFATextureArray | null {
-if (this.modelVersion === ModelVersion.DinosaurPlanet) {
-    if (texId < 0 && this.dpDerivedInfo.has(texId)) {
-        if (this.dpBinCache.has(texId))
-            return this.dpBinCache.get(texId)!;
+public getTextureArray(cache: GfxRenderCache, texId: number, useTex1: boolean): SFATextureArray | null {
+    if (this.modelVersion === ModelVersion.DinosaurPlanet) {
+        if (texId < 0 && this.dpDerivedInfo.has(texId)) {
+            if (this.dpBinCache.has(texId))
+                return this.dpBinCache.get(texId)!;
 
-        const fakeTex = this.fakes.getTextureArray(cache, 0, useTex1)!.textures[0];
-        const arr = new SFATextureArray([fakeTex]);
-        this.dpBinCache.set(texId, arr);
+            const fakeTex = this.fakes.getTextureArray(cache, 0, useTex1)!.textures[0];
+            const arr = new SFATextureArray([fakeTex]);
+            this.dpBinCache.set(texId, arr);
 
-        this.buildDPDerivedTexture(cache, texId);
-        return arr;
+            this.buildDPDerivedTexture(cache, texId);
+            return arr;
+        }
+
+        return this.getDPBinTextureArray(cache, texId, useTex1);
     }
 
-    return this.getDPBinTextureArray(cache, texId, useTex1);
-}
-
-        if (!this.texturesEnabled) return this.fakes.getTextureArray(cache, texId, useTex1); 
-        if (this.modelVersion === ModelVersion.Early1) {
-            const per = EARLY1_PER_MODEL_REMAP[this.currentModelID];
-            if (per && per[texId] !== undefined) texId = per[texId];
-            else if (early1TextureIdMap[texId] !== undefined) texId = early1TextureIdMap[texId];
-            else return this.fakes.getTextureArray(cache, texId, useTex1);
-      } else if (this.modelVersion === ModelVersion.AncientMap) {
-    const per = ANCIENT_DP_PER_MODEL_REMAP[this.currentModelID];
-    const dpHit = per ? per[texId] : undefined;
-
-    if (dpHit !== undefined) {
-        return this.getDPBinTextureArray(cache, dpHit.id, dpHit.useTex1, DP_GAME_INFO.pathBase);
-    }
-
-    if (!(texId in ancientMapTextureIdMap))
+    if (!this.texturesEnabled)
         return this.fakes.getTextureArray(cache, texId, useTex1);
 
-    texId = ancientMapTextureIdMap[texId];
+    const mapped = this.resolveMappedTextureId(texId);
+    if (!mapped)
+        return this.fakes.getTextureArray(cache, texId, useTex1);
 
-        } else if (this.modelVersion === ModelVersion.dup) {
-            const per = EARLYDUP_PER_MODEL_REMAP[this.currentModelID];
-            if (per && per[texId] !== undefined) texId = per[texId];
-            else if (earlydupTextureIdMap[texId] !== undefined) texId = earlydupTextureIdMap[texId];
-            else return this.fakes.getTextureArray(cache, texId, useTex1);
-        } else if (this.modelVersion === ModelVersion.fear) {
-            if (!(texId in fearMapTextureIdMap)) return this.fakes.getTextureArray(cache, texId, useTex1);
-            texId = fearMapTextureIdMap[texId];
-        } else if (this.modelVersion === ModelVersion.dfpt) {
-            if (!(texId in dftpmap)) return this.fakes.getTextureArray(cache, texId, useTex1);
-            texId = dftpmap[texId];
-        } else if (this.modelVersion === ModelVersion.Early2) {
-            if (!(texId in early2TextureIdMap)) return this.fakes.getTextureArray(cache, texId, useTex1);
-            texId = early2TextureIdMap[texId];
-        } else if (this.modelVersion === ModelVersion.Early4) {
-            const per = EARLY4_PER_MODEL_REMAP[this.currentModelID];
-            if (per && per[texId] !== undefined) texId = per[texId];
-            else if (early4TextureIdMap[texId] !== undefined) texId = early4TextureIdMap[texId];
-            else return this.fakes.getTextureArray(cache, texId, useTex1);
-        } else if (this.modelVersion === ModelVersion.Early3) {
-            if (!(texId in early3TextureIdMap)) return this.fakes.getTextureArray(cache, texId, useTex1);
-            texId = early3TextureIdMap[texId];
-        }
+    if (mapped.useDPBin) {
+        return this.getDPBinTextureArray(
+            cache,
+            mapped.texId,
+            mapped.forceUseTex1 ?? useTex1,
+            mapped.pathBaseOverride,
+        );
+    }
 
-        const pngHit = this.preloadedPngTextures.get(texId);
-        if (pngHit) return pngHit;
+    const pngHit = this.preloadedPngTextures.get(mapped.texId);
+    if (pngHit)
+        return pngHit;
 
-        let file = this.getTextureFile(texId, useTex1);
-        if (file.file === null) return this.fakes.getTextureArray(cache, texId, useTex1);
+    let file = this.getTextureFile(mapped.texId, useTex1);
+    if (file.file !== null) {
         const isNewlyLoaded = !file.file.isTextureLoaded(file.texNum);
         const textureArray = file.file.getTextureArray(cache, file.texNum);
-        if (textureArray === null) return this.fakes.getTextureArray(cache, texId, useTex1);
-
-        if (isNewlyLoaded) {
-            for (let t of textureArray.textures) {
-                if (t.viewerTexture && this.textureHolder.viewerTextures.indexOf(t.viewerTexture) === -1) {
-                    this.textureHolder.viewerTextures.push(t.viewerTexture);
-                }
-            }
-            if (this.textureHolder.onnewtextures) this.textureHolder.onnewtextures();
+        if (textureArray !== null) {
+            this.registerTextureArray(textureArray, isNewlyLoaded);
+            return textureArray;
         }
-        return textureArray;
     }
 
-    private getTextureFile(texId: number, useTex1: boolean): { texNum: number, file: TextureFile | null } {
-        let texNum = texId;
-        if (!useTex1) {
-            const val = this.textableBin.getUint16(texId * 2);
-            if (texId < 3000 || val === 0) texNum = val;
-            else return { texNum: val + 1, file: this.texpre };
+    const direct = this.getTextureArrayDirectInternal(cache, mapped.texId, useTex1);
+    if (direct)
+        return direct;
+
+    return this.fakes.getTextureArray(cache, texId, useTex1);
+}
+
+private getTextureFile(texId: number, useTex1: boolean): { texNum: number, file: TextureFile | null } {
+    let texNum = texId;
+
+    if (!useTex1) {
+        const offs = texId * 2;
+        if (offs + 2 <= this.textableBin.byteLength) {
+            const val = this.textableBin.getUint16(offs);
+            if (texId < 3000 || val === 0)
+                texNum = val;
+            else
+                return { texNum: val + 1, file: this.texpre };
         }
-        for (const s in this.subdirTextureFiles) {
-            const f = useTex1 ? this.subdirTextureFiles[s].tex1 : this.subdirTextureFiles[s].tex0;
-            if (f && f.hasTexture(texNum)) return { texNum, file: f };
-        }
-        return { texNum, file: null };
     }
+
+    for (const s in this.subdirTextureFiles) {
+        const f = useTex1 ? this.subdirTextureFiles[s].tex1 : this.subdirTextureFiles[s].tex0;
+        if (f && f.hasTexture(texNum))
+            return { texNum, file: f };
+    }
+
+    const root = useTex1 ? this.rootTex1 : this.rootTex0;
+    if (root && root.hasTexture(texNum))
+        return { texNum, file: root };
+
+    return { texNum, file: null };
+}
 
 public getDirectRootTexture(cache: GfxRenderCache, texNum: number, useTex1: boolean): SFATexture | null {
     return this.getRootTextureArray(cache, texNum, useTex1)?.textures[0] ?? null;
@@ -1219,12 +1427,10 @@ public getTextureByTextable(cache: GfxRenderCache, textableId: number): SFATextu
 
     if (this.modelVersion === ModelVersion.DinosaurPlanet) {
         let tex = this.getRootTextureArray(cache, textableId, false)?.textures[0] ?? null;
-        if (tex)
-            return tex;
+        if (tex) return tex;
 
         tex = this.getDPTex0BinTextureArray(cache, textableId)?.textures[0] ?? null;
-        if (tex)
-            return tex;
+        if (tex) return tex;
 
         const offs = textableId * 2;
         if (offs + 2 > this.textableBin.byteLength)
@@ -1233,21 +1439,36 @@ public getTextureByTextable(cache: GfxRenderCache, textableId: number): SFATextu
         const resolvedTex0Id = this.textableBin.getUint16(offs);
 
         tex = this.getRootTextureArray(cache, resolvedTex0Id, false)?.textures[0] ?? null;
-        if (tex)
-            return tex;
+        if (tex) return tex;
 
         tex = this.getDPTex0BinTextureArray(cache, resolvedTex0Id)?.textures[0] ?? null;
-        if (tex)
-            return tex;
+        if (tex) return tex;
 
         return null;
     }
 
-    const offs = textableId * 2;
-    if (offs + 2 > this.textableBin.byteLength)
+    const mapped = this.resolveMappedTextureId(textableId);
+    if (!mapped)
         return null;
 
-    return this.getTexture(cache, textableId, false);
+    if (mapped.useDPBin) {
+        return this.getDPBinTextureArray(
+            cache,
+            mapped.texId,
+            mapped.forceUseTex1 ?? false,
+            mapped.pathBaseOverride,
+        )?.textures[0] ?? null;
+    }
+
+    const offs = mapped.texId * 2;
+    if (offs + 2 <= this.textableBin.byteLength) {
+        const resolvedTexNum = this.textableBin.getUint16(offs);
+        const direct = this.getTextureArrayDirectInternal(cache, resolvedTexNum, false);
+        if (direct)
+            return direct.textures[0] ?? null;
+    }
+
+    return this.getTexture(cache, mapped.texId, false);
 }
     public destroy(device: GfxDevice) {
         this.texpre?.destroy(device);
