@@ -17,9 +17,9 @@ import { loadRes, ResourceCollection } from './resource.js';
 import { ObjectManager, ObjectInstance, ObjectUpdateContext } from './objects.js';
 import { EnvfxManager } from './envfx.js';
 import { SFARenderer, SceneRenderContext, SFARenderLists } from './render.js';
-import { MapInstance, loadMap } from './maps.js';
+import { MapInstance, loadMap, cleanupDPBlockGalleryUI } from './maps.js';
 import { dataSubarray, mat4SetTranslation, readVec3 } from './util.js';
-import { ModelRenderContext } from './models.js';
+import { Model, ModelInstance, ModelRenderContext } from './models.js';
 import { MaterialFactory } from './materials.js';
 import { SFAAnimationController } from './animation.js';
 import { Sky } from './Sky.js';
@@ -187,6 +187,12 @@ function ensureSFAHitsToggleUI(
 
     state.cb.addEventListener('change', state.handler);
 }
+
+type SFAUnusedBlockEntry = {
+    mod: number;
+    sub: number;
+    modelInst: ModelInstance;
+};
 
 export class World {
     public mapNum: number | null = null;
@@ -427,6 +433,7 @@ private showObjects: boolean;
 private showDevGeometry: boolean = false;
 private showDevObjects: boolean = false;
 public showHits: boolean = false;
+public showMapWireframe: boolean = false;
 private enableLights: boolean = true;
 
 private showObjectLabels: boolean = false;
@@ -438,6 +445,11 @@ private objectInspectorLastObjectCount: number = -1;
 private sky: Sky;
 
 private sphereMapMan: SphereMapManager;
+private sfaUnusedBlocks: SFAUnusedBlockEntry[] = [];
+private sfaUnusedBlocksBusy = false;
+private sfaUnusedBlocksEnabled = false;
+private sfaUnusedBlocksInfoPre: HTMLPreElement | null = null;
+private sfaUnusedBlocksStatus = 'Not scanned.';
     constructor(protected override world: World, materialFactory: MaterialFactory, defaultShowObjects: boolean = true) {
         super(world.context, world.animController, materialFactory);
         this.showObjects = defaultShowObjects;
@@ -491,18 +503,76 @@ const hideObjects = new UI.Checkbox("Hide objects", !this.showObjects);
         };
         layerPanel.contents.append(showDevObjects.elem);
 
-        const showDevGeometry = new UI.Checkbox("Show developer map shapes", false);
-        showDevGeometry.onchanged = () => {
-            this.showDevGeometry = showDevGeometry.checked;
-        };
-        layerPanel.contents.append(showDevGeometry.elem);
+const showDevGeometry = new UI.Checkbox("Show developer map shapes", false);
+showDevGeometry.onchanged = () => {
+    this.showDevGeometry = showDevGeometry.checked;
+};
+layerPanel.contents.append(showDevGeometry.elem);
 
-        const disableLights = new UI.Checkbox("Disable lights", false);
-        disableLights.onchanged = () => {
-            this.enableLights = !disableLights.checked;
+const showMapWireframe = new UI.Checkbox("Show map wireframe", false);
+showMapWireframe.onchanged = () => {
+    this.showMapWireframe = showMapWireframe.checked;
+};
+layerPanel.contents.append(showMapWireframe.elem);
+
+const disableLights = new UI.Checkbox("Disable lights", false);
+disableLights.onchanged = () => {
+    this.enableLights = !disableLights.checked;
+};
+layerPanel.contents.append(disableLights.elem);
+
+const showObjectLabels = new UI.Checkbox('Show object labels', this.showObjectLabels);
+showObjectLabels.onchanged = () => {
+    this.showObjectLabels = showObjectLabels.checked;
+};
+layerPanel.contents.appendChild(showObjectLabels.elem);
+
+if (this.world.mapInstance !== null) {
+    const unusedSpacer = document.createElement('div');
+    unusedSpacer.style.height = '8px';
+    layerPanel.contents.appendChild(unusedSpacer);
+
+    const unusedIntro = document.createElement('div');
+    unusedIntro.style.whiteSpace = 'pre-wrap';
+    unusedIntro.style.marginBottom = '8px';
+    unusedIntro.textContent =
+        'Unused SFA blocks\n' +
+        'Scan for blocks that exist in the same block mod(s)\n' +
+        'but are not placed in the current map.';
+    layerPanel.contents.appendChild(unusedIntro);
+
+    const showUnused = new UI.Checkbox('Show unused blocks', this.sfaUnusedBlocksEnabled);
+    showUnused.onchanged = () => {
+        this.sfaUnusedBlocksEnabled = showUnused.checked;
+        this.refreshSFAUnusedBlocksText();
+    };
+    layerPanel.contents.append(showUnused.elem);
+
+    const scanUnusedBtn = document.createElement('button');
+    scanUnusedBtn.textContent = 'Scan Unused Blocks';
+    scanUnusedBtn.style.display = 'block';
+    scanUnusedBtn.style.marginTop = '8px';
+    scanUnusedBtn.style.marginBottom = '8px';
+    scanUnusedBtn.onclick = async () => {
+        scanUnusedBtn.disabled = true;
+        try {
+            await this.scanSFAUnusedBlocks();
+            showUnused.checked = this.sfaUnusedBlocksEnabled;
+        } finally {
+            scanUnusedBtn.disabled = false;
         }
-        layerPanel.contents.append(disableLights.elem);
-        
+    };
+    layerPanel.contents.appendChild(scanUnusedBtn);
+
+    const unusedInfoPre = document.createElement('pre');
+    unusedInfoPre.style.whiteSpace = 'pre-wrap';
+    unusedInfoPre.style.maxHeight = '260px';
+    unusedInfoPre.style.overflow = 'auto';
+    unusedInfoPre.style.margin = '0';
+    layerPanel.contents.appendChild(unusedInfoPre);
+    this.sfaUnusedBlocksInfoPre = unusedInfoPre;
+    this.refreshSFAUnusedBlocksText();
+}
 const showDebugThumbnails = new UI.Checkbox('Show Debug Thumbnails', false);
 showDebugThumbnails.onchanged = () => {
     const v = showDebugThumbnails.checked;
@@ -520,12 +590,6 @@ objectIntro.textContent =
 objectPanel.contents.appendChild(objectIntro);
 
 objectPanel.contents.appendChild(showDebugThumbnails.elem);
-
-const showObjectLabels = new UI.Checkbox('Show object labels', this.showObjectLabels);
-showObjectLabels.onchanged = () => {
-  this.showObjectLabels = showObjectLabels.checked;
-};
-layerPanel.contents.appendChild(showObjectLabels.elem);
 
 const objectSelectLabel = document.createElement('div');
 objectSelectLabel.textContent = 'Loaded objects';
@@ -961,6 +1025,133 @@ public async exportCurrentWorldMapGLB(
     );
 }
 
+private refreshSFAUnusedBlocksText(): void {
+    if (this.sfaUnusedBlocksInfoPre === null)
+        return;
+
+    const map = this.world.mapInstance;
+
+    const lines: string[] = [
+        this.sfaUnusedBlocksStatus,
+        '',
+        `unused blocks: ${this.sfaUnusedBlocks.length}`,
+        `show strip: ${this.sfaUnusedBlocksEnabled ? 'yes' : 'no'}`,
+    ];
+
+    if (map === null) {
+        lines.push('', 'No single current map instance.');
+        this.sfaUnusedBlocksInfoPre.textContent = lines.join('\n');
+        return;
+    }
+
+    lines.push(
+        '',
+        'These are blocks that exist in the same block mod(s)',
+        'but are not placed in the current map.',
+    );
+
+    if (this.sfaUnusedBlocks.length > 0) {
+        lines.push('', 'first unused blocks:');
+        for (const e of this.sfaUnusedBlocks.slice(0, 64))
+            lines.push(`mod ${e.mod} sub ${e.sub}`);
+    }
+
+    this.sfaUnusedBlocksInfoPre.textContent = lines.join('\n');
+}
+
+private async scanSFAUnusedBlocks(): Promise<void> {
+    const map = this.world.mapInstance;
+
+    if (map === null) {
+        this.sfaUnusedBlocks = [];
+        this.sfaUnusedBlocksEnabled = false;
+        this.sfaUnusedBlocksStatus = 'Unused block scan needs a single map scene.';
+        this.refreshSFAUnusedBlocksText();
+        return;
+    }
+
+    if (this.sfaUnusedBlocksBusy)
+        return;
+
+    this.sfaUnusedBlocksBusy = true;
+    this.sfaUnusedBlocksStatus = 'Scanning unused blocks...';
+    this.refreshSFAUnusedBlocksText();
+
+    for (const e of this.sfaUnusedBlocks)
+        e.modelInst.destroy(this.world.context.device);
+    this.sfaUnusedBlocks = [];
+
+    try {
+        const usedPairs = new Set<string>();
+        const usedMods = new Set<number>();
+
+        for (let row = 0; row < map.info.getNumRows(); row++) {
+            for (let col = 0; col < map.info.getNumCols(); col++) {
+                const b = map.info.getBlockInfoAt(col, row);
+                if (!b)
+                    continue;
+
+                usedPairs.add(`${b.mod}:${b.sub}`);
+                usedMods.add(b.mod);
+            }
+        }
+
+        const mods = Array.from(usedMods.values()).sort((a, b) => a - b);
+        const results: SFAUnusedBlockEntry[] = [];
+
+        for (const mod of mods) {
+            for (let sub = 0; sub < 64; sub++) {
+                const key = `${mod}:${sub}`;
+                if (usedPairs.has(key))
+                    continue;
+
+                let model: Model | null = null;
+                try {
+                    model = await this.world.blockFetcher.fetchBlock(
+                        mod,
+                        sub,
+                        this.world.context.dataFetcher,
+                    );
+                } catch {
+                    model = null;
+                }
+
+                if (!model)
+                    continue;
+
+                results.push({
+                    mod,
+                    sub,
+                    modelInst: new ModelInstance(model),
+                });
+            }
+        }
+
+        results.sort((a, b) => {
+            if (a.mod !== b.mod)
+                return a.mod - b.mod;
+            return a.sub - b.sub;
+        });
+
+        const keepShowEnabled = this.sfaUnusedBlocksEnabled;
+
+        this.sfaUnusedBlocks = results;
+        this.sfaUnusedBlocksEnabled = results.length > 0 ? keepShowEnabled : false;
+        this.sfaUnusedBlocksStatus =
+            results.length > 0
+                ? `Found ${results.length} unused block(s) for this map.`
+                : 'No unused blocks found for this map.';
+    } catch (e) {
+        console.error(e);
+        this.sfaUnusedBlocks = [];
+        this.sfaUnusedBlocksEnabled = false;
+        this.sfaUnusedBlocksStatus = `Unused block scan failed: ${String(e)}`;
+    } finally {
+        this.sfaUnusedBlocksBusy = false;
+        this.refreshSFAUnusedBlocksText();
+    }
+}
+
 private drawHitOverlay(viewerInput: Viewer.ViewerRenderInput): void {
     const ctx = getDebugOverlayCanvas2D() as CanvasRenderingContext2D | null;
     if (!ctx)
@@ -1071,15 +1262,16 @@ if (this.objectInspectorPre !== null) {
         const template = renderInstManager.pushTemplateRenderInst();
         fillSceneParamsDataOnTemplate(template, sceneCtx.viewerInput);
 
-        this.world.envfxMan.getAmbientColor(scratchColor0, 0); // Always use ambience #0 when rendering map (FIXME: really?)
-        const modelCtx: ModelRenderContext = {
-            sceneCtx,
-            showDevGeometry: this.showDevGeometry,
-            showMeshes: true,
-            ambienceIdx: 0,
-            outdoorAmbientColor: scratchColor0,
-            setupLights: undefined!,
-        };
+        this.world.envfxMan.getAmbientColor(scratchColor0, 0);
+const modelCtx: ModelRenderContext = {
+    sceneCtx,
+    showDevGeometry: this.showDevGeometry,
+    showMeshes: true,
+    showMapWireframe: this.showMapWireframe,
+    ambienceIdx: 0,
+    outdoorAmbientColor: scratchColor0,
+    setupLights: undefined!,
+};
 
         const lights = nArray(8, () => new GX_Material.Light());
 
@@ -1117,11 +1309,36 @@ drawWorldSpaceText(
             }
         }
 
-        modelCtx.setupLights = () => {};
-        if (this.world.mapInstance !== null)
-            this.world.mapInstance.addRenderInsts(device, renderInstManager, renderLists, modelCtx);
+modelCtx.setupLights = () => {};
+if (this.world.mapInstance !== null)
+    this.world.mapInstance.addRenderInsts(device, renderInstManager, renderLists, modelCtx);
 
-        renderInstManager.popTemplateRenderInst();
+if (this.world.mapInstance !== null && this.sfaUnusedBlocksEnabled && this.sfaUnusedBlocks.length > 0) {
+    const map = this.world.mapInstance;
+    const startRow = map.info.getNumRows() + 2;
+    const colsPerRow = Math.max(1, Math.min(6, map.info.getNumCols()));
+
+    for (let i = 0; i < this.sfaUnusedBlocks.length; i++) {
+        const e = this.sfaUnusedBlocks[i];
+
+        const localCol = i % colsPerRow;
+        const localRow = startRow + Math.floor(i / colsPerRow);
+
+        const placement = mat4.create();
+        mat4.fromTranslation(placement, [640 * localCol, 0, 640 * localRow]);
+        mat4.mul(placement, map.getMapMatrix(), placement);
+
+        e.modelInst.addRenderInsts(
+            device,
+            renderInstManager,
+            modelCtx as any,
+            renderLists,
+            placement,
+        );
+    }
+}
+
+renderInstManager.popTemplateRenderInst();
     }
 
     protected override addWorldRenderPassesInner(device: GfxDevice, builder: GfxrGraphBuilder, renderInstManager: GfxRenderInstManager, sceneCtx: SceneRenderContext) {
@@ -1137,22 +1354,28 @@ drawWorldSpaceText(
     }
 
 public override destroy(device: GfxDevice) {
+    cleanupDPBlockGalleryUI();
+    cleanupSFAHitsToggleUI();
 
- cleanupSFAHitsToggleUI();
+    for (const e of this.sfaUnusedBlocks)
+        e.modelInst.destroy(device);
 
- this.objectInspectorSelect = null;
- this.objectInspectorPre = null;
- this.objectInspectorSelectedValue = '';
- this.objectInspectorLastObjectCount = -1;
+    this.sfaUnusedBlocks = [];
+    this.sfaUnusedBlocksEnabled = false;
+    this.sfaUnusedBlocksBusy = false;
+    this.sfaUnusedBlocksInfoPre = null;
+    this.sfaUnusedBlocksStatus = 'Not scanned.';
 
- super.destroy(device);
+    this.objectInspectorSelect = null;
+    this.objectInspectorPre = null;
+    this.objectInspectorSelectedValue = '';
+    this.objectInspectorLastObjectCount = -1;
 
- this.world.destroy(device);
+    super.destroy(device);
 
- this.sky.destroy(device);
-
- this.sphereMapMan.destroy(device);
-
+    this.world.destroy(device);
+    this.sky.destroy(device);
+    this.sphereMapMan.destroy(device);
 }
 }
 
@@ -1173,8 +1396,9 @@ export class SFAWorldSceneDesc implements Viewer.SceneDesc {
     }
 
 public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
-    cleanupSFAHitsToggleUI();
-    console.log(`Creating scene for world ${this.name} (ID ${this.id}) ...`);
+cleanupDPBlockGalleryUI();
+cleanupSFAHitsToggleUI();
+console.log(`Creating scene for world ${this.name} (ID ${this.id}) ...`);
         const pathBase = this.gameInfo.pathBase;
         const dataFetcher = context.dataFetcher;
         const materialFactory = new MaterialFactory(device);
@@ -1279,8 +1503,9 @@ export class SFAMapSceneDesc implements Viewer.SceneDesc {
     }
 
 public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
-    cleanupSFAHitsToggleUI();
-    console.log(`Creating scene for world ${this.name} (ID ${this.id}) ...`);
+cleanupDPBlockGalleryUI();
+cleanupSFAHitsToggleUI();
+console.log(`Creating scene for world ${this.name} (ID ${this.id}) ...`);
         const pathBase = this.gameInfo.pathBase;
         const dataFetcher = context.dataFetcher;
         const materialFactory = new MaterialFactory(device);
@@ -1375,10 +1600,12 @@ export class SFAFullFinalWorldSceneDesc implements Viewer.SceneDesc {
 
     constructor(public name: string, private gameInfo: GameInfo = SFA_GAME_INFO) {}
 
-    public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+    cleanupDPBlockGalleryUI();
+    cleanupSFAHitsToggleUI();
 
-        const dataFetcher = context.dataFetcher;
-        const materialFactory = new MaterialFactory(device);
+    const dataFetcher = context.dataFetcher;
+    const materialFactory = new MaterialFactory(device);
 
   
         const world = await World.create(

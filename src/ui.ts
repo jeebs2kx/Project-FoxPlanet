@@ -1126,6 +1126,7 @@ featuresList.style.gap = '6px';
 const features = [
     'Hundreds of released and beta maps',
     'Full model viewer + beta models',
+    'SFA and DP Map Exporter',
     'Animation viewer',
     'Texture viewer',
     'VR support',

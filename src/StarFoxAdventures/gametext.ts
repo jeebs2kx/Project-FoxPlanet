@@ -1385,10 +1385,10 @@ if (this.subtitleFont === null || this.subtitleAtlasCanvases.size === 0) {
     ? Math.floor((canvas.height - boxHeight) / 2)
     : canvas.height - boxHeight - 16;
 
-  ctx.globalAlpha = alpha;
-  this.fillRoundRect(ctx, boxX, boxY, boxWidth, boxHeight, 18);
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.24)';
-  ctx.fill();
+ctx.globalAlpha = alpha;
+this.fillRoundRect(ctx, boxX, boxY, boxWidth, boxHeight, 18);
+ctx.fillStyle = 'rgba(0, 0, 0, 0.88)';
+ctx.fill();
 
   let y = boxY + boxPadY;
 
@@ -1444,11 +1444,12 @@ if (this.subtitleFont === null || this.subtitleAtlasCanvases.size === 0) {
       : canvas.height - boxHeight - 16;
 
     ctx.save();
-    ctx.globalAlpha = alpha;
-    this.fillRoundRect(ctx, boxX, boxY, boxWidth, boxHeight, 18);
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.24)';
-    ctx.fill();
-    ctx.restore();
+ctx.save();
+ctx.globalAlpha = alpha;
+this.fillRoundRect(ctx, boxX, boxY, boxWidth, boxHeight, 18);
+ctx.fillStyle = 'rgba(0, 0, 0, 0.88)';
+ctx.fill();
+ctx.restore();
 
     let y = boxY + boxPadY;
 

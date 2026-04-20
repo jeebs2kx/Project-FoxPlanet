@@ -1,6 +1,6 @@
 import * as Viewer from '../viewer.js';
 
-import {SFAMapSceneDesc, SwapcircleSceneDesc, AncientMapSceneDesc, EarlydupMapSceneDesc, EarlyfearMapSceneDesc, EarlyDFPMapSceneDesc, Early1MapSceneDesc, Early2MapSceneDesc, Early3MapSceneDesc, Early4MapSceneDesc, } from './maps.js';
+import { SFAMapSceneDesc, SFABlockGallerySceneDesc, SwapcircleSceneDesc, AncientMapSceneDesc, EarlydupMapSceneDesc, EarlyfearMapSceneDesc, EarlyDFPMapSceneDesc, Early1MapSceneDesc, Early2MapSceneDesc, Early3MapSceneDesc, Early4MapSceneDesc } from './maps.js';
 import { SFAWorldSceneDesc, SFAFullFinalWorldSceneDesc } from './world.js';
 import { SFAModelExhibitSceneDesc, SFATextureExhibitSceneDesc } from './modelexhibit.js';import { ModelVersion } from './modelloader.js';
 import { EARLYFEAR } from './blocks.js';
@@ -214,7 +214,6 @@ new SFAModelExhibitSceneDesc('demomodelexhibit_gal', 'Mid/later 2001 Models (Ins
 new SFATextureExhibitSceneDesc('finaltextureexhibit', 'Texture Viewer (Final - All Folders)', SFA_GAME_INFO),
 new SFATextureExhibitSceneDesc('kiosktextureexhibit', 'Texture Viewer (Kiosk - Main Folders)', SFADEMO_GAME_INFO, KIOSK_TEXTURE_EXHIBIT_SUBDIRS),
 new SFATextureExhibitSceneDesc('betatextureexhibit', 'Texture Viewer (Kiosk Beta Folders)', SFADEMO_GAME_INFO, BETA_TEXTURE_EXHIBIT_SUBDIRS, true),
-
 
 'Full World Maps (experimental)',
 new SFAFullFinalWorldSceneDesc('Full Final World'),
@@ -457,23 +456,9 @@ new SFAWorldSceneDesc('dragbot', 'dragrockbot', 52, 'Kiosk: Dragon Rock Bot', SF
     new SFAWorldSceneDesc('animtest', 'bossgaldon', 28, 'Boss Galdon'),
     new SFAWorldSceneDesc('arwingdragon', 'arwingdragon', 62, 'Arwing to Dragon Rock', ),
 
-
-    'MAPS BY DATE ORDER - Thorntail Hollow',
-    new AncientMapSceneDesc('ancient3', "Ancient ThornTail Hollow (Textured)", ANCIENT_DP_GAME_INFO, 3),
-    new Early1MapSceneDesc(7, 'demo7', 'Mid 2001: ThornTail Hollow', SFADEMO_GAME_INFO),
-        new EarlydupMapSceneDesc(7, 'demo7', 'Mid 2001: ThornTail Hollow (Copy of Swaphol map)', SFADEMO_GAME_INFO),
-    new Early3MapSceneDesc(7, 'demo7', 'Late 2001: ThornTail Hollow', SFADEMO_GAME_INFO),
-    new Early4MapSceneDesc(7, 'demo7', 'Very Early 2002: ThornTail Hollow', SFADEMO_GAME_INFO),
-    new SFAMapSceneDesc(7, 'demo7', 'Kiosk: ThornTail Hollow', SFADEMO_GAME_INFO),
-    new SFAWorldSceneDesc('hollow', 'swaphol', 7, 'Final: ThornTail Hollow'),
-
-    'Shop/Thorntail Store',
-        new AncientMapSceneDesc('ancient6', "Ancient Shop (Textured)", ANCIENT_DP_GAME_INFO, 6),
-    new Early1MapSceneDesc(51, 'demo51', 'Mid 2001: Shop', SFADEMO_GAME_INFO),
-    new Early3MapSceneDesc(51, 'demo51', 'Late 2001: Shop', SFADEMO_GAME_INFO),
-    new Early4MapSceneDesc(51, 'demo51', 'Early 2002: Shop', SFADEMO_GAME_INFO),
-     new SFAWorldSceneDesc('swapstore', 'shop', 51, "kiosk: Shop", SFADEMO_GAME_INFO),
-    new SFAWorldSceneDesc('swapstore', 'shop', 51, 'ThornTail Shop',),
+'Block Viewer',
+new SFABlockGallerySceneDesc('sfablockgallery_final', 'SFA Block Gallery (Final)', SFA_GAME_INFO),
+new SFABlockGallerySceneDesc('sfablockgallery_kiosk', 'SFA Block Gallery (Kiosk)', SFADEMO_GAME_INFO),
 
 ];
 

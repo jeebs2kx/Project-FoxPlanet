@@ -1754,6 +1754,9 @@ function dpRepairWrappedTriUV(
     uv1.s = best[2]; uv1.t = best[3];
     uv2.s = best[4]; uv2.t = best[5];
 }
+
+
+
 (model as any).debugMaterialInfo = batches.map((b, index) => ({
     index,
     texId: b.materialId,
@@ -1853,12 +1856,20 @@ const DP_SCROLL_WATERFALL_TEXIDS = new Set<number>([
  358,123 ,253,254,368,368,1127, 3560,510,    3563,3562,1941,2750,2048,270, 1231,1232
 ]);
 
+const DP_FORCE_NOCULL_TEXIDS = new Set<number>([
+   1048, 794, 795, 2100, 2618, 1389,2877,2875,2878,2867,2881,2857,891,874,892,893,894,714,2857,2855,1751,1752,1753,2517,2534,2534,2535,2552,2515,2516,2549,2550,2551,2150,2519,2520,2521 // textures to NOT backface cull
+]);
+
+const DP_FORCE_CULL_TEXIDS = new Set<number>([
+    1147, // textures to force backface cull
+]);
+
 const __dpScrollCandidateLogged = new Set<number>();
+const enableCull = !!(window as any).__DP_ENABLE_CULL;
 for (const b of batches) {
             const isSoftFormat = (b.pixelFormat !== 1 && b.pixelFormat !== 7 && b.pixelFormat !== 8);
             const isKnownCutoutTex = [738,739,732,733,2678,905,3,6,31,61,119,164,289,349,351,354,355,544,356,2087,3195,1101,1028,1122,1125,1050,1049,1051,1066,1075,1423,1896,1897,1888,1889].includes(b.materialId);
 
-            // 1. SCAN ALPHA (Data Gathering)
             let aMin = 255;
             for (let vi = b.vStart; vi < b.vEnd; vi++) {
                 const a = clrDV.getUint8(vi * 4 + 3);
@@ -1866,8 +1877,14 @@ for (const b of batches) {
             }
 
             const isImposterWall = [3549,732,733,1967,1157, 1156, 1146, 1151, 1165, 1170, 1145, 1147, 1152, 1135, 1134].includes(b.materialId);
-            // Meshes that vanish head-on - Force them to stay Angle-Safe
             const isPortal = [2048, 2514, 2510].includes(b.materialId);
+const forceNoCull =
+    DP_FORCE_NOCULL_TEXIDS.has(b.materialId) ||
+    (b.blendMaterialId !== -1 && DP_FORCE_NOCULL_TEXIDS.has(b.blendMaterialId));
+
+const forceCull =
+    DP_FORCE_CULL_TEXIDS.has(b.materialId) ||
+    (b.blendMaterialId !== -1 && DP_FORCE_CULL_TEXIDS.has(b.blendMaterialId));
 
             const hasSemiTrans = (b.drawMode & 0x04) !== 0;
             const hasTexBlend  = (b.drawMode & 0x40) !== 0;
@@ -1879,25 +1896,45 @@ for (const b of batches) {
             let shaderFlags = 0;
             let targetList = 0;
 
-            const wantsTrueTrans = (!wantsCutout && (!b.isOpaque || hasSemiTrans || hasTexBlend || b.isWater));
-            const isDecalBlend = !isImposterWall && (b.blendMaterialId === -1 && b.drawMode === 0x0b && aMin === 0);
+const wantsTrueTrans = (!wantsCutout && (!b.isOpaque || hasSemiTrans || hasTexBlend || b.isWater));
+const isDecalBlend = !isImposterWall && (b.blendMaterialId === -1 && b.drawMode === 0x0b && aMin === 0);
 
-            if (wantsTrueTrans || isDecalBlend) {
-                shaderFlags |= 0x40000000;
-                targetList = 1;
-            } else if (wantsCutout) {
-                shaderFlags |= ShaderFlags.AlphaCompare;
-                targetList = 0;
-            } else {
-                shaderFlags |= 0x10;
-                targetList = 0;
-            }
-            if (isImposterWall) {
-                shaderFlags = (shaderFlags & ~0x40000000) | 0x10;
-                targetList = 0;
-            }
+let cullThisBatch =
+    !isPortal &&
+    !isImposterWall &&
+    !wantsTrueTrans &&
+    !isDecalBlend &&
+    !wantsCutout &&
+    !b.isWater;
 
-            shaderFlags |= ShaderFlags.Fog;
+    if (forceNoCull)
+        cullThisBatch = false;
+
+    if (forceCull)
+        cullThisBatch = true;
+
+    if (!enableCull)
+        cullThisBatch = false;
+if (wantsTrueTrans || isDecalBlend) {
+    shaderFlags |= 0x40000000;
+    targetList = 1;
+} else if (wantsCutout) {
+    shaderFlags |= ShaderFlags.AlphaCompare;
+    targetList = 0;
+} else {
+    shaderFlags |= 0x10;
+    targetList = 0;
+}
+
+if (isImposterWall) {
+    shaderFlags = (shaderFlags & ~0x40000000) | 0x10;
+    targetList = 0;
+}
+
+if (cullThisBatch)
+    shaderFlags |= ShaderFlags.CullBackface;
+
+shaderFlags |= ShaderFlags.Fog;
 
             // 4. VERTEX FLAG LOGIC (The Angle & Blend Fix)
             let normalFlags = NormalFlags.HasVertexColor; // Keep walls/terrain visible
@@ -1984,9 +2021,23 @@ let localIdx = 0;
 
 for (let ti = b.tStart; ti < b.tEnd; ti++) {
     let { flip, i0, i1, i2 } = tris[ti];
-    if (flip) { const tmp = i1; i1 = i2; i2 = tmp; }
+    if (flip) {
+        const tmp = i1;
+        i1 = i2;
+        i2 = tmp;
+    }
 
-    const srcIdx = [b.vStart + i0, b.vStart + i1, b.vStart + i2];
+    if (cullThisBatch) {
+        const tmp = i1;
+        i1 = i2;
+        i2 = tmp;
+    }
+
+    const srcIdx: [number, number, number] = [
+        b.vStart + i0,
+        b.vStart + i1,
+        b.vStart + i2,
+    ];
 
     const triUV = srcIdx.map((idx) => {
         const vo = vtxOff + idx * 16;

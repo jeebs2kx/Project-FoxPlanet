@@ -137,6 +137,12 @@ export interface BlockInfo {
     mod: number;
     sub: number;
 }
+type SFAUnusedBlockEntry = {
+    mod: number;
+    sub: number;
+    modelInst: ModelInstance;
+};
+
 // ===================== DP SCALE OVERRIDES (DP ONLY) =====================
 const DP_SCALE_MULT_BY_TYPE: Record<number, number> = {
      0x03FA: 0.15, 0x0071: 0.05, 0x036A: 0.15, 0x008A: 0.10, 0x03A4: 0.50,
@@ -1964,10 +1970,14 @@ this.objects.push(objInst);
         return this.matrix;
     }
 
-public setDPGalleryBlockInfo(blockInfo: BlockInfo): void {
+public setGalleryBlockInfo(blockInfo: BlockInfo): void {
     this.blockInfoTable = [[blockInfo]];
     this.blocks = [];
     this.hitLines = [];
+}
+
+public setDPGalleryBlockInfo(blockInfo: BlockInfo): void {
+    this.setGalleryBlockInfo(blockInfo);
 }
 
     public worldToMapPoint(x: number, y: number, z: number, dst: vec3 = vec3.create()): vec3 {
@@ -2241,12 +2251,19 @@ class MapSceneRenderer extends SFARenderer {
     public dpMinimapMapId: number = -1;
 public showMinimap = true;
 public textureHolder: UI.TextureListHolder = { viewerTextures: [], onnewtextures: null };
-    private blockFetcherFactory?: () => Promise<BlockFetcher>;
+private blockFetcherFactory?: () => Promise<BlockFetcher>;
 private map!: MapInstance;
-    private dataFetcher!: DataFetcher;
+private dataFetcher!: DataFetcher;
 private currentGameInfo!: GameInfo;
 private currentTexFetcher: any;
+private currentBlockFetcher: BlockFetcher | null = null;
 private dpOverlayUIHidden = false;
+
+private sfaUnusedBlocks: SFAUnusedBlockEntry[] = [];
+private sfaUnusedBlocksBusy = false;
+private sfaUnusedBlocksEnabled = false;
+private sfaUnusedBlocksInfoPre: HTMLPreElement | null = null;
+private sfaUnusedBlocksStatus = 'Not scanned.';
 private drawDPObjectDiffOverlay(viewerInput: Viewer.ViewerRenderInput): void {
     this.projectedDiffLabels = [];
 
@@ -3501,14 +3518,15 @@ const boxY = canvas.height - boxH - 8;
     constructor(public context: SceneContext, animController: SFAAnimationController, materialFactory: MaterialFactory) {
         super(context, animController, materialFactory);
     }
-    public async reloadForTextureToggle(): Promise<void> {
-        if (!this.dataFetcher) return;
-        if (this.blockFetcherFactory) {
-            const fresh = await this.blockFetcherFactory();
-            this.map.setBlockFetcher(fresh);
-        }
-        await this.map.reloadBlocks(this.dataFetcher);
+public async reloadForTextureToggle(): Promise<void> {
+    if (!this.dataFetcher) return;
+    if (this.blockFetcherFactory) {
+        const fresh = await this.blockFetcherFactory();
+        this.currentBlockFetcher = fresh;
+        this.map.setBlockFetcher(fresh);
     }
+    await this.map.reloadBlocks(this.dataFetcher);
+}
 
     public async initDPGameText(gameInfo: GameInfo, dataFetcher: DataFetcher): Promise<void> {
         if (this.dpGameTextRenderer !== null)
@@ -3531,7 +3549,8 @@ const boxY = canvas.height - boxH - 8;
     }
 
 public async create(info: MapSceneInfo, gameInfo: GameInfo, dataFetcher: DataFetcher, blockFetcher: BlockFetcher, mapOpts?: MapInstanceOptions): Promise<Viewer.SceneGfx> {
-    this.dataFetcher = dataFetcher; 
+    this.dataFetcher = dataFetcher;
+    this.currentBlockFetcher = blockFetcher;
     this.isDPMapScene = !!mapOpts?.dpMapScene;
     this.map = new MapInstance(info, blockFetcher, mapOpts);
 
@@ -3577,115 +3596,219 @@ public async create(info: MapSceneInfo, gameInfo: GameInfo, dataFetcher: DataFet
 public createPanels(): UI.Panel[] {
     const panels: UI.Panel[] = [];
 
-
-
     if (this.envfxMan) {
         const envPanel = new UI.Panel();
         envPanel.setTitle(UI.TIME_OF_DAY_ICON, 'Environment');
 
-this.timeSelect = new UI.Slider();
-this.timeSelect.setLabel('Time of Day');
-this.timeSelect.setRange(0, 7, 1);
-this.timeSelect.setValue(DP_ENV_DEFAULT.timeOfDay);
-this.timeSelect.onvalue = async (val) => {
-  if (!this.envfxMan) return;
-  this.envfxMan.setTimeOfDay(val);
-  this.rebuildSky(this.currentTexFetcher, this.currentGameInfo);
-};
-envPanel.contents.append(this.timeSelect.elem);
+        this.timeSelect = new UI.Slider();
+        this.timeSelect.setLabel('Time of Day');
+        this.timeSelect.setRange(0, 7, 1);
+        this.timeSelect.setValue(DP_ENV_DEFAULT.timeOfDay);
+        this.timeSelect.onvalue = async (val) => {
+            if (!this.envfxMan) return;
+            this.envfxMan.setTimeOfDay(val);
+            this.rebuildSky(this.currentTexFetcher, this.currentGameInfo);
+        };
+        envPanel.contents.append(this.timeSelect.elem);
 
-this.envSelect = new UI.Slider();
-this.envSelect.setLabel('EnvFx Index');
-this.envSelect.setRange(0, 100, 1);
-this.envSelect.setValue(DP_ENV_DEFAULT.envfxIndex);
-this.envSelect.onvalue = async (val) => {
-  if (!this.envfxMan) return;
-  try {
-    const r = (this.envfxMan as any).loadEnvfx(val);
-    if (r && typeof r.then === 'function') await r;
-  } catch (e) {
-   // console.warn(`EnvFx load failed for index ${val}`, e);
-  }
-  this.rebuildSky(this.currentTexFetcher, this.currentGameInfo);
-};
-envPanel.contents.append(this.envSelect.elem);
+        this.envSelect = new UI.Slider();
+        this.envSelect.setLabel('EnvFx Index');
+        this.envSelect.setRange(0, 100, 1);
+        this.envSelect.setValue(DP_ENV_DEFAULT.envfxIndex);
+        this.envSelect.onvalue = async (val) => {
+            if (!this.envfxMan) return;
+            try {
+                const r = (this.envfxMan as any).loadEnvfx(val);
+                if (r && typeof r.then === 'function') await r;
+            } catch (e) {
+            }
+            this.rebuildSky(this.currentTexFetcher, this.currentGameInfo);
+        };
+        envPanel.contents.append(this.envSelect.elem);
 
         panels.push(envPanel);
     }
 
-if (!this.isDPMapScene) {
-    const exportPanel = new UI.Panel();
-    exportPanel.setTitle(UI.LAYER_ICON, 'Export');
+    if (!this.isDPMapScene) {
+        const renderPanel = new UI.Panel();
+        renderPanel.setTitle(UI.RENDER_HACKS_ICON, 'Render');
 
-    const layerModeLabel = document.createElement('div');
-    layerModeLabel.textContent = 'Texture Layer Source';
-    layerModeLabel.style.fontSize = '12px';
-    layerModeLabel.style.marginBottom = '4px';
+        const showWireframe = new UI.Checkbox('Show map wireframe', this.showMapWireframe);
+        showWireframe.onchanged = () => {
+            this.showMapWireframe = showWireframe.checked;
+        };
+        renderPanel.contents.append(showWireframe.elem);
 
-    const layerModeSelect = document.createElement('select');
-    layerModeSelect.style.display = 'block';
-    layerModeSelect.style.marginBottom = '8px';
+        const unusedSpacer = document.createElement('div');
+        unusedSpacer.style.height = '8px';
+        renderPanel.contents.appendChild(unusedSpacer);
 
-    for (const [value, label] of [
-        ['auto', 'Auto'],
-        ['tex0', 'Prefer TEX0'],
-        ['tex1', 'Prefer TEX1'],
-        ['last', 'Prefer Last Layer'],
-    ] as const) {
-        const option = document.createElement('option');
-        option.value = value;
-        option.textContent = label;
-        layerModeSelect.appendChild(option);
+        const unusedIntro = document.createElement('div');
+        unusedIntro.style.whiteSpace = 'pre-wrap';
+        unusedIntro.style.marginBottom = '8px';
+        unusedIntro.textContent =
+            'Unused SFA blocks\n' +
+            'Scan for blocks that exist in the same block mod(s)\n' +
+            'but are not placed in the current map.';
+        renderPanel.contents.appendChild(unusedIntro);
+
+        const showUnused = new UI.Checkbox('Show unused blocks', this.sfaUnusedBlocksEnabled);
+        showUnused.onchanged = () => {
+            this.sfaUnusedBlocksEnabled = showUnused.checked;
+            this.refreshSFAUnusedBlocksText();
+        };
+        renderPanel.contents.append(showUnused.elem);
+
+        const scanUnusedBtn = document.createElement('button');
+        scanUnusedBtn.textContent = 'Scan Unused Blocks';
+        scanUnusedBtn.style.display = 'block';
+        scanUnusedBtn.style.marginTop = '8px';
+        scanUnusedBtn.style.marginBottom = '8px';
+
+        scanUnusedBtn.onclick = async () => {
+            scanUnusedBtn.disabled = true;
+            try {
+                await this.scanSFAUnusedBlocks();
+                showUnused.checked = this.sfaUnusedBlocksEnabled;
+            } finally {
+                scanUnusedBtn.disabled = false;
+            }
+        };
+        renderPanel.contents.appendChild(scanUnusedBtn);
+
+        const unusedInfoPre = document.createElement('pre');
+        unusedInfoPre.style.whiteSpace = 'pre-wrap';
+        unusedInfoPre.style.maxHeight = '260px';
+        unusedInfoPre.style.overflow = 'auto';
+        unusedInfoPre.style.margin = '0';
+        renderPanel.contents.appendChild(unusedInfoPre);
+        this.sfaUnusedBlocksInfoPre = unusedInfoPre;
+        this.refreshSFAUnusedBlocksText();
+
+        panels.push(renderPanel);
+
+        // const exportPanel = new UI.Panel(); // remove this if unused
     }
-    layerModeSelect.value = 'auto';
 
-    const exportFastButton = document.createElement('button');
-    exportFastButton.textContent = 'Export Current Map as GLB';
-    exportFastButton.style.display = 'block';
-    exportFastButton.style.marginBottom = '6px';
-
-    const exportTexturedButton = document.createElement('button');
-    exportTexturedButton.textContent = 'Export Current Map as GLB (With Textures)';
-    exportTexturedButton.style.display = 'block';
-    exportTexturedButton.style.marginBottom = '6px';
-
-    const exportNote = document.createElement('div');
-    exportNote.textContent = 'Auto usually prefers TEX1/UV1 when present.';
-    exportNote.style.fontSize = '12px';
-    exportNote.style.opacity = '0.8';
-
-    const setExportButtonsDisabled = (disabled: boolean) => {
-        exportFastButton.disabled = disabled;
-        exportTexturedButton.disabled = disabled;
-        layerModeSelect.disabled = disabled;
-    };
-
-    exportFastButton.onclick = async () => {
-        setExportButtonsDisabled(true);
-        try {
-            await this.exportCurrentMapGLB(false, layerModeSelect.value as 'auto' | 'tex0' | 'tex1' | 'last');
-        } finally {
-            setExportButtonsDisabled(false);
-        }
-    };
-
-    exportTexturedButton.onclick = async () => {
-        setExportButtonsDisabled(true);
-        try {
-            await this.exportCurrentMapGLB(true, layerModeSelect.value as 'auto' | 'tex0' | 'tex1' | 'last');
-        } finally {
-            setExportButtonsDisabled(false);
-        }
-    };
-
-    exportPanel.contents.append(layerModeLabel);
-    exportPanel.contents.append(layerModeSelect);
-    exportPanel.contents.append(exportFastButton);
-    exportPanel.contents.append(exportTexturedButton);
-    exportPanel.contents.append(exportNote);
-    panels.push(exportPanel);
-}
     return panels;
+}
+
+private refreshSFAUnusedBlocksText(): void {
+    if (this.sfaUnusedBlocksInfoPre === null)
+        return;
+
+    const lines: string[] = [
+        this.sfaUnusedBlocksStatus,
+        '',
+        `unused blocks: ${this.sfaUnusedBlocks.length}`,
+        `show strip: ${this.sfaUnusedBlocksEnabled ? 'yes' : 'no'}`,
+        '',
+        'These are blocks that exist in the same block mod(s)',
+        'but are not placed in the current map.',
+    ];
+
+    if (this.sfaUnusedBlocks.length > 0) {
+        lines.push('', 'first unused blocks:');
+        for (const e of this.sfaUnusedBlocks.slice(0, 64))
+            lines.push(`mod ${e.mod} sub ${e.sub}`);
+    }
+
+    this.sfaUnusedBlocksInfoPre.textContent = lines.join('\n');
+}
+
+private async scanSFAUnusedBlocks(): Promise<void> {
+    if (this.isDPMapScene) {
+        this.sfaUnusedBlocks = [];
+        this.sfaUnusedBlocksEnabled = false;
+        this.sfaUnusedBlocksStatus = 'Unused block scan is only for SFA map scenes.';
+        this.refreshSFAUnusedBlocksText();
+        return;
+    }
+
+    if (!this.currentBlockFetcher) {
+        this.sfaUnusedBlocks = [];
+        this.sfaUnusedBlocksEnabled = false;
+        this.sfaUnusedBlocksStatus = 'Current block fetcher missing.';
+        this.refreshSFAUnusedBlocksText();
+        return;
+    }
+
+    if (this.sfaUnusedBlocksBusy)
+        return;
+
+    this.sfaUnusedBlocksBusy = true;
+    this.sfaUnusedBlocksStatus = 'Scanning unused blocks...';
+    this.refreshSFAUnusedBlocksText();
+
+    for (const e of this.sfaUnusedBlocks)
+        e.modelInst.destroy(this.context.device);
+    this.sfaUnusedBlocks = [];
+
+    try {
+        const usedPairs = new Set<string>();
+        const usedMods = new Set<number>();
+
+        for (let row = 0; row < this.map.info.getNumRows(); row++) {
+            for (let col = 0; col < this.map.info.getNumCols(); col++) {
+                const b = this.map.info.getBlockInfoAt(col, row);
+                if (!b)
+                    continue;
+
+                usedPairs.add(`${b.mod}:${b.sub}`);
+                usedMods.add(b.mod);
+            }
+        }
+
+        const mods = Array.from(usedMods.values()).sort((a, b) => a - b);
+        const results: SFAUnusedBlockEntry[] = [];
+
+        for (const mod of mods) {
+            for (let sub = 0; sub < 64; sub++) {
+                const key = `${mod}:${sub}`;
+                if (usedPairs.has(key))
+                    continue;
+
+                let model: Model | null = null;
+                try {
+                    model = await this.currentBlockFetcher.fetchBlock(mod, sub, this.dataFetcher);
+                } catch {
+                    model = null;
+                }
+
+                if (!model)
+                    continue;
+
+                results.push({
+                    mod,
+                    sub,
+                    modelInst: new ModelInstance(model),
+                });
+            }
+        }
+
+        results.sort((a, b) => {
+            if (a.mod !== b.mod)
+                return a.mod - b.mod;
+            return a.sub - b.sub;
+        });
+
+        const keepShowEnabled = this.sfaUnusedBlocksEnabled;
+
+        this.sfaUnusedBlocks = results;
+        this.sfaUnusedBlocksEnabled = results.length > 0 ? keepShowEnabled : false;
+        this.sfaUnusedBlocksStatus =
+            results.length > 0
+                ? `Found ${results.length} unused block(s) for this map.`
+                : 'No unused blocks found for this map.';
+    } catch (e) {
+        console.error(e);
+        this.sfaUnusedBlocks = [];
+        this.sfaUnusedBlocksEnabled = false;
+        this.sfaUnusedBlocksStatus = `Unused block scan failed: ${String(e)}`;
+    } finally {
+        this.sfaUnusedBlocksBusy = false;
+        this.refreshSFAUnusedBlocksText();
+    }
 }
 
     public setMatrix(matrix: mat4) {
@@ -3795,36 +3918,70 @@ protected override addSkyRenderPasses(
             sceneCtx
         );
 }
-    protected override addWorldRenderInsts(device: GfxDevice, renderInstManager: GfxRenderInstManager, renderLists: SFARenderLists, sceneCtx: SceneRenderContext) {
-        const template = renderInstManager.pushTemplateRenderInst();
-        fillSceneParamsDataOnTemplate(template, sceneCtx.viewerInput);
+protected override addWorldRenderInsts(
+    device: GfxDevice,
+    renderInstManager: GfxRenderInstManager,
+    renderLists: SFARenderLists,
+    sceneCtx: SceneRenderContext
+) {
+    const template = renderInstManager.pushTemplateRenderInst();
+    fillSceneParamsDataOnTemplate(template, sceneCtx.viewerInput);
 
-        const scratchColor0 = colorNewFromRGBA(1, 1, 1, 1);
-        if (this.envfxMan) {
-            this.envfxMan.getAmbientColor(scratchColor0, 0);
-        } else {
-            colorCopy(scratchColor0, White);
-        }
-
-const forceHideDPObjectsInVR = this.isDPMapScene && !!sceneCtx.viewerInput.isVR;
-const modelCtx = {
-    sceneCtx,
-    showDevGeometry: false,
-    ambienceIdx: 0,
-    showMeshes: true,
-    showMapWireframe: this.showMapWireframe,
-    outdoorAmbientColor: scratchColor0,
-    setupLights: () => {},
-    animController: this.animController,
-    showDevObjects: this.showDevObjects,
-    showAllObjects: this.showAllObjects && !forceHideDPObjectsInVR,
-};
-
-        this.map.addRenderInsts(device, renderInstManager, renderLists, modelCtx as any);
-        renderInstManager.popTemplateRenderInst();
+    const scratchColor0 = colorNewFromRGBA(1, 1, 1, 1);
+    if (this.envfxMan) {
+        this.envfxMan.getAmbientColor(scratchColor0, 0);
+    } else {
+        colorCopy(scratchColor0, White);
     }
 
+    const forceHideDPObjectsInVR = this.isDPMapScene && !!sceneCtx.viewerInput.isVR;
+    const modelCtx = {
+        sceneCtx,
+        showDevGeometry: false,
+        ambienceIdx: 0,
+        showMeshes: true,
+        showMapWireframe: this.showMapWireframe,
+        outdoorAmbientColor: scratchColor0,
+        setupLights: () => {},
+        animController: this.animController,
+        showDevObjects: this.showDevObjects,
+        showAllObjects: this.showAllObjects && !forceHideDPObjectsInVR,
+        cullByAabb: false,
+    };
+
+    this.map.addRenderInsts(device, renderInstManager, renderLists, modelCtx as any);
+
+    if (!this.isDPMapScene && this.sfaUnusedBlocksEnabled && this.sfaUnusedBlocks.length > 0) {
+        const startRow = this.map.info.getNumRows() + 2;
+        const colsPerRow = Math.max(1, Math.min(6, this.map.info.getNumCols()));
+
+        for (let i = 0; i < this.sfaUnusedBlocks.length; i++) {
+            const e = this.sfaUnusedBlocks[i];
+
+            const localCol = i % colsPerRow;
+            const localRow = startRow + Math.floor(i / colsPerRow);
+
+            const placement = mat4.create();
+            mat4.fromTranslation(placement, [640 * localCol, 0, 640 * localRow]);
+            mat4.mul(placement, this.map.getMapMatrix(), placement);
+
+            e.modelInst.addRenderInsts(
+                device,
+                renderInstManager,
+                modelCtx as any,
+                renderLists,
+                placement,
+            );
+        }
+    }
+
+    renderInstManager.popTemplateRenderInst();
+}
+
 public override destroy(device: GfxDevice) {
+    cleanupDPBlockGalleryUI();
+    cleanupTextureToggleUI();
+
     if (this.dpGameTextRenderer !== null) {
         this.dpGameTextRenderer.destroy(device);
         this.dpGameTextRenderer = null;
@@ -3844,20 +4001,29 @@ public override destroy(device: GfxDevice) {
         this.dpFbfxCanvas = null;
         this.dpFbfxCtx = null;
     }
-const vanillaObjectMap = this.dpVanillaObjectMap;
+    const vanillaObjectMap = this.dpVanillaObjectMap;
 
-if (this.dpCurrentObjects)
-    this.map.objects = this.dpCurrentObjects;
+    if (this.dpCurrentObjects)
+        this.map.objects = this.dpCurrentObjects;
 
-this.dpVanillaObjectMap = null;
-this.dpUsingVanillaObjects = false;
+    this.dpVanillaObjectMap = null;
+    this.dpUsingVanillaObjects = false;
+
+    for (const e of this.sfaUnusedBlocks)
+        e.modelInst.destroy(device);
+
+    this.sfaUnusedBlocks = [];
+    this.sfaUnusedBlocksEnabled = false;
+    this.sfaUnusedBlocksBusy = false;
+    this.sfaUnusedBlocksInfoPre = null;
+    this.sfaUnusedBlocksStatus = 'Not scanned.';
 
     super.destroy(device);
     if (this.sky) { this.sky.destroy(device); this.sky = null; }
     if (this.envfxMan) this.envfxMan.destroy(device);
     this.map.destroy(device);
     if (vanillaObjectMap)
-    vanillaObjectMap.destroy(device);
+        vanillaObjectMap.destroy(device);
 }
 }
 function cleanupDPUI(): void {
@@ -3882,6 +4048,8 @@ cleanupDPBlockGalleryUI();
     (window as any).__dpHitsToggle = undefined;
     (window as any).__dpHitVolumesToggle = undefined;
     (window as any).__dpWireframeToggle = undefined;
+    (window as any).__dpCullToggle = undefined;
+    (window as any).__DP_ENABLE_CULL = false;
     (window as any).__dpGameTextToggle = undefined;
     (window as any).__dpFbfxToggle = undefined;
     (window as any).__dpFbfxUIState = undefined;
@@ -3964,6 +4132,65 @@ function ensureDPWireframeUI(
 
     state = { wrap, cb, handler: null, last: false };
     (window as any).__dpWireframeToggle = state;
+  }
+
+  if (state.handler)
+    state.cb.removeEventListener('change', state.handler);
+
+  const desired = (typeof initial === 'boolean') ? initial : (state.last ?? false);
+  state.cb.checked = desired;
+
+  state.handler = async () => {
+    state!.last = state!.cb.checked;
+    await onChange(state!.cb.checked);
+  };
+
+  state.cb.addEventListener('change', state.handler);
+}
+
+function ensureDPCullUI(
+  onChange: (enabled: boolean) => void | Promise<void>,
+  initial?: boolean
+): void {
+  type ToggleState = {
+    wrap: HTMLDivElement;
+    cb: HTMLInputElement;
+    handler: ((e: Event) => void) | null;
+    last?: boolean;
+  };
+
+  let state = (window as any).__dpCullToggle as ToggleState | undefined;
+
+  if (!state) {
+    const wrap = document.createElement('div');
+    wrap.style.padding = '1px 3px';
+    wrap.style.background = 'rgba(0,0,0,0.5)';
+    wrap.style.color = '#fff';
+    wrap.style.font = '11px sans-serif';
+    wrap.style.borderRadius = '2px';
+    wrap.style.display = 'flex';
+    wrap.style.alignItems = 'center';
+    wrap.style.height = '20px';
+    wrap.style.boxSizing = 'border-box';
+    wrap.style.order = '6';
+
+    const label = document.createElement('label');
+    label.style.cursor = 'pointer';
+    label.style.display = 'flex';
+    label.style.alignItems = 'center';
+    label.style.lineHeight = '1';
+
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.style.marginRight = '1px';
+
+    label.appendChild(cb);
+    label.appendChild(document.createTextNode('Backface Culling'));
+    wrap.appendChild(label);
+    getDPTopToggleBar().appendChild(wrap);
+
+    state = { wrap, cb, handler: null, last: false };
+    (window as any).__dpCullToggle = state;
   }
 
   if (state.handler)
@@ -4295,7 +4522,7 @@ function ensureDPExportUI(
     panel.appendChild(layerModeSelect);
 
     const exportFastButton = document.createElement('button');
-    exportFastButton.textContent = 'Export Current Map as GLB (Fast)';
+    exportFastButton.textContent = 'Export Current Map as GLB';
     exportFastButton.style.display = 'block';
     exportFastButton.style.width = '100%';
     exportFastButton.style.marginBottom = '6px';
@@ -4309,7 +4536,7 @@ function ensureDPExportUI(
     panel.appendChild(exportTexturedButton);
 
     const exportNote = document.createElement('div');
-    exportNote.textContent = 'Textured export may take a couple of minutes. Auto usually prefers TEX1/UV1 when present.';
+    exportNote.textContent = 'Auto usually prefers TEX1/UV1 when present.';
     exportNote.style.fontSize = '12px';
     exportNote.style.opacity = '0.8';
     panel.appendChild(exportNote);
@@ -6199,6 +6426,18 @@ stopBtn.onclick = () => {
 
 }
 
+type SFABlockGalleryEntry = {
+    index: number;
+    mod: number;
+    sub: number;
+    absBlock: number;
+    source: string;
+};
+
+function getSFAModFileNum(mod: number): number {
+    return mod < 5 ? mod : mod + 1;
+}
+
 type DPBlockGalleryEntry = {
     index: number;
     mod: number;
@@ -6312,9 +6551,87 @@ async function loadDPBlockGalleryEntries(
     return out;
 }
 
-function cleanupDPBlockGalleryUI(): void {
+export function cleanupDPBlockGalleryUI(): void {
     document.getElementById('dp-block-gallery-ui')?.remove();
     (window as any).__dpBlockGalleryUI = undefined;
+}
+
+
+
+async function loadSFABlockGalleryEntries(
+    dataFetcher: DataFetcher,
+    gameInfo: GameInfo,
+): Promise<SFABlockGalleryEntry[]> {
+    const trkblk = (await dataFetcher.fetchData(`${gameInfo.pathBase}/TRKBLK.tab`)).createDataView();
+    const modCount = trkblk.byteLength >>> 1;
+
+    const out: SFABlockGalleryEntry[] = [];
+    const seen = new Set<string>();
+
+    const bases: number[] = [];
+    for (let mod = 0; mod < modCount; mod++) {
+        const base = trkblk.getUint16(mod * 2);
+        if (base !== 0xFFFF)
+            bases.push(base);
+    }
+
+    const sortedBases = Array.from(new Set(bases)).sort((a, b) => a - b);
+
+    const getNextBase = (base: number): number | null => {
+        for (const b of sortedBases) {
+            if (b > base)
+                return b;
+        }
+        return null;
+    };
+
+    for (let mod = 0; mod < modCount; mod++) {
+        const base = trkblk.getUint16(mod * 2);
+        if (base === 0xFFFF)
+            continue;
+
+        const subdir = gameInfo.subdirs[mod];
+if (typeof subdir !== 'string' || subdir.length === 0)
+    continue;
+        const modNum = getSFAModFileNum(mod);
+
+        const tabPath = `${gameInfo.pathBase}/${subdir}/mod${modNum}.tab`;
+        const tabBuf = await dataFetcher.fetchData(tabPath, { allow404: true });
+        const tab = tabBuf.createDataView();
+
+        if (tab.byteLength === 0)
+            continue;
+
+        const nextBase = getNextBase(base);
+        const maxByNextBase = nextBase !== null ? Math.min(nextBase, base + 64) : (base + 64);
+        const maxByTab = Math.min(tab.byteLength >>> 2, maxByNextBase);
+
+        for (let absBlock = base; absBlock < maxByTab; absBlock++) {
+            const tabOffs = absBlock * 4;
+            if (tabOffs + 4 > tab.byteLength)
+                break;
+
+            const tabValue = tab.getUint32(tabOffs, false);
+            if (!(tabValue & 0x10000000))
+                continue;
+
+            const sub = absBlock - base;
+            const key = `${mod}:${sub}`;
+            if (seen.has(key))
+                continue;
+            seen.add(key);
+
+            out.push({
+                index: out.length,
+                mod,
+                sub,
+                absBlock,
+                source: `${subdir}/mod${modNum}`,
+            });
+        }
+    }
+
+    return out;
 }
 
 function ensureDPBlockGalleryUI(
@@ -6497,6 +6814,97 @@ ensureDPBlockGalleryUI(
 
         return mapRenderer;
     }
+}
+
+export class SFABlockGallerySceneDesc implements Viewer.SceneDesc {
+    constructor(
+        public id: string,
+        public name: string,
+        private gameInfo: GameInfo = SFA_GAME_INFO,
+    ) {}
+
+public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+    cleanupTextureToggleUI();
+    cleanupDPBlockGalleryUI();
+
+    const gInfo = this.gameInfo;
+    const animController = new SFAAnimationController();
+    const materialFactory = new MaterialFactory(device);
+
+    const texFetcher = await SFATextureFetcher.create(gInfo, context.dataFetcher, false);
+
+    const blockFetcher = await SFABlockFetcher.create(
+        gInfo,
+        context.dataFetcher,
+        device,
+        materialFactory,
+        animController,
+        Promise.resolve(texFetcher),
+    );
+
+    const blockEntries = await loadSFABlockGalleryEntries(context.dataFetcher, gInfo);
+
+    if (blockEntries.length === 0)
+        throw new Error('No SFA block gallery entries found.');
+
+    let currentBlockIndex = 0;
+    let currentBlockInfo: BlockInfo = {
+        mod: blockEntries[currentBlockIndex].mod,
+        sub: blockEntries[currentBlockIndex].sub,
+    };
+
+    const mapSceneInfo: MapSceneInfo = {
+        getNumCols() { return 1; },
+        getNumRows() { return 1; },
+        getBlockInfoAt(col: number, row: number): BlockInfo | null {
+            return currentBlockInfo;
+        },
+        getOrigin(): number[] {
+            return [0, 0];
+        },
+    };
+
+    const mapRenderer = new MapSceneRenderer(context, animController, materialFactory);
+    mapRenderer.mapNum = 'sfa_block_gallery';
+    mapRenderer.showAllObjects = false;
+    mapRenderer.showMinimap = false;
+
+    await mapRenderer.create(mapSceneInfo, gInfo, context.dataFetcher, blockFetcher, {
+        galleryCenterBlock: true,
+    });
+
+    const setBlockIndex = async (index: number) => {
+        currentBlockIndex = Math.max(0, Math.min(blockEntries.length - 1, index | 0));
+
+        const e = blockEntries[currentBlockIndex];
+        currentBlockInfo = {
+            mod: e.mod,
+            sub: e.sub,
+        };
+
+        (mapRenderer as any).map.setGalleryBlockInfo(currentBlockInfo);
+        await mapRenderer.reloadForTextureToggle();
+    };
+
+    ensureDPBlockGalleryUI(
+        blockEntries.map((e) => ({
+            index: e.index,
+            mod: e.mod,
+            sub: e.sub,
+            absBlock: e.absBlock,
+            source: e.source,
+        })),
+        () => currentBlockIndex,
+        async (index: number) => {
+            await setBlockIndex(index);
+        },
+    );
+
+    const matrix = mat4.create();
+    mapRenderer.setMatrix(matrix);
+
+    return mapRenderer;
+}
 }
 
 export class DPMapSceneDesc implements Viewer.SceneDesc {
@@ -6753,9 +7161,10 @@ ensureDPWireframeUI(async (enabled: boolean) => {
     mapRenderer.showMapWireframe = enabled;
 }, false);
 
-mapRenderer.showMapWireframe = false;
-ensureDPWireframeUI(async (enabled: boolean) => {
-    mapRenderer.showMapWireframe = enabled;
+(window as any).__DP_DISABLE_CULL = false;
+ensureDPCullUI(async (enabled: boolean) => {
+    (window as any).__DP_ENABLE_CULL = enabled;
+    await mapRenderer.reloadForTextureToggle();
 }, false);
 
 ensureDPExportUI(async (includeTextures, textureLayerMode) => {
