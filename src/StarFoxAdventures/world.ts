@@ -70,6 +70,22 @@ const scratchMtx0 = mat4.create();
 const scratchMtx1 = mat4.create();
 const scratchColor0 = colorNewFromRGBA(1, 1, 1, 1);
 
+const KIOSK_DEFAULT_TIME_BY_SUBDIR: Record<string, number> = {
+    swaphol: 3,
+    capeclaw: 3,
+    darkicemines:3,
+    icemountain:3,
+    lightfoot :4, 
+    mmpass :4, 
+    nwastes :3, 
+    volcano :2, 
+    warlock :0, 
+    wallcity :2, 
+    dfptop :3, 
+    dragrock :1, 
+    crfort :1, 
+    arwingdragon :0, 
+};
 
 function formatObjectInspectorHex(value: number, minWidth: number = 4): string {
   return (value >>> 0).toString(16).toUpperCase().padStart(minWidth, '0');
@@ -347,25 +363,35 @@ this.objectInstances.push(obj);
         return obj;
     }
 
-    public spawnObjectsFromRomlist(romlist: DataView, parent: ObjectInstance | null = null) {
-        const mapObjectOrigin = vec3.create();
-        if (this.mapInstance !== null)
-            vec3.set(mapObjectOrigin, 640 * this.mapInstance.info.getOrigin()[0], 0, 640 * this.mapInstance.info.getOrigin()[1]);
+public spawnObjectsFromRomlist(romlist: DataView, parent: ObjectInstance | null = null) {
+    const mapObjectOrigin = vec3.create();
 
-        let offs = 0;
-        let i = 0;
-        while (offs < romlist.byteLength) {
-            const entrySize = 4 * romlist.getUint8(offs + 0x2);
-            const objParams = dataSubarray(romlist, offs, entrySize);
+    if (this.mapInstance !== null)
+        vec3.set(mapObjectOrigin, 640 * this.mapInstance.info.getOrigin()[0], 0, 640 * this.mapInstance.info.getOrigin()[1]);
 
-            const obj = this.spawnObject(objParams, parent, mapObjectOrigin);
-            if (obj !== null)
-                console.log(`Object #${i}: ${obj.getName()} (type ${obj.getType().typeNum} romlist-type 0x${obj.commonObjectParams.objType.toString(16)} class ${obj.getType().objClass} id 0x${obj.commonObjectParams.id.toString(16)})`);
+    let offs = 0;
+    let i = 0;
 
-            offs += entrySize;
-            i++;
-        }
+    while (offs < romlist.byteLength) {
+        const entrySize = 4 * romlist.getUint8(offs + 0x2);
+        const objParams = dataSubarray(romlist, offs, entrySize);
+
+        const obj = this.spawnObject(objParams, parent, mapObjectOrigin);
+
+        if (obj !== null)
+            console.log(`Object #${i}: ${obj.getName()} (type ${obj.getType().typeNum} romlist-type 0x${obj.commonObjectParams.objType.toString(16)} class ${obj.getType().objClass} id 0x${obj.commonObjectParams.id.toString(16)})`);
+
+        offs += entrySize;
+        i++;
     }
+
+if (this.envfxMan.shouldForceTextureOnlySky()) {
+    if (!this.envfxMan.hasLoadedAtmosphereEnvfx)
+        this.envfxMan.loadEnvfx(0x241);
+
+    this.envfxMan.forceKioskTextureOnlySky();
+}
+}
     
     public setupLightsForObject(lights: GX_Material.Light[], obj: ObjectInstance | undefined, sceneCtx: SceneRenderContext, typeMask: LightType) {
         const probedLights = obj !== undefined ? this.worldLights.probeLightsOnObject(obj, sceneCtx, typeMask, 8) : this.worldLights.lights;
@@ -443,6 +469,7 @@ private objectInspectorSelectedValue: string = '';
 private objectInspectorLastObjectCount: number = -1;
 
 private sky: Sky;
+private readonly defaultTimeOfDay: number;
 
 private sphereMapMan: SphereMapManager;
 private sfaUnusedBlocks: SFAUnusedBlockEntry[] = [];
@@ -456,8 +483,12 @@ private sfaUnusedBlocksStatus = 'Not scanned.';
 
         if (this.world.resColl.texFetcher instanceof SFATextureFetcher)
             this.textureHolder = this.world.resColl.texFetcher.textureHolder;
-        this.sky = new Sky(this.world);
-        this.sphereMapMan = new SphereMapManager(this.world, materialFactory);
+this.sky = new Sky(this.world);
+this.sphereMapMan = new SphereMapManager(this.world, materialFactory);
+
+const primarySubdir = this.world.subdirs[0] ?? '';
+this.defaultTimeOfDay = KIOSK_DEFAULT_TIME_BY_SUBDIR[primarySubdir] ?? 4;
+this.world.envfxMan.setTimeOfDay(this.defaultTimeOfDay);
     }
 
     public createPanels(): UI.Panel[] {
@@ -467,7 +498,7 @@ private sfaUnusedBlocksStatus = 'Not scanned.';
         this.timeSelect = new UI.Slider();
         this.timeSelect.setLabel('Time');
         this.timeSelect.setRange(0, 7, 1);
-        this.timeSelect.setValue(4);
+        this.timeSelect.setValue(this.defaultTimeOfDay);
         timePanel.contents.append(this.timeSelect.elem);
 
         const disableAmbient = new UI.Checkbox("Disable ambient lighting", false);

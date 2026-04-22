@@ -19,13 +19,11 @@ interface ShaderFields {
 }
 
 export const KNOWN_WATER_TEXIDS = new Set<number>([
-  // Existing Early1 IDs…
   899, 2871,
 
 ]);
 
 export const KNOWN_WATER_TEXIDS3 = new Set<number>([
-  // Existing Early1 IDs…
   
 
 ]);
@@ -41,11 +39,11 @@ export const KNOWN_CUTOUT_TEXIDS_BETA = new Set<number>([
 ]);
 
 export const KNOWN_CUTOUT_TEXIDS_ANCIENT = new Set<number>([
-  630, 646, 672,  1094, 1098, 1103, 1107, 1110, 1111, 1112// leaf/flower/grass texIds (resolved IDs)
+  630, 646, 672,  1094, 1098, 1103, 1107, 1110, 1111, 1112
   
 ]);
 export const KNOWN_CUTOUT_TEXIDS_EARLY1 = new Set<number>([
-1692, 1135, 1695, 1131 , 176, 783, 785 
+1692, 1135, 1695, 1131 , 176, 783, 785, 549
 
 ]);
 
@@ -80,7 +78,7 @@ export const CLOUDTREASURE_MODEL_SHADER_FIELDS: ShaderFields = {
 
 export const SFADEMO_MAP_SHADER_FIELDS: ShaderFields = {
     isBeta: true,
-    isEarly1: true,
+    isold: true,
     size: 0x40,
     numLayers: 0x3b,
     layers: 0x24, // ???
@@ -412,7 +410,7 @@ if (fields.isold) {
     if (strongById || heurWater)
       shader.flags |= ShaderFlags.Water;
 
-    const isLavaTexId = texId === 457 || texId === 584 || texId === 1061 || texId === 1062 || texId === 585;
+    const isLavaTexId = texId === 5555;
     if (isLavaTexId) {
       shader.flags |= ShaderFlags.Lava;
       shader.flags &= ~ShaderFlags.Water; 

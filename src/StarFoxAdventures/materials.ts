@@ -84,6 +84,14 @@ export enum ShaderFlags {
     Water = 0x80000000,
 }
 
+const FORCE_MASKED_DP_TEXIDS = new Set<number>([
+    430,
+    575,
+    551,
+    655,
+    579,
+]);
+
 export function makeMaterialTexture(texture: SFATexture | null): TexFunc<any> {
     if (texture !== null) {
         return (mapping: TextureMapping) => texture.setOnTextureMapping(mapping);
@@ -230,7 +238,13 @@ export abstract class StandardMaterial extends MaterialBase {
     constructor(public cache: GfxRenderCache, factory: MaterialFactory, public shader: Shader, public texFetcher: TextureFetcher) {
         super(factory);
     }
-
+protected hasForcedMaskedTexture(): boolean {
+    for (const layer of this.shader.layers) {
+        if (layer.texId !== null && FORCE_MASKED_DP_TEXIDS.has(layer.texId))
+            return true;
+    }
+    return false;
+}
     protected abstract rebuildSpecialized(): void;
 
     protected addMistStages() {
@@ -354,9 +368,9 @@ if (isTrueTrans) {
 }
 }
  
-    if ((this.shader.flags & ShaderFlags.AlphaCompare) || this.shader.flags === 0) {
+if (((this.shader.flags & ShaderFlags.AlphaCompare) || this.shader.flags === 0) && !this.hasForcedMaskedTexture()) {
   this.mb.setBlendMode(GX.BlendMode.BLEND, GX.BlendFactor.SRCALPHA, GX.BlendFactor.INVSRCALPHA, GX.LogicOp.NOOP);
-}      
+}   
     
 }
     public setBlendOverride(blendOverride?: BlendOverride) {

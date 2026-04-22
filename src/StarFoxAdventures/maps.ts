@@ -2242,7 +2242,84 @@ if (key.startsWith('early1_') || key.startsWith('dup_')) {
 
     return key;
 }
+const SFA_TEXTURE_ONLY_DEFAULT_TIME_BY_SUBDIR: Record<string, number> = {
+    swaphol: 3,
+    capeclaw: 3,
+    darkicemines: 3,
+    icemountain: 3,
+    lightfoot: 4,
+    mmpass: 4,
+    nwastes: 3,
+    volcano: 2,
+    warlock: 0,
+    wallcity: 2,
+    dfptop: 3,
+    dragrock: 1,
+    crfort: 1,
+    arwingdragon: 0,
+};
 
+const SFA_STYLE_SKY_SUBDIR_ALLOWLIST = new Set<string>([
+    'swaphol',
+    'capeclaw',
+    'darkicemines',
+    'icemountain',
+    'lightfoot',
+    'mmpass',
+    'nwastes',
+    'volcano',
+    'warlock',
+    'wallcity',
+    'dfptop',
+    'dragrock',
+    'crfort',
+]);
+
+const ANCIENT_STYLE_SKY_MAPKEY_ALLOWLIST = new Set<string>([
+    '3',
+    '4',
+
+    '7', //to edit CRF ancient
+]);
+
+function shouldUseSFAStyleSkyForSubdir(subdir: string): boolean {
+    return subdir !== '' && SFA_STYLE_SKY_SUBDIR_ALLOWLIST.has(subdir);
+}
+
+function shouldUseAncientStyleSky(mapKey: string | number, primarySubdir: string): boolean {
+    return primarySubdir !== '' && ANCIENT_STYLE_SKY_MAPKEY_ALLOWLIST.has(String(mapKey));
+}
+
+async function initSFAStyleMapEnv(
+    mapRenderer: MapSceneRenderer,
+    materialFactory: MaterialFactory,
+    gameInfo: GameInfo,
+    dataFetcher: DataFetcher,
+    texFetcher: TextureFetcher,
+    primarySubdir: string,
+    envfxIndex: number = 0x241,
+): Promise<void> {
+    const fakeWorld = {
+        renderCache: (materialFactory as any).cache ?? (materialFactory as any).getCache?.(),
+        gameInfo,
+        subdirs: [primarySubdir],
+        worldLights: mapRenderer.worldLights,
+        resColl: { texFetcher },
+        objectMan: { createObjectInstance: () => ({ destroy: () => {} }) },
+    } as any as World;
+
+    mapRenderer.envfxMan = await EnvfxManager.create(fakeWorld, dataFetcher);
+    (fakeWorld as any).envfxMan = mapRenderer.envfxMan;
+
+    mapRenderer.envfxMan.setTimeOfDay(
+        SFA_TEXTURE_ONLY_DEFAULT_TIME_BY_SUBDIR[primarySubdir] ?? 4
+    );
+
+    mapRenderer.envfxMan.loadEnvfx(envfxIndex);
+
+    if ((mapRenderer.envfxMan as any).shouldForceTextureOnlySky?.())
+        (mapRenderer.envfxMan as any).forceKioskTextureOnlySky();
+}
 class MapSceneRenderer extends SFARenderer {
     public showDevObjects = false;
     public showAllObjects = true;
@@ -3579,12 +3656,16 @@ public async create(info: MapSceneInfo, gameInfo: GameInfo, dataFetcher: DataFet
 
             this.sky = new Sky(fakeWorldForSky);
         }
-        if (this.envfxMan) {
-            this.envfxMan.setTimeOfDay(DP_ENV_DEFAULT.timeOfDay);
-            const r = (this.envfxMan as any).loadEnvfx(DP_ENV_DEFAULT.envfxIndex);
-            if (r && typeof r.then === 'function') await r;
-            this.rebuildSky(this.currentTexFetcher, this.currentGameInfo);
-        }
+if (this.envfxMan) {
+    if (this.isDPMapScene) {
+        this.envfxMan.setTimeOfDay(DP_ENV_DEFAULT.timeOfDay);
+        const r = (this.envfxMan as any).loadEnvfx(DP_ENV_DEFAULT.envfxIndex);
+        if (r && typeof r.then === 'function')
+            await r;
+    }
+
+    this.rebuildSky(this.currentTexFetcher, this.currentGameInfo);
+}
         if ((this as any).mapNum !== undefined)
             this.playMusic((this as any).mapNum as number);
 
@@ -3686,7 +3767,75 @@ public createPanels(): UI.Panel[] {
         this.refreshSFAUnusedBlocksText();
 
         panels.push(renderPanel);
+const exportPanel = new UI.Panel();
+exportPanel.setTitle(UI.SAND_CLOCK_ICON, 'Export');
 
+const layerModeLabel = document.createElement('div');
+layerModeLabel.textContent = 'Texture Layer Source';
+layerModeLabel.style.marginBottom = '4px';
+exportPanel.contents.appendChild(layerModeLabel);
+
+const layerModeSelect = document.createElement('select');
+layerModeSelect.style.display = 'block';
+layerModeSelect.style.width = '100%';
+layerModeSelect.style.marginBottom = '8px';
+
+for (const [value, text] of [
+    ['auto', 'Auto'],
+    ['tex0', 'Prefer TEX0'],
+    ['tex1', 'Prefer TEX1'],
+    ['last', 'Prefer Last Layer'],
+] as const) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = text;
+    layerModeSelect.appendChild(option);
+}
+
+layerModeSelect.value = 'auto';
+exportPanel.contents.appendChild(layerModeSelect);
+
+const exportFastButton = document.createElement('button');
+exportFastButton.textContent = 'Export Current World Map as GLB (Fast)';
+exportFastButton.style.display = 'block';
+exportFastButton.style.width = '100%';
+exportFastButton.style.marginBottom = '6px';
+exportFastButton.onclick = async () => {
+    exportFastButton.disabled = true;
+    exportTexturedButton.disabled = true;
+    try {
+        await this.exportCurrentMapGLB(false, layerModeSelect.value as 'auto' | 'tex0' | 'tex1' | 'last');
+    } finally {
+        exportFastButton.disabled = false;
+        exportTexturedButton.disabled = false;
+    }
+};
+exportPanel.contents.appendChild(exportFastButton);
+
+const exportTexturedButton = document.createElement('button');
+exportTexturedButton.textContent = 'Export Current World Map as GLB (With Textures)';
+exportTexturedButton.style.display = 'block';
+exportTexturedButton.style.width = '100%';
+exportTexturedButton.style.marginBottom = '6px';
+exportTexturedButton.onclick = async () => {
+    exportFastButton.disabled = true;
+    exportTexturedButton.disabled = true;
+    try {
+        await this.exportCurrentMapGLB(true, layerModeSelect.value as 'auto' | 'tex0' | 'tex1' | 'last');
+    } finally {
+        exportFastButton.disabled = false;
+        exportTexturedButton.disabled = false;
+    }
+};
+exportPanel.contents.appendChild(exportTexturedButton);
+
+const exportNote = document.createElement('div');
+exportNote.textContent = 'Auto usually prefers TEX1/UV1 when present.';
+exportNote.style.fontSize = '12px';
+exportNote.style.opacity = '0.8';
+exportPanel.contents.appendChild(exportNote);
+
+panels.push(exportPanel);
         // const exportPanel = new UI.Panel(); // remove this if unused
     }
 
@@ -5128,6 +5277,7 @@ const ancientOrigGetTexture = (texFetcher as any).getTexture.bind(texFetcher);
 };
 
 const folders = ANCIENT_TEXTURE_FOLDERS[String(this.mapKey)] ?? [];
+const primarySubdir = folders[0] ?? '';
 if (Number(this.mapKey) !== 0) {
     await texFetcher.loadSubdirs(folders, dataFetcher);
 }
@@ -5179,6 +5329,11 @@ texFetcher.setPngOverride(3004, 'textures/shoppurple3.png');
 texFetcher.setPngOverride(3005, 'textures/shoppurple4.png'); 
 texFetcher.setPngOverride(3006, 'textures/shoppurple5.png'); 
 }
+if (Number(this.mapKey) === 3) {
+texFetcher.setPngOverride(3099, 'textures/lowertree.png'); 
+texFetcher.setPngOverride(3098, 'textures/uppertree.png'); 
+
+}
 
 
 await texFetcher.preloadPngOverrides((materialFactory as any).cache ?? (materialFactory as any).getCache?.(), dataFetcher);
@@ -5190,7 +5345,16 @@ mapRenderer.setBlockFetcherFactory(() => AncientBlockFetcher.create(
   this.gameInfo, dataFetcher, materialFactory, Promise.resolve(texFetcher)
 ));
 
-
+if (shouldUseAncientStyleSky(this.mapKey, primarySubdir)) {
+    await initSFAStyleMapEnv(
+        mapRenderer,
+        materialFactory,
+        this.gameInfo,
+        dataFetcher,
+        texFetcher,
+        primarySubdir,
+    );
+}
 await mapRenderer.create(mapSceneInfo, this.gameInfo, dataFetcher, blockFetcher);
 ensureTextureToggleUI(async (enabled: boolean) => {
   texFetcher.setTexturesEnabled(enabled);
@@ -5392,6 +5556,7 @@ mapRenderer.mapNum = `dup_${this.mapNum}`;
     texFetcher.setModelVersion(ModelVersion.dup);
     texFetcher.setCurrentModelID(this.mapNum);  
 let firstMod: number | null = null;
+let primarySubdir = '';
 
 for (let row = 0; row < mapSceneInfo.getNumRows(); row++) {
   for (let col = 0; col < mapSceneInfo.getNumCols(); col++) {
@@ -5404,20 +5569,20 @@ for (let row = 0; row < mapSceneInfo.getNumRows(); row++) {
   if (firstMod !== null) break;
 }
 if (firstMod !== null) {
-    const subdir = getSubdir(firstMod, this.gameInfo);
-    if (this.mapNum === 32 || subdir === 'mmshrine') {
-              await texFetcher.loadSubdirs([subdir], context.dataFetcher);
+    primarySubdir = getSubdir(firstMod, this.gameInfo);
+    if (this.mapNum === 32 || primarySubdir === 'mmshrine') {
+        await texFetcher.loadSubdirs([primarySubdir], context.dataFetcher);
     } else {
-        await texFetcher.loadSubdirs([subdir, 'Copy of swaphol'], context.dataFetcher);
+        await texFetcher.loadSubdirs([primarySubdir, 'Copy of swaphol'], context.dataFetcher);
     }
-    if (subdir === 'gpshrine') {
+
+    if (primarySubdir === 'gpshrine') {
         await texFetcher.loadSubdirs(['dragrock'], context.dataFetcher);
-    } else if (subdir === 'mmshrine') {
+    } else if (primarySubdir === 'mmshrine') {
         await texFetcher.loadSubdirs(['gpshrine'], context.dataFetcher);
-            } else if (subdir === 'dbshrine') {
+    } else if (primarySubdir === 'dbshrine') {
         await texFetcher.loadSubdirs(['gpshrine'], context.dataFetcher);
     }
-} else {
 }
 
      await texFetcher.preloadPngOverrides(
@@ -5432,7 +5597,16 @@ if (firstMod !== null) {
       this.gameInfo, context.dataFetcher, device, materialFactory, animController, Promise.resolve(texFetcher)
     )
   );
-
+if (shouldUseSFAStyleSkyForSubdir(primarySubdir)) {
+    await initSFAStyleMapEnv(
+        mapRenderer,
+        materialFactory,
+        this.gameInfo,
+        context.dataFetcher,
+        texFetcher,
+        primarySubdir,
+    );
+}
   await mapRenderer.create(mapSceneInfo, this.gameInfo, context.dataFetcher, blockFetcher);
 
   ensureTextureToggleUI(async (enabled: boolean) => {
@@ -5530,63 +5704,67 @@ mapRenderer.mapNum = `early1_${this.mapNum}`;
     texFetcher.setCurrentModelID(this.mapNum);  
 let firstMod: number | null = null;
 
-for (let row = 0; row < mapSceneInfo.getNumRows(); row++) {
-  for (let col = 0; col < mapSceneInfo.getNumCols(); col++) {
-    const b = mapSceneInfo.getBlockInfoAt(col, row);
-    if (b) {
-      firstMod = b.mod;
-      break;
+for (let row = 0; row < mapSceneInfo.getNumRows() && firstMod === null; row++) {
+    for (let col = 0; col < mapSceneInfo.getNumCols(); col++) {
+        const b = mapSceneInfo.getBlockInfoAt(col, row);
+        if (b) {
+            firstMod = b.mod;
+            break;
+        }
     }
-  }
+}
+
+let primarySubdir = '';
 
 if (firstMod !== null) {
-    const subdir = getSubdir(firstMod, this.gameInfo);
-    
+    primarySubdir = getSubdir(firstMod, this.gameInfo);
+
     if (this.mapNum === 15) {
-        await texFetcher.loadSubdirs([subdir, 'cloudtreasure'], context.dataFetcher);
+        await texFetcher.loadSubdirs([primarySubdir, 'cloudtreasure'], context.dataFetcher);
     } else {
-        await texFetcher.loadSubdirs([subdir], context.dataFetcher);
+        await texFetcher.loadSubdirs([primarySubdir], context.dataFetcher);
     }
 
-    if (subdir === 'clouddungeon' || subdir === 'cloudrace') {
+    if (primarySubdir === 'clouddungeon' || primarySubdir === 'cloudrace') {
         await texFetcher.loadSubdirs(['crfort'], context.dataFetcher);
-    } else if (subdir === 'icemountain') {
+    } else if (primarySubdir === 'icemountain') {
         await texFetcher.loadSubdirs(['nwastes'], context.dataFetcher);
-    } else if (subdir === 'desert') {
+    } else if (primarySubdir === 'desert') {
         await texFetcher.loadSubdirs(['dfptop', 'volcano'], context.dataFetcher);
-    } else if (subdir === 'crfort') {
+    } else if (primarySubdir === 'crfort') {
         await texFetcher.loadSubdirs(['gpshrine'], context.dataFetcher);
-    } else if (subdir === 'linkb' || subdir === 'linkf') {
+    } else if (primarySubdir === 'linkb' || primarySubdir === 'linkf') {
         await texFetcher.loadSubdirs(['volcano'], context.dataFetcher);
-    } else if (subdir === 'shipbattle') {
+    } else if (primarySubdir === 'shipbattle') {
         await texFetcher.loadSubdirs([''], context.dataFetcher);
-    } else if (subdir === 'linkc') {
+    } else if (primarySubdir === 'linkc') {
         await texFetcher.loadSubdirs(['nwastes'], context.dataFetcher);
-    } else if (subdir === 'mmpass') {
+    } else if (primarySubdir === 'mmpass') {
         await texFetcher.loadSubdirs(['shop', 'warlock'], context.dataFetcher);
-    } else if (subdir === 'swaphol') {
+    } else if (primarySubdir === 'swaphol') {
         await texFetcher.loadSubdirs(['Copy of swaphol', 'nwastes', 'mmpass'], context.dataFetcher);
-    } else if (subdir === 'swapholbot' || subdir === 'shop') {
+    } else if (primarySubdir === 'swapholbot' || primarySubdir === 'shop') {
         await texFetcher.loadSubdirs(['Copy of swaphol', 'swaphol', 'ecshrine'], context.dataFetcher);
-    } else if (subdir === 'wallcity') {
+    } else if (primarySubdir === 'wallcity') {
         await texFetcher.loadSubdirs(['gpshrine'], context.dataFetcher);
-    } else if (subdir === 'darkicemines') {
+    } else if (primarySubdir === 'darkicemines') {
         await texFetcher.loadSubdirs(['shop', 'nwastes'], context.dataFetcher);
-    } else if (subdir === 'bossgaldon') {
+    } else if (primarySubdir === 'bossgaldon') {
         await texFetcher.loadSubdirs(['dragrock'], context.dataFetcher);
-    } else if (subdir === 'nwastes') {
+    } else if (primarySubdir === 'nwastes') {
         await texFetcher.loadSubdirs(['icemountain'], context.dataFetcher);
     }
 }
+
 const SWAPHOL_EARLY1_MAPNUM = 7;
 const SWAPHOLBOT_EARLY1_MAPNUM = 8;
 const KRAZOA_PALACE_EARLY1_MAPNUM = 11;
-const CLOUD_RACE_EARLY1_MAPNUM = 43;      
+const CLOUD_RACE_EARLY1_MAPNUM = 43;
 const CLOUD_TREASURE_EARLY1_MAPNUM = 15;
-const CLOUD_DUNGEON_EARLY1_MAPNUM = 16;   
+const CLOUD_DUNGEON_EARLY1_MAPNUM = 16;
 const CAPE_CLAW_EARLY1_MAPNUM = 29;
 const LINK_LEVEL_EARLY1_MAPNUM = 64;
-const DRAGON_ROCK_BOTTOM_EARLY1_MAPNUM = 52; 
+const DRAGON_ROCK_BOTTOM_EARLY1_MAPNUM = 52;
 
 if (this.mapNum === DRAGON_ROCK_BOTTOM_EARLY1_MAPNUM) {
     await texFetcher.loadSubdirs(['dragrockbot'], context.dataFetcher);
@@ -5609,7 +5787,7 @@ if (this.mapNum === KRAZOA_PALACE_EARLY1_MAPNUM) {
 }
 
 if (this.mapNum === CLOUD_RACE_EARLY1_MAPNUM || this.mapNum === CLOUD_DUNGEON_EARLY1_MAPNUM) {
-    await texFetcher.loadSubdirs(['crfort'], context.dataFetcher); 
+    await texFetcher.loadSubdirs(['crfort'], context.dataFetcher);
     texFetcher.preferCopyOfSwapholForModelIDs([this.mapNum as number]);
 }
 
@@ -5626,7 +5804,7 @@ if (this.mapNum === CAPE_CLAW_EARLY1_MAPNUM) {
 if (this.mapNum === LINK_LEVEL_EARLY1_MAPNUM) {
     await texFetcher.loadSubdirs(['linklevel'], context.dataFetcher);
     texFetcher.preferCopyOfSwapholForModelIDs([LINK_LEVEL_EARLY1_MAPNUM]);
-}
+
 }
     texFetcher.setPngOverride(3000, 'textures/wcblue.png');
     texFetcher.setPngOverride(3500, 'textures/wcfloor.png');
@@ -5647,7 +5825,16 @@ texFetcher.setPngOverride(3614, 'textures/MMSHfloor.png');
 mapRenderer.setBlockFetcherFactory(() => EARLY1BLOCKFETCHER.create(
   this.gameInfo, context.dataFetcher, device, materialFactory, animController, Promise.resolve(texFetcher)
 ));
-
+if (shouldUseSFAStyleSkyForSubdir(primarySubdir)) {
+    await initSFAStyleMapEnv(
+        mapRenderer,
+        materialFactory,
+        this.gameInfo,
+        context.dataFetcher,
+        texFetcher,
+        primarySubdir,
+    );
+}
     await mapRenderer.create(mapSceneInfo, this.gameInfo, context.dataFetcher, blockFetcher);
 
 ensureTextureToggleUI(async (enabled: boolean) => {
@@ -5713,6 +5900,7 @@ if (musicState.audio) {
         const texFetcher = await SFATextureFetcher.create(this.gameInfo, context.dataFetcher, false);
        texFetcher.setModelVersion(ModelVersion.Early2);
 let firstMod: number | null = null;
+let primarySubdir = '';
 
 for (let row = 0; row < mapSceneInfo.getNumRows(); row++) {
   for (let col = 0; col < mapSceneInfo.getNumCols(); col++) {
@@ -5726,18 +5914,28 @@ for (let row = 0; row < mapSceneInfo.getNumRows(); row++) {
 }
 
 if (firstMod !== null) {
-  const subdir = getSubdir(firstMod, this.gameInfo);
-  await texFetcher.loadSubdirs([subdir], context.dataFetcher);
+  primarySubdir = getSubdir(firstMod, this.gameInfo);
+  await texFetcher.loadSubdirs([primarySubdir], context.dataFetcher);
 
-  if (subdir === 'clouddungeon') {
+  if (primarySubdir === 'clouddungeon') {
     await texFetcher.loadSubdirs(['crfort'], context.dataFetcher);
-    }
-  if (subdir === 'crfort') {
-    await texFetcher.loadSubdirs(['gpshrine'], context.dataFetcher);
-
   }
+  if (primarySubdir === 'crfort') {
+    await texFetcher.loadSubdirs(['gpshrine'], context.dataFetcher);
+  }
+
 }    
         const blockFetcher = await EARLY2BLOCKFETCHER.create(this.gameInfo,context.dataFetcher, device, materialFactory, animController, Promise.resolve(texFetcher));
+        if (shouldUseSFAStyleSkyForSubdir(primarySubdir)) {
+    await initSFAStyleMapEnv(
+        mapRenderer,
+        materialFactory,
+        this.gameInfo,
+        context.dataFetcher,
+        texFetcher,
+        primarySubdir,
+    );
+}
         await mapRenderer.create(mapSceneInfo, this.gameInfo, context.dataFetcher, blockFetcher);
 
         const matrix = mat4.create();
@@ -5804,6 +6002,7 @@ texFetcher.setModelVersion(ModelVersion.Early3);
 await texFetcher.loadSubdirs([''], context.dataFetcher);
 
 let firstMod: number | null = null;
+let primarySubdir = '';
 
 for (let row = 0; row < mapSceneInfo.getNumRows(); row++) {
   for (let col = 0; col < mapSceneInfo.getNumCols(); col++) {
@@ -5818,11 +6017,11 @@ for (let row = 0; row < mapSceneInfo.getNumRows(); row++) {
 }
 
 if (firstMod !== null) {
-  const subdir = getSubdir(firstMod, this.gameInfo);
+  primarySubdir = getSubdir(firstMod, this.gameInfo);
 
-  await texFetcher.loadSubdirs([subdir], context.dataFetcher);
+  await texFetcher.loadSubdirs([primarySubdir], context.dataFetcher);
 
-  if (subdir === 'swapholbot' || subdir === 'shop') {
+  if (primarySubdir === 'swapholbot' || primarySubdir === 'shop') {
     await texFetcher.loadSubdirs(['Copy of swaphol', 'swaphol', 'ecshrine'], context.dataFetcher);
   }
 }
@@ -5843,7 +6042,16 @@ texFetcher.setPngOverride(3500, 'textures/wcfloor.png');
         this.gameInfo, context.dataFetcher, device, materialFactory, animController, Promise.resolve(texFetcher)
       )
     );
-
+if (shouldUseSFAStyleSkyForSubdir(primarySubdir)) {
+    await initSFAStyleMapEnv(
+        mapRenderer,
+        materialFactory,
+        this.gameInfo,
+        context.dataFetcher,
+        texFetcher,
+        primarySubdir,
+    );
+}
     await mapRenderer.create(mapSceneInfo, this.gameInfo, context.dataFetcher, blockFetcher);
 
     ensureTextureToggleUI(async (enabled: boolean) => {
@@ -5888,7 +6096,7 @@ await texFetcher.loadSubdirs([''], context.dataFetcher);
 texFetcher.setCurrentModelID(this.mapNum);
 
 let firstMod: number | null = null;
-
+let primarySubdir = '';
 for (let row = 0; row < mapSceneInfo.getNumRows(); row++) {
   for (let col = 0; col < mapSceneInfo.getNumCols(); col++) {
     const b = mapSceneInfo.getBlockInfoAt(col, row);
@@ -5902,11 +6110,11 @@ for (let row = 0; row < mapSceneInfo.getNumRows(); row++) {
 }
 
 if (firstMod !== null) {
-  const subdir = getSubdir(firstMod, this.gameInfo);
+  primarySubdir = getSubdir(firstMod, this.gameInfo);
 
-  await texFetcher.loadSubdirs([subdir], context.dataFetcher);
+  await texFetcher.loadSubdirs([primarySubdir], context.dataFetcher);
 
-  if (subdir === 'swapholbot' || subdir === 'shop') {
+  if (primarySubdir === 'swapholbot' || primarySubdir === 'shop') {
     await texFetcher.loadSubdirs(['Copy of swaphol', 'swaphol', 'ecshrine'], context.dataFetcher);
   }
 }
@@ -5923,6 +6131,16 @@ texFetcher.setPngOverride(3610, 'textures/wcbluehead.png');
     );
 
         const blockFetcher = await EARLY4BLOCKFETCHER.create(this.gameInfo,context.dataFetcher, device, materialFactory, animController, Promise.resolve(texFetcher));
+       if (shouldUseSFAStyleSkyForSubdir(primarySubdir)) {
+    await initSFAStyleMapEnv(
+        mapRenderer,
+        materialFactory,
+        this.gameInfo,
+        context.dataFetcher,
+        texFetcher,
+        primarySubdir,
+    );
+}
         await mapRenderer.create(mapSceneInfo, this.gameInfo, context.dataFetcher, blockFetcher);
 
        const matrix = mat4.create();

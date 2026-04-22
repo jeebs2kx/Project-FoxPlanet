@@ -377,17 +377,23 @@ public update(updateCtx: ObjectUpdateContext) {
         this.internalClass.update(this, updateCtx);
 }
 
-    private isFrustumCulled(viewerInput: ViewerRenderInput): boolean {
-        const worldMtx = scratchMtx0;
-        this.getWorldSRT(worldMtx);
-        const worldPos = scratchVec0;
-        getMatrixTranslation(worldPos, worldMtx);
-        return !viewerInput.camera.frustum.containsSphere(worldPos, this.cullRadius * this.scale);
-    }
+  private isFrustumCulled(viewerInput: ViewerRenderInput): boolean {
+    if (this.world.gameInfo.pathBase === 'StarFoxAdventuresDemo' && this.cullRadius <= 10)
+        return false;
+
+    const worldMtx = scratchMtx0;
+
+    this.getWorldSRT(worldMtx);
+
+    const worldPos = scratchVec0;
+
+    getMatrixTranslation(worldPos, worldMtx);
+
+    return !viewerInput.camera.frustum.containsSphere(worldPos, this.cullRadius * this.scale);
+}
 
     public addRenderInsts(device: GfxDevice, renderInstManager: GfxRenderInstManager, renderLists: SFARenderLists | null, objectCtx: ObjectRenderContext) {
         if (this.modelInst !== null && this.modelInst !== undefined && !this.isFrustumCulled(objectCtx.sceneCtx.viewerInput)) {
-            // Update animation
             if (this.anim !== null && (!this.modelInst.model.hasFineSkinning || this.world.animController.enableFineSkinAnims)) {
                 applyAnimationToModel(this.world.animController.animController.getTimeInFrames() * this.animSpeed, this.modelInst, this.anim, this.modelAnimNum!);
             }

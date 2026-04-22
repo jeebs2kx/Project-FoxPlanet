@@ -3,7 +3,7 @@ import { DataFetcher } from '../DataFetcher.js';
 import { Color, colorNewFromRGBA, colorCopy, colorNewCopy, colorFromRGBA, White, colorScale } from '../Color.js';
 import { nArray } from '../util.js';
 
-import { SFATexture } from './textures.js';
+import { SFATexture, SFATextureFetcher } from './textures.js';
 import { dataSubarray, readUint16 } from './util.js';
 import { ObjectInstance } from './objects.js';
 import { World } from './world.js';
@@ -32,20 +32,45 @@ class Skyscape {
 
 const scratchMtx0 = mat4.create();
 const MIST_TEXTURE_DIM = 64;
+const FORCE_KIOSK_TEXTURE_ONLY_SKY = true;
+const KIOSK_SKY_TEXTURE_PATHBASE = 'StarFoxAdventures';
+const KIOSK_TEXTURE_ONLY_ATMOS_TEXIDS_BY_SUBDIR: Record<string, number[] | null> = {
+    swaphol:  [176, 154, 153, 151, 149, 148, 169, 152],
+    capeclaw: [157, 181, 183, 180, 184, 182, 182, 182],
+    darkicemines: [157, 147, 153, 150, 149, 148,],
+    icemountain: [157, 147, 153, 150, 149, 148,],
+    lightfoot: [146, 156, 149, 150, 153, 178,],
+mmpass: [146, 171, 156, 168, 167, 162, 161],
+nwastes: [157, 147, 153, 150, 149, 147,],
+volcano: [157, 147, 153, 150, 149, 147,],
+warlock: [146,],
+wallcity: [176, 154, 153,151,149,148,146],
+dfptop: [176, 154, 153,151,149,148,146],
+dragrock: [176, 154, 153,151,149,148,146],
+crfort: [164,165,166,167,168,169,170,171],
+shop: null,
+
+};
+
+const TEXTURE_ONLY_SKY_SUBDIR_ALIASES: Record<string, string> = {
+
+};
 
 export class EnvfxManager {
     public atmosphere = new Atmosphere();
     public skyscape = new Skyscape();
     private timeOfDay = 4;
-    public ambienceIdx: number = 0;
-    public enableAmbientLighting = true;
-    public enableFog = true;
+public ambienceIdx: number = 0;
+public enableAmbientLighting = true;
+public enableFog = true;
+public hasLoadedAtmosphereEnvfx = false;
     
     public skyLight: Light = createDirectionalLight(vec3.fromValues(-1.0, -1.0, -1.0), White);
     public groundLight: Light = createDirectionalLight(vec3.fromValues(1.0, 1.0, 1.0), White);
     private groundLightFactor: number = 1.0;
 
     private envfxactBin!: DataView;
+    private kioskTextureOnlySkyFetcher: SFATextureFetcher | null = null;
     private readonly ENVFX_SIZE = 0x60;
 
     public mistEnable = true;
@@ -58,13 +83,22 @@ export class EnvfxManager {
         this.mistTexture = SFATexture.create(this.world.renderCache, MIST_TEXTURE_DIM, MIST_TEXTURE_DIM);
     }
 
-    public static async create(world: World, dataFetcher: DataFetcher): Promise<EnvfxManager> {
-        const self = new EnvfxManager(world);
-        const pathBase = world.gameInfo.pathBase;
-const isDP = world.gameInfo.pathBase.toLowerCase().includes('dp');
+public static async create(world: World, dataFetcher: DataFetcher): Promise<EnvfxManager> {
+    const self = new EnvfxManager(world);
+
+const pathBase = world.gameInfo.pathBase;
+const isDP = pathBase.toLowerCase().includes('dp');
+
 const envName = isDP ? 'ENVACT.bin' : 'ENVFXACT.bin';
-self.envfxactBin = (await dataFetcher.fetchData(`${pathBase}/${envName}`)).createDataView();        return self;
-    }
+self.envfxactBin = (await dataFetcher.fetchData(`${pathBase}/${envName}`)).createDataView();
+
+if (!isDP && FORCE_KIOSK_TEXTURE_ONLY_SKY) {
+    const skyGameInfo = { ...world.gameInfo, pathBase: KIOSK_SKY_TEXTURE_PATHBASE };
+    self.kioskTextureOnlySkyFetcher = await SFATextureFetcher.create(skyGameInfo, dataFetcher, false);
+}
+
+    return self;
+}
 
     public update(device: GfxDevice, sceneCtx: SceneUpdateContext) {
         this.updateAmbience();
@@ -110,6 +144,49 @@ self.envfxactBin = (await dataFetcher.fetchData(`${pathBase}/${envName}`)).creat
     public getFogColor(dst: Color, ambienceIdx: number) { this.getAmbientColor(dst, ambienceIdx); }
     public getAtmosphereTexture(): SFATexture | null { return this.atmosphere.textures[this.timeOfDay]; }
 
+private getKioskTextureOnlyAtmosTexIds(): number[] | null {
+    const primarySubdir = this.world.subdirs[0] ?? '';
+    const profileSubdir = TEXTURE_ONLY_SKY_SUBDIR_ALIASES[primarySubdir] ?? primarySubdir;
+    return KIOSK_TEXTURE_ONLY_ATMOS_TEXIDS_BY_SUBDIR[profileSubdir] ?? null;
+}
+
+public shouldForceTextureOnlySky(): boolean {
+    if (!FORCE_KIOSK_TEXTURE_ONLY_SKY)
+        return false;
+
+    if (this.kioskTextureOnlySkyFetcher === null)
+        return false;
+
+    return this.getKioskTextureOnlyAtmosTexIds() !== null;
+}
+
+public forceKioskTextureOnlySky(): void {
+    if (this.world.gameInfo.pathBase !== 'StarFoxAdventuresDemo')
+        return;
+
+    if (!FORCE_KIOSK_TEXTURE_ONLY_SKY)
+        return;
+
+    if (this.kioskTextureOnlySkyFetcher === null)
+        return;
+
+    this.skyscape.objects = [];
+
+    const texIds = this.getKioskTextureOnlyAtmosTexIds();
+
+    // Unlisted map or explicit indoor map like shop => no sky.
+    if (texIds === null) {
+        this.atmosphere.textures = nArray(8, () => null);
+        return;
+    }
+
+    this.atmosphere.textures = nArray(8, () => null);
+
+    for (let i = 0; i < Math.min(8, texIds.length); i++) {
+        this.atmosphere.textures[i] =
+            this.kioskTextureOnlySkyFetcher.getDirectTextureByID(this.world.renderCache, texIds[i], false);
+    }
+}
     public loadEnvfx(index: number) {
         const byteOffs = index * this.ENVFX_SIZE;
         if (byteOffs + this.ENVFX_SIZE > this.envfxactBin.byteLength) return;
@@ -118,6 +195,7 @@ self.envfxactBin = (await dataFetcher.fetchData(`${pathBase}/${envName}`)).creat
         const fields = { index, type: data.getUint8(0x5c) };
 
         if (fields.type === EnvfxType.Atmosphere) {
+    this.hasLoadedAtmosphereEnvfx = true;
             const isDP = this.world.gameInfo.pathBase.toLowerCase().includes('dp');
             const BASE = isDP ? 0 : 0xc38;
 
@@ -137,41 +215,48 @@ self.envfxactBin = (await dataFetcher.fetchData(`${pathBase}/${envName}`)).creat
                 else if (i === 2) { this.atmosphere.outdoorAmbientColors[3] = this.atmosphere.outdoorAmbientColors[4] = c; }
                 else if (i === 3) { this.atmosphere.outdoorAmbientColors[5] = this.atmosphere.outdoorAmbientColors[6] = c; }
             }
-} else if (fields.type === EnvfxType.Skyscape) {
-    this.skyscape.objects = [];
-    
-    const SKY_RING_TYPES = [0, 769, 616, 1377]; 
-    const MOUNTAIN_TYPES = [0, 239, 0, 0, 0];   
-    const SKYSCAPE_TYPES = [0, 1017, 1018, 1389, 0]; 
+        } else if (fields.type === EnvfxType.Skyscape) {
+            this.skyscape.objects = [];
 
-    const skyscapeType = data.getUint8(0x5d);
-    const skyRingType = data.getUint8(0x5b);
-    const mountainType = data.getUint8(0x5a);
+            const SKY_RING_TYPES = [0, 769, 616, 1377];
+            const MOUNTAIN_TYPES = [0, 239, 0, 0, 0];
+            const SKYSCAPE_TYPES = [0, 1017, 1018, 1389, 0];
 
-    const safeSpawn = (typeId: number) => {
-        if (!typeId) return;
-        try {
-const obj = this.world.objectMan.createObjectInstance(
-    typeId,
-    new DataView(new ArrayBuffer(0x80)),
-    vec3.create(),
-    /*skipObjindex=*/true
-);            if (obj) {
-                obj.cullRadius = 999999; 
-                                obj.scale = 1.0; 
-                
-                this.skyscape.objects.push(obj);
-            }
-        } catch (e) {
+            const skyscapeType = data.getUint8(0x5d);
+            const skyRingType = data.getUint8(0x5b);
+            const mountainType = data.getUint8(0x5a);
+
+            const safeSpawn = (typeId: number) => {
+                if (!typeId) return;
+                try {
+                    const obj = this.world.objectMan.createObjectInstance(
+                        typeId,
+                        new DataView(new ArrayBuffer(0x80)),
+                        vec3.create(),
+                        /*skipObjindex=*/true
+                    );
+                    if (obj) {
+                        obj.cullRadius = 999999;
+                        obj.scale = 1.0;
+
+                        this.skyscape.objects.push(obj);
+                    }
+                } catch (e) {
+                }
+            };
+
+            safeSpawn(SKYSCAPE_TYPES[skyscapeType] || 0);
+            safeSpawn(SKY_RING_TYPES[skyRingType] || 0);
+            safeSpawn(MOUNTAIN_TYPES[mountainType] || 0);
         }
-    };
 
-    safeSpawn(SKYSCAPE_TYPES[skyscapeType] || 0);
-    safeSpawn(SKY_RING_TYPES[skyRingType] || 0);
-    safeSpawn(MOUNTAIN_TYPES[mountainType] || 0);
-}
+        if (this.world.gameInfo.pathBase === 'StarFoxAdventuresDemo' && FORCE_KIOSK_TEXTURE_ONLY_SKY)
+            this.forceKioskTextureOnlySky();
+
         return fields;
     }
 
-    public destroy(device: GfxDevice) { this.skyscape.destroy(device); }
-}
+public destroy(device: GfxDevice) {
+    this.skyscape.destroy(device);
+    this.kioskTextureOnlySkyFetcher?.destroy(device);
+}}
