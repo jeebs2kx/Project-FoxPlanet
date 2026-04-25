@@ -1320,6 +1320,60 @@ function getModelDebugTriangleCount(modelInst: ModelInstance | undefined): numbe
 
     return found ? total : null;
 }
+
+async function collectDPDiamondBayTextureIds(
+    dataFetcher: DataFetcher,
+    materialFactory: MaterialFactory,
+    texFetcher: TextureFetcher,
+): Promise<number[]> {
+    const DP_DIAMOND_BAY_MAP = 35;
+
+    const mapInfo = await loadMap(DP_GAME_INFO, dataFetcher, DP_DIAMOND_BAY_MAP);
+
+    const dpBlockFetcher = await DPBlockFetcher.create(
+        DP_GAME_INFO,
+        dataFetcher,
+        materialFactory,
+        Promise.resolve(texFetcher),
+    );
+
+    const seen = new Set<number>();
+
+    for (let row = 0; row < mapInfo.getNumRows(); row++) {
+        for (let col = 0; col < mapInfo.getNumCols(); col++) {
+            const b = mapInfo.getBlockInfoAt(col, row);
+            if (!b)
+                continue;
+
+            try {
+                const model = await dpBlockFetcher.fetchBlock(b.mod, b.sub, dataFetcher);
+                const mats = (((model as any)?.debugMaterialInfo ?? []) as any[]);
+
+                for (const m of mats) {
+                    const ids: number[] = Array.isArray(m?.texIds)
+                        ? m.texIds
+                        : typeof m?.texId === 'number'
+                            ? [m.texId]
+                            : [];
+
+                    for (const id of ids) {
+                        if (typeof id === 'number' && id >= 0)
+                            seen.add(id | 0);
+                    }
+                }
+            } catch (e) {
+                console.warn(`[MOD49 DP TEX COLLECT] failed block mod=${b.mod} sub=${b.sub}`, e);
+            }
+        }
+    }
+
+    const ids = Array.from(seen.values()).sort((a, b) => a - b);
+
+    console.warn(`[MOD49 DP TEX COLLECT] Diamond Bay texture IDs:`, ids);
+
+    return ids;
+}
+
 function getClipFromWorldMatrix(viewerInput: Viewer.ViewerRenderInput): mat4 | null {
     const cam: any = viewerInput.camera;
     if (cam?.clipFromWorldMatrix)
@@ -3836,7 +3890,6 @@ exportNote.style.opacity = '0.8';
 exportPanel.contents.appendChild(exportNote);
 
 panels.push(exportPanel);
-        // const exportPanel = new UI.Panel(); // remove this if unused
     }
 
     return panels;
@@ -5621,6 +5674,81 @@ if (shouldUseSFAStyleSkyForSubdir(primarySubdir)) {
 
   return mapRenderer;
 }
+}
+
+
+
+export class Mod49SceneDesc implements Viewer.SceneDesc {
+    constructor(
+        public id: string = 'mod49',
+        public name: string = 'Unused DBay MOD49',
+        private gameInfo: GameInfo = SFA_GAME_INFO,
+    ) {}
+
+    public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+        const animController = new SFAAnimationController();
+        const materialFactory = new MaterialFactory(device);
+        const dpDiamondBayInfo = await loadMap(DP_GAME_INFO, context.dataFetcher, 35);
+        const mapSceneInfo: MapSceneInfo = {
+            getNumCols() {
+                return dpDiamondBayInfo.getNumCols();
+            },
+
+            getNumRows() {
+                return dpDiamondBayInfo.getNumRows();
+            },
+
+            getOrigin() {
+                return dpDiamondBayInfo.getOrigin();
+            },
+
+            getBlockInfoAt(col: number, row: number): BlockInfo | null {
+                const block = dpDiamondBayInfo.getBlockInfoAt(col, row);
+                if (block === null)
+                    return null;
+
+                return {
+                    mod: 49,
+                    sub: block.sub,
+                };
+            },
+        };
+
+        const mapRenderer = new MapSceneRenderer(context, animController, materialFactory);
+        mapRenderer.mapNum = this.id;
+        const texFetcher = await SFATextureFetcher.create(DP_GAME_INFO, context.dataFetcher, false);
+        texFetcher.setModelVersion(ModelVersion.DinosaurPlanet);
+
+        const dpDBayTexIds = await collectDPDiamondBayTextureIds(
+            context.dataFetcher,
+            materialFactory,
+            texFetcher,
+        );
+
+        (globalThis as any).__MOD49_DP_DBAY_TEXIDS = dpDBayTexIds;
+
+        console.warn(
+            `[MOD49] using ${dpDBayTexIds.length} Dinosaur Planet Diamond Bay texture IDs`,
+            dpDBayTexIds,
+        );
+
+        const blockFetcher = await EARLY1BLOCKFETCHER.create(
+            this.gameInfo,
+            context.dataFetcher,
+            device,
+            materialFactory,
+            animController,
+            Promise.resolve(texFetcher),
+        );
+
+        await mapRenderer.create(mapSceneInfo, this.gameInfo, context.dataFetcher, blockFetcher);
+
+        const matrix = mat4.create();
+        mat4.rotateY(matrix, matrix, Math.PI * 3 / 4);
+        mapRenderer.setMatrix(matrix);
+
+        return mapRenderer;
+    }
 }
 
 

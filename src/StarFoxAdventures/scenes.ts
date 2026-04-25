@@ -1,6 +1,6 @@
 import * as Viewer from '../viewer.js';
 
-import { SFAMapSceneDesc, SFABlockGallerySceneDesc, SwapcircleSceneDesc, AncientMapSceneDesc, EarlydupMapSceneDesc, EarlyfearMapSceneDesc, EarlyDFPMapSceneDesc, Early1MapSceneDesc, Early2MapSceneDesc, Early3MapSceneDesc, Early4MapSceneDesc } from './maps.js';
+import { SFAMapSceneDesc, SFABlockGallerySceneDesc, SwapcircleSceneDesc, AncientMapSceneDesc, EarlydupMapSceneDesc, EarlyfearMapSceneDesc, EarlyDFPMapSceneDesc, Early1MapSceneDesc, Early2MapSceneDesc, Early3MapSceneDesc, Early4MapSceneDesc, Mod49SceneDesc } from './maps.js';
 import { SFAWorldSceneDesc, SFAFullFinalWorldSceneDesc } from './world.js';
 import { SFAModelExhibitSceneDesc, SFATextureExhibitSceneDesc } from './modelexhibit.js';import { ModelVersion } from './modelloader.js';
 import { EARLYFEAR } from './blocks.js';
@@ -202,7 +202,6 @@ const ANCIENT_DP_GAME_INFO: GameInfo = {
 const sceneDescs = [
     'StarFox Adventures Maps - Oldest to Newest',
     "Model Viewer",
-
 new SFAModelExhibitSceneDesc('modelexhibit', 'Model + Animation Viewer (Final)', ModelVersion.Final),
 new SFAModelExhibitSceneDesc('modelexhibit', 'Model + Animation Viewer (Kiosk)', ModelVersion.Final, SFADEMO_GAME_INFO),
 new SFAModelExhibitSceneDesc('betamodelexhibit', 'Early 2001 Model Viewer (Swapcircle)', ModelVersion.Beta, SFADEMO_GAME_INFO),
@@ -220,6 +219,7 @@ new SFAFullFinalWorldSceneDesc('Full Final World'),
 new SFAFullFinalWorldSceneDesc('Full Kiosk World', SFADEMO_GAME_INFO),
 
 'Very Early 2001 Maps',
+new Mod49SceneDesc('mod49', 'Very Early 2001: Diamond Bay', SFA_GAME_INFO),
  new SwapcircleSceneDesc(22, 'betaswapcircle', 'Very Early 2001: Swapstone Circle (T)', SFADEMO_GAME_INFO),
 new EarlyDFPMapSceneDesc(50, 'demo50', 'Very Early 2001: Desert Force Point - Top (T)', SFADEMO_GAME_INFO),
 new EarlyfearMapSceneDesc(33, 'demo33', 'Very Early 2001: Test of Fear (T)', SFADEMO_GAME_INFO),

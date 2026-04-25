@@ -38,31 +38,120 @@ export class BlockCollection {
     }
 
     public getBlockModel(num: number): Model | null {
+        if (num >= 1146 && num <= 1182) {
+    console.warn(`[MOD49] ENTER getBlockModel num=${num}`, {
+        tabByteLength: this.tab.byteLength,
+        binByteLength: this.bin.byteLength,
+        cached: this.blockModels[num] !== undefined,
+    });
+}
         if (this.blockModels[num] === undefined) {
-            const tabValue = readUint32(this.tab, 0, num);
-            if (!(tabValue & 0x10000000))
-                return null;
+const tabValue = readUint32(this.tab, 0, num);
 
-            const blockOffset = tabValue & 0xffffff;
-            const blockBin = this.bin.subarray(blockOffset);
-            const uncomp = this.isCompressed ? loadRes(blockBin) : blockBin;
+if (num >= 1146 && num <= 1182) {
+    console.warn(`[MOD49] tab read num=${num}`, {
+        tabValue: `0x${tabValue.toString(16)}`,
+        hasFlag: !!(tabValue & 0x10000000),
+        offset: `0x${(tabValue & 0x0fffffff).toString(16)}`,
+        modelVersion: ModelVersion[this.modelVersion],
+        isCompressed: this.isCompressed,
+    });
+}
 
-            if (uncomp === null)
-                return null;
+if (tabValue === 0xffffffff) {
+    console.warn(`[MOD49] RETURN NULL: tab entry empty num=${num}`);
+    return null;
+}
 
-            this.blockModels[num] = loadModel(uncomp.createDataView(), this.texFetcher, this.materialFactory, this.modelVersion);
-       const m = this.blockModels[num]!;
+const blockOffset = (tabValue & 0x10000000)
+    ? (tabValue & 0x0fffffff)
+    : tabValue;
+
+if (blockOffset >= this.bin.byteLength) {
+    console.warn(`[MOD49] RETURN NULL: bad blockOffset num=${num}`, {
+        tabValue: `0x${tabValue.toString(16)}`,
+        blockOffset: `0x${blockOffset.toString(16)}`,
+        binByteLength: this.bin.byteLength,
+    });
+    return null;
+}
+
+let blockBin: ArrayBufferSlice;
+
+if (this.isCompressed) {
+    blockBin = this.bin.subarray(blockOffset);
+} else {
+    let blockEnd = this.bin.byteLength;
+
+    for (let i = num + 1; i * 4 < this.tab.byteLength; i++) {
+        const nextValue = readUint32(this.tab, 0, i);
+
+        if (nextValue === 0xffffffff)
+            break;
+
+const nextOffset = (nextValue & 0x10000000)
+    ? (nextValue & 0x0fffffff)
+    : nextValue;
+
+        if (nextOffset > blockOffset && nextOffset <= this.bin.byteLength) {
+            blockEnd = nextOffset;
+            break;
+        }
+    }
+
+    blockBin = this.bin.subarray(blockOffset, blockEnd - blockOffset);
+}
+
+const uncomp = this.isCompressed ? loadRes(blockBin) : blockBin;
+
+if (uncomp === null) {
+    console.warn(`[MOD49] RETURN NULL: uncomp null num=${num}`);
+    return null;
+}
+
+if (num >= 1146 && num <= 1182) {
+    console.warn(`[MOD49] ABOUT TO loadModel num=${num}`, {
+        byteLength: uncomp.byteLength,
+        modelVersion: ModelVersion[this.modelVersion],
+    });
+}
+
+
+
+if (this.modelVersion === ModelVersion.DinosaurPlanet) {
+    this.materialFactory.beginDPMapBlockBuild();
+    try {
+this.blockModels[num] = loadModel(
+    uncomp.createDataView(),
+    this.texFetcher,
+    this.materialFactory,
+    this.modelVersion,
+    num,
+);
+    } finally {
+        this.materialFactory.endDPMapBlockBuild();
+    }
+} else {
+this.blockModels[num] = loadModel(
+    uncomp.createDataView(),
+    this.texFetcher,
+    this.materialFactory,
+    this.modelVersion,
+    num,
+);
+}
+
+const m = this.blockModels[num]!;
 const ms = m.sharedModelShapes;
 
-if (!ms) {
-  //  console.warn(`[Swapcircle DEBUG] model num=${num} has NO sharedModelShapes`);
-} else {
-    const c0 = ms.shapes[0]?.length ?? 0;
-    const c1 = ms.shapes[1]?.length ?? 0;
-    const c2 = ms.shapes[2]?.length ?? 0;
-    const cw = ms.waters?.length ?? 0;
-    const cf = ms.furs?.length ?? 0;
-}
+console.warn(`[MOD49] block=${num} version=${ModelVersion[this.modelVersion]} byteLength=${uncomp.byteLength}`, {
+    shape0: ms?.shapes[0]?.length ?? 0,
+    shape1: ms?.shapes[1]?.length ?? 0,
+    shape2: ms?.shapes[2]?.length ?? 0,
+    waters: ms?.waters?.length ?? 0,
+    furs: ms?.furs?.length ?? 0,
+    wireframes: (ms as any)?.wireframes?.length ?? 0,
+});
 
         }
 
@@ -82,6 +171,36 @@ function getModFileNum(mod: number): number {
     } else {
         return mod + 1;
     }
+}
+
+function dumpMod49OldHeader(num: number, data: DataView): void {
+    const b = (offs: number) => data.getUint8(offs);
+    const u16 = (offs: number) => data.getUint16(offs, false);
+
+    const stride = u16(0x39);
+    const vertexCount = u16(0x3B);
+    const polyCount = u16(0x3D);
+    const groupCount = u16(0x3F);
+
+    const vertexStart = 0x88;
+    const vertexEnd = vertexStart + vertexCount * stride;
+    const polyStart = vertexEnd;
+
+    console.warn(`[MOD49 OLD FORMAT] block=${num}`, {
+        byteLength: data.byteLength,
+        stride,
+        vertexCount,
+        polyCount,
+        groupCount,
+        vertexStart: `0x${vertexStart.toString(16)}`,
+        vertexEnd: `0x${vertexEnd.toString(16)}`,
+        polyStart: `0x${polyStart.toString(16)}`,
+        firstBytes: Array.from({ length: 0x20 }, (_, i) => b(i).toString(16).padStart(2, '0')).join(' '),
+        nameGuess: String.fromCharCode(
+            b(0x58), b(0x59), b(0x5A), b(0x5B),
+            b(0x5C), b(0x5D), b(0x5E),
+        ),
+    });
 }
 
 export class SFABlockFetcher implements BlockFetcher {
@@ -327,7 +446,7 @@ export class EARLY1BLOCKFETCHER implements BlockFetcher {
     public async init(dataFetcher: DataFetcher, texFetcherPromise: Promise<TextureFetcher>) {
         const pathBase = this.gameInfo.pathBase;
         const [trkblk, texFetcher] = await Promise.all([
-            dataFetcher.fetchData(`${pathBase}/TRKBLK.tab`), //required
+            dataFetcher.fetchData(`${pathBase}/TRKBLK.tab`), 
             texFetcherPromise,
         ]);
         this.trkblkTab = trkblk.createDataView();
@@ -340,18 +459,51 @@ export class EARLY1BLOCKFETCHER implements BlockFetcher {
         return self;
     }
 
-    public async fetchBlock(mod: number, sub: number, dataFetcher: DataFetcher): Promise<Model | null> {
-        if (mod < 0 || mod * 2 >= this.trkblkTab.byteLength) {
-            return null;
-        }
+public async fetchBlock(mod: number, sub: number, dataFetcher: DataFetcher): Promise<Model | null> {
+    if (mod === 49) {
+        console.warn(`[MOD49] fetchBlock mod=${mod} sub=${sub}`);
 
         const blockColl = await this.fetchBlockCollection(mod, dataFetcher);
-        const trkblk = this.trkblkTab.getUint16(mod * 2);
-        const blockNum = trkblk + sub;
+        const blockNum = 1146 + sub;
+
+        console.warn(`[MOD49] using blockNum=${blockNum}`);
+
         return blockColl.getBlockModel(blockNum);
     }
 
+    if (mod < 0 || mod * 2 >= this.trkblkTab.byteLength) {
+        return null;
+    }
+
+    const blockColl = await this.fetchBlockCollection(mod, dataFetcher);
+    const blockNum = this.trkblkTab.getUint16(mod * 2) + sub;
+
+    return blockColl.getBlockModel(blockNum);
+}
+
     public async fetchBlockCollection(mod: number, dataFetcher: DataFetcher): Promise<BlockCollection> {
+if (mod === 49) {
+    if (this.blockColls[mod] === undefined) {
+        const subdir = 'dbay';
+        const MOD49_MODEL_VERSION = ModelVersion.Mod49Old;
+
+        const blockColl = await BlockCollection.create(
+            this.gameInfo,
+            dataFetcher,
+            `${subdir}/mod49.tab`,
+            `${subdir}/mod49.bin`,
+            this.materialFactory,
+            this.texFetcher,
+            MOD49_MODEL_VERSION,
+            false,
+        );
+
+        await this.texFetcher.loadSubdirs([subdir], dataFetcher);
+        this.blockColls[mod] = blockColl;
+    }
+
+    return this.blockColls[mod]!;
+}
         if (this.blockColls[mod] === undefined) {
             const subdir = getSubdir(mod, this.gameInfo);
             const modNum = getModFileNum(mod);
@@ -667,7 +819,6 @@ export class DPBlockFetcher implements BlockFetcher {
         return self;
     }
 
-    // ========================= PUT YOUR 20-BYTE PARSER EXACTLY HERE =========================
     private parseOneHitLine(absOffs: number): any | null {
         if (!this.hitsBin)
             return null;
@@ -675,24 +826,6 @@ export class DPBlockFetcher implements BlockFetcher {
         const dv = this.hitsBin;
         if (absOffs < 0 || absOffs + 0x14 > dv.byteLength)
             return null;
-
-        // PASTE YOUR EXISTING "READ ONE 20-BYTE HITS LINE" CODE IN THIS SPOT.
-        // Change whatever buffer name you used before to "dv"
-        // and change whatever offset variable you used before to "absOffs".
-
-        // Example shape only — REPLACE with your real parser:
-        // const x1 = dv.getInt16(absOffs + 0x00, false);
-        // const y1 = dv.getInt16(absOffs + 0x02, false);
-        // const z1 = dv.getInt16(absOffs + 0x04, false);
-        // const x2 = dv.getInt16(absOffs + 0x06, false);
-        // const y2 = dv.getInt16(absOffs + 0x08, false);
-        // const z2 = dv.getInt16(absOffs + 0x0A, false);
-        // const type = dv.getUint16(absOffs + 0x0C, false);
-        // const flags = dv.getUint16(absOffs + 0x0E, false);
-        // const unk10 = dv.getUint16(absOffs + 0x10, false);
-        // const unk12 = dv.getUint16(absOffs + 0x12, false);
-        //
-        // return { x1, y1, z1, x2, y2, z2, type, flags, unk10, unk12 };
 
         return null;
     }

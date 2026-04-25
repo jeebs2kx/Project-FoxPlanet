@@ -3,8 +3,10 @@ import ArrayBufferSlice from '../ArrayBufferSlice.js';
 import { AABB } from '../Geometry.js';
 import { GX_Array, GX_VtxAttrFmt, GX_VtxDesc } from '../gx/gx_displaylist.js';
 import * as GX from '../gx/gx_enum.js';
+import { colorNewFromRGBA } from '../Color.js';
 import { nArray } from '../util.js';
 import {
+  
   parseShader,
   ANCIENT_MAP_SHADER_FIELDS,
   SFA_SHADER_FIELDS,
@@ -30,6 +32,7 @@ import { Model, ModelShapes } from './models.js';
 import { Shape, ShapeGeometry, ShapeMaterial } from './shapes.js';
 import { Skeleton } from './skeleton.js';
 import { TextureFetcher } from './textures.js';
+import { loadMod49OldModel } from './mod49_old_model_loader.js';
 import {
   dataCopy,
   dataSubarray,
@@ -40,22 +43,23 @@ import {
 } from './util.js';
 
 export enum ModelVersion {
-  AncientMap,
-  Beta,
-  BetaMap,
-  Demo,
-  cloudtreasure,
-  DemoMap,
-  Final,
-  FinalMap,
-  fear,
-  dfpt,
-  dup,
-  Early1,
-  Early2,
-  Early3,
-  Early4,
-  DinosaurPlanet,
+    AncientMap,
+    Beta,
+    BetaMap,
+    Demo,
+    cloudtreasure,
+    DemoMap,
+    Final,
+    FinalMap,
+    fear,
+    dfpt,
+    dup,
+    Early1,
+    Early2,
+    Early3,
+    Early4,
+    DinosaurPlanet,
+    Mod49Old,
 }
 
 interface DisplayListInfo {
@@ -383,7 +387,7 @@ const FIELDS: any = {
     jointOffset: 0,
     jointCount: 0,
     shaderOffset: 0x64,
-    shaderCount: 0xa0, // Polygon attributes and material information
+    shaderCount: 0xa0, 
     shaderFields: SFADEMO_MAP_SHADER_FIELDS,
     dlInfoOffset: 0x68,
     dlInfoCount: 0x9f,
@@ -698,12 +702,27 @@ function dumpRawBytes(data: DataView, byteCount: number = 256) {
   }
 }
 
+
+
 export function loadModel(
   data: DataView,
   texFetcher: TextureFetcher,
   materialFactory: MaterialFactory,
   version: ModelVersion,
+  blockNum: number = -1,
 ): Model {
+  console.warn(`[LOADMODEL ENTRY] version=${ModelVersion[version]} numeric=${version} byteLength=${data.byteLength}`);
+
+if (version === ModelVersion.Mod49Old) {
+    console.warn(`[MOD49 DISPATCH HIT] calling loadMod49OldModel`);
+
+    try {
+        return loadMod49OldModel(data, texFetcher, materialFactory, version, blockNum);
+    } catch (e) {
+        console.error(`[MOD49 OLD RENDER ERROR]`, e);
+        throw e;
+    }
+}
   dumpRawBytes(data, 256);
     if (version === ModelVersion.DinosaurPlanet) {
     return loadDinosaurPlanetModel(data, texFetcher, materialFactory);
@@ -2476,7 +2495,6 @@ if (ctAltPosFineSkin !== null) {
       const weightsOffs = data.getUint32(fields.nrmFineSkinningWeights);
       const piecesOffs = data.getUint32(fields.nrmFineSkinningPieces);
 
-      // Bounds guards — some Demo files advertise pieces but tables are missing.
       const weightsInBounds = weightsOffs > 0 && weightsOffs < data.byteLength;
       const piecesInBounds = piecesOffs > 0 && (piecesOffs + nrmFineSkinningConfig.numPieces * FineSkinningPiece_SIZE) <= data.byteLength;
 
