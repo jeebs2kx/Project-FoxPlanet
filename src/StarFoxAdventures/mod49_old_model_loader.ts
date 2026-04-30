@@ -1355,7 +1355,7 @@ try {
         m.set(s, t);
         saveNumberMapToLocalStorage('__MOD49_SLOT_TO_DP_TEX', m);
 
-        console.warn(`[MOD49 SLOT MAP SAVED] slot ${s} -> DP tex ${t}`);
+       // console.warn(`[MOD49 SLOT MAP SAVED] slot ${s} -> DP tex ${t}`);
         location.reload();
     };
 
@@ -1386,7 +1386,7 @@ localStorage.removeItem('__MOD49_TEX_ID');
         m.set(key, t);
         saveStringMapToLocalStorage('__MOD49_BLOCKGROUP_TO_DP_TEX', m);
 
-        console.warn(`[MOD49 MAP SAVED] block/group ${key} -> DP tex ${t}`);
+       // console.warn(`[MOD49 MAP SAVED] block/group ${key} -> DP tex ${t}`);
         location.reload();
     };
 
@@ -1406,7 +1406,7 @@ localStorage.removeItem('__MOD49_TEX_ID');
         m.set(k, t);
         saveStringMapToLocalStorage('__MOD49_FULLKEY_TO_DP_TEX', m);
 
-        console.warn(`[MOD49 FULLKEY MAP SAVED] ${k} -> DP tex ${t}`);
+      //  console.warn(`[MOD49 FULLKEY MAP SAVED] ${k} -> DP tex ${t}`);
         location.reload();
     };
 
@@ -1480,7 +1480,7 @@ if (MOD49_USE_AUTOLEARN && forcedTex === undefined && autoLearnTex !== undefined
     }
 
     console.warn(
-        `[MOD49 AUTOLEARN] ${blockGroupKey} raw=${materialRawKey} full=${materialFullKey} -> tex ${autoLearnTex}`,
+       // `[MOD49 AUTOLEARN] ${blockGroupKey} raw=${materialRawKey} full=${materialFullKey} -> tex ${autoLearnTex}`,
     );
 }
 
@@ -1523,21 +1523,7 @@ const readGroupTexId = (rec: number, groupIndex: number): number => {
     return readMod49Material(rec, groupIndex).dpTexId;
 };
 
-console.warn(`[MOD49 SECTIONS block=${blockNum}]`, {
-    blockNum,
-            vtxSection: `0x${vtxSection.toString(16)}`,
-        triSection: `0x${triSection.toString(16)}`,
-        groupSection: `0x${groupSection.toString(16)}`,
-        vtxStart: `0x${vtxStart.toString(16)}`,
-        triStart: `0x${triStart.toString(16)}`,
-        groupStart: `0x${groupStart.toString(16)}`,
-        headerStride,
-        vertexCount,
-        triCount,
-        groupCount,
-        GROUP_TEX_FIELD: `0x${GROUP_TEX_FIELD.toString(16)}`,
-        FORCE_TEX_ID,
-    });
+
 
     for (let i = 0; i < Math.min(groupCount, 32); i++) {
         const rec = groupStart + i * 0x18;
@@ -1643,7 +1629,7 @@ try {
 } catch {
 }
 
-console.warn(`[MOD49 GROUPS block=${blockNum} count=${groupCount}]`, groupDebug);
+//console.warn(`[MOD49 GROUPS block=${blockNum} count=${groupCount}]`, groupDebug);
     const outVertexCount = triCount * 3;
 
     const posDV = new DataView(new ArrayBuffer(outVertexCount * 6));
@@ -1859,17 +1845,7 @@ bucket.bytes.push((outIdx >>> 8) & 0xFF, outIdx & 0xFF); // TEX1
         bucket.bytes[2] = bucket.vtxCount & 0xFF;
     }
 
-    console.warn(`[MOD49 OLD RENDER] headerStride=${headerStride} vertexRecordSize=${vertexRecordSize} vertices=${vertexCount} tris=${triCount} goodTris=${goodTris} groups=${groupCount}`, {
-        vtxSection: `0x${vtxSection.toString(16)}`,
-        triSection: `0x${triSection.toString(16)}`,
-        groupSection: `0x${groupSection.toString(16)}`,
-        bucketCount: buckets.size,
-buckets: [...buckets.values()].map((b) => ({
-    vtxCount: b.vtxCount,
-    triCount: b.triCount,
-    groups: [...b.groupIndices],
-})),
-    });
+
 
 (model as any).debugMaterialInfo = [...buckets.values()].map((b, index) => ({
     index,

@@ -183,7 +183,7 @@ function ensureLandingVersion() {
   if (!version) {
     version = document.createElement('div');
     version.id = 'landing-version';
-    version.textContent = 'Version 0.9.0';
+    version.textContent = 'BETA Version 0.9.2';
     container.appendChild(version);
   } else if (version.parentElement !== container) {
     container.appendChild(version);

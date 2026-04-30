@@ -143,6 +143,246 @@ type SFAUnusedBlockEntry = {
     modelInst: ModelInstance;
 };
 
+type HitFootprintSnapshot = {
+    gameLabel: string;
+    mapNum: number;
+    cols: number;
+    rows: number;
+    blocks: (BlockInfo | null)[][];
+    hitLines: DPHitLineLocal[];
+
+    displayName?: string;
+    subtitle?: string;
+    subtitleLines?: string[];
+
+};
+
+const SFA_MAP_NAMES: Record<number, string> = {
+    0x00: 'Ship Battle',
+    0x01: 'ZNot Used - Front End2',
+    0x02: 'Dragon Rock - Top',
+    0x03: 'ZNot Used - Krazoa Palace',
+    0x04: 'Volcano Force Point',
+    0x05: 'Rolling Demo - Just In Case',
+    0x06: 'ZNot Used - Discovery Falls',
+    0x07: 'ThornTail Hollow',
+    0x08: 'ThornTail Hollow - Undergro',
+    0x09: 'MazeTest',
+    0x0A: 'SnowHorn Wastes',
+    0x0B: 'Krazoa Palace',
+    0x0C: 'CloudRunner Fortress',
+    0x0D: 'Walled City',
+    0x0E: 'LightFoot Village',
+    0x0F: 'ZNot Used - CloudRunner - T',
+    0x10: 'CloudRunner - Dungeon',
+    0x11: 'ZNot Used - CloudRunner - T',
+    0x12: 'Moon Mountain Pass',
+    0x13: 'DarkIce Mines - Top',
+    0x14: 'ZNot Used - Krazoa Shrine',
+    0x15: 'Ocean Force Point - Bottom',
+    0x16: 'krazchamber',
+    0x17: 'Ice Mountain',
+    0x18: 'ZNot Used - Ice Mountain 2',
+    0x19: 'ZNot Used - Ice Mountain 3',
+    0x1A: 'Animtest',
+    0x1B: 'DarkIce Mines - Bottom',
+    0x1C: 'BOSS DarkIce',
+    0x1D: 'Cape Claw',
+    0x1E: 'ZNot Used - Inside Galleon',
+    0x1F: 'Test Of Combat',
+    0x20: 'Test Of Fear',
+    0x21: 'Test Of Skill',
+    0x22: 'Test Of Knowledge',
+    0x23: 'ZNot Used - Diamond Bay',
+    0x24: 'ZNot Used - EarthWalker Tem',
+    0x25: 'ZNot Used - Willow Grove',
+    0x26: 'ArWing Level - Andross',
+    0x27: 'Test Of Strength',
+    0x28: 'BOSS Scales',
+    0x29: 'World Map',
+    0x2A: 'ZNot Used - WGShrine',
+    0x2B: 'CloudRunner - Race',
+    0x2C: 'BOSS Drakor',
+    0x2D: 'ZNot Used - WMinsert',
+    0x2E: 'ZNot Used - DarkIce Mines -',
+    0x2F: 'ZNot Used - DarkIce Mines -',
+    0x30: 'BOSS TRex',
+    0x31: 'ZNot Used - MikesLava',
+    0x32: 'Ocean Force Point - Top',
+    0x33: 'Shop',
+    0x34: 'Dragon Rock - Bottom',
+    0x35: 'ZNot Used - BOSS Kamerian D',
+    0x36: 'Magic Cave - Small\\Big',
+    0x37: 'ZNot Used - Duster Cave',
+    0x38: 'LinkB - Ice2Wastes',
+    0x39: 'ZNot Used - CloudRunner2Rac',
+    0x3A: 'Arwing to Planet',
+    0x3B: 'Arwing Darkice',
+    0x3C: 'Arwing Cloud',
+    0x3D: 'Arwing City',
+    0x3E: 'Arwing Dragon',
+    0x3F: 'Game Front',
+    0x40: 'LinkK - Nik Test',
+    0x41: 'Great Fox',
+    0x42: 'LinkA - Warpstone to Others',
+    0x43: 'LinkC - Wastes to Hollow',
+    0x44: 'LinkD - Darkmines top 2 bot',
+    0x45: 'LinkE - hollow to moon pass',
+    0x46: 'LinkF - moonpass to volcano',
+    0x47: 'LinkG - hollow to lightfoot',
+    0x48: 'LinkH - lightfoot to capecl',
+    0x49: 'LinkJ - capeclaw 2 ocean fo',
+    0x4A: 'LinkI - CloudRunner2Race',
+    0x4B: 'dfpodium',
+    0x4C: 'dfcradle',
+    0x4D: 'dfcavehatch1',
+    0x4E: 'dfcavehatch2',
+    0x4F: 'scstatue',
+    0x50: 'galleonship',
+    0x51: 'cfgalleon',
+    0x52: 'cfgangplank',
+    0x53: 'nwtreebridge',
+    0x54: 'cfdungeonblock',
+    0x55: 'cloudrunnermap',
+    0x56: 'ccBridge',
+    0x57: 'cfcolumn',
+    0x58: 'nwboulder',
+    0x59: 'cfprisondoor',
+    0x5A: 'cfprisoncage',
+    0x5B: 'nwtreebridge2',
+    0x5C: 'dim2 ice block1',
+    0x5D: 'dimpushblock',
+    0x5E: 'dim2 ice block2',
+    0x5F: 'dimhornplinth',
+    0x60: 'nwshcolpush',
+    0x61: 'dim2lift',
+    0x62: 'dim2icefloe',
+    0x63: 'dim2icefloe1',
+    0x64: 'dim2icefloe2',
+    0x65: 'cfliftplat',
+    0x66: 'imspacecraft',
+    0x67: 'dimbossgut',
+    0x68: 'wmcolrise',
+    0x69: 'vfpslide1',
+    0x6A: 'vfpslide2',
+    0x6B: 'drpushcart',
+    0x6C: 'drliftplat',
+    0x6D: 'dim2stonepillar',
+    0x6E: 'bossdrakorrock',
+    0x6F: 'wcbouncycrate',
+    0x70: 'wcpushblock',
+    0x71: 'wctemplelift',
+    0x72: 'kameriancolumn',
+    0x73: 'dbstepstone',
+    0x74: 'vfppushblock',
+};
+
+const DP_MAP_NAMES: Record<number, string> = {
+    0: 'Front End',
+    1: 'Front End2',
+    2: 'Dragon Rock - Top',
+    3: 'Krazoa Palace',
+    4: 'Volcano Force Point',
+    5: 'Rolling Demo',
+    6: 'Discovery Falls',
+    7: 'SwapStone Hollow',
+    8: 'SwapStone Hollow 2',
+    9: 'Golden Plains',
+    10: 'Northern Wastes',
+    11: 'Warlock Mountain',
+    12: 'CloudRunner Fortress',
+    13: 'Walled City',
+    14: 'SwapStone Circle',
+    15: 'CloudRunner - Treasure',
+    16: 'CloudRunner - Dungeon',
+    17: 'CloudRunner - TrapRooms',
+    18: 'Moon Mountain Pass',
+    19: 'DarkIce Mines Level 1',
+    20: 'Krazoa Shrine',
+    21: 'Desert Force Point Bottom',
+    22: 'krazchamber',
+    23: 'NewIceMt1',
+    24: 'NewIceMt2',
+    25: 'NewIceMt3',
+    26: 'Animtest',
+    27: 'DarkIce Mines Level 2',
+    28: 'BOSS Galdon DIM3',
+    29: 'CapeClaw',
+    30: 'InsideGalleon',
+    31: 'DFShrine',
+    32: 'MMShrine',
+    33: 'ECShrine',
+    34: 'GPShrine',
+    35: 'Diamond Bay',
+    36: 'EarthWalker Temple',
+    37: 'Willow Grove',
+    38: 'BlackWater Canyon',
+    39: 'DBShrine',
+    40: 'NWShrine',
+    41: 'CCShrine',
+    42: 'WGShrine',
+    43: 'CloudRunner - Race',
+    44: 'BOSS Drakor',
+    45: 'WMinsert',
+    46: 'DarkIce Mines - Caves',
+    47: 'DarkIce Mines - Lava',
+    48: 'BOSS TRex',
+    49: 'MikesLava',
+    50: 'Desert Force Point Top',
+    51: 'Swap Store',
+    52: 'Dragon Rock - Bottom',
+    53: 'BOSS Kamerian Dragon',
+    54: 'Magic Cave - Small',
+    55: 'dfpodium',
+    56: 'dfcradle',
+    57: 'dfcavehatch1',
+    58: 'dfcavehatch2',
+    59: 'scstatue',
+    60: 'galleonship',
+    61: 'cfgalleon',
+    62: 'cfgangplank',
+    63: 'nwtreebridge',
+    64: 'cfdungeonblock',
+    65: 'cloudrunnermap',
+    66: 'cfledge',
+    67: 'cfcolumn',
+    68: 'nwboulder',
+    69: 'cfprisondoor',
+    70: 'cfprisoncage',
+    71: 'nwtreebridge2',
+    72: 'dimcannon',
+    73: 'dimpushblock',
+    74: 'dimcannonbase',
+    75: 'dimhornplinth',
+    76: 'nwshcolpush',
+    77: 'dim2lift',
+    78: 'dim2icefloe',
+    79: 'dim2icefloe1',
+    80: 'dim2icefloe2',
+    81: 'cfliftplat',
+    82: 'imspacecraft',
+    83: 'dimbossgut',
+    84: 'shlily',
+    85: 'vfpslide1',
+    86: 'vfpslide2',
+    87: 'drpushcart',
+    88: 'drliftplat',
+    89: 'drhighplat',
+    90: 'dim2stonepillar',
+    91: 'bossdrakorrock',
+    92: 'wcbouncycrate',
+    93: 'wcpushblock',
+    94: 'wctemplelift',
+    95: 'kameriancolumn',
+    96: 'dbstepstone',
+    97: 'vfppushblock',
+};
+
+function getHitFootprintMapName(gameLabel: string, mapNum: number): string {
+    const table = gameLabel === 'DP' ? DP_MAP_NAMES : SFA_MAP_NAMES;
+    return table[mapNum] ?? 'Unknown map';
+}
+
 // ===================== DP SCALE OVERRIDES (DP ONLY) =====================
 const DP_SCALE_MULT_BY_TYPE: Record<number, number> = {
      0x03FA: 0.15, 0x0071: 0.05, 0x036A: 0.15, 0x008A: 0.10, 0x03A4: 0.50,
@@ -586,6 +826,404 @@ interface MapSceneInfo {
     getOrigin(): number[];
     getObjectsData?(): DataView | null;
     getDPHitsDB?(): DPHitsDB | null;
+}
+
+function buildHitLinesForMapSceneInfo(info: MapSceneInfo): DPHitLineLocal[] {
+    const db = info.getDPHitsDB?.() ?? null;
+    if (!db)
+        return [];
+
+    const out: DPHitLineLocal[] = [];
+
+    for (let row = 0; row < info.getNumRows(); row++) {
+        for (let col = 0; col < info.getNumCols(); col++) {
+            const blockInfo = info.getBlockInfoAt(col, row);
+            if (!blockInfo)
+                continue;
+
+            const blockNum = dpGetAbsoluteBlockNum(db.trkblk, blockInfo);
+            if (blockNum === null)
+                continue;
+
+            out.push(...dpParseHitLinesForBlock(
+                db.tab,
+                db.bin,
+                blockNum,
+                col * 640,
+                row * 640,
+            ));
+        }
+    }
+
+    return out;
+}
+function buildHitFootprintSnapshot(
+    gameLabel: string,
+    mapNum: number,
+    info: MapSceneInfo,
+): HitFootprintSnapshot {
+    const blocks: (BlockInfo | null)[][] = [];
+
+    for (let row = 0; row < info.getNumRows(); row++) {
+        const line: (BlockInfo | null)[] = [];
+        for (let col = 0; col < info.getNumCols(); col++)
+            line.push(info.getBlockInfoAt(col, row));
+        blocks.push(line);
+    }
+
+    return {
+        gameLabel,
+        mapNum,
+        cols: info.getNumCols(),
+        rows: info.getNumRows(),
+        blocks,
+        hitLines: buildHitLinesForMapSceneInfo(info),
+    };
+}
+
+type HitFootprintMapUsageIndex = {
+    modToMaps: Map<number, Map<number, number>>;
+    pairToMaps: Map<string, Map<number, number>>;
+};
+
+type HitFootprintUsageScan = {
+    usedAbsBlocks: Set<number>;
+    modToMaps: Map<number, Map<number, number>>;
+    pairToMaps: Map<string, Map<number, number>>;
+};
+
+type HitFootprintUsageDB = {
+    gameLabel: string;
+    gameInfo: GameInfo;
+    db: DPHitsDB;
+    usedAbsBlocks: Set<number>;
+    unusedAbsBlocks: number[];
+    mapUsage: HitFootprintMapUsageIndex;
+};
+
+function getHitsTRKBLKFilenameForGameInfo(gameInfo: GameInfo): string {
+    return gameInfo.pathBase.toLowerCase().includes('dinosaurplanet')
+        ? 'TRKBLK.bin'
+        : 'TRKBLK.tab';
+}
+
+function getAbsBlockAliasesFromTRKBLK(trkblk: DataView, absBlock: number): string[] {
+    const out: string[] = [];
+    const modCount = trkblk.byteLength >>> 1;
+
+    for (let mod = 0; mod < modCount; mod++) {
+        const base = trkblk.getUint16(mod * 2, false);
+        if (base === 0xFFFF)
+            continue;
+
+        const sub = absBlock - base;
+        if (sub >= 0 && sub < 64)
+            out.push(`${mod}.${sub}`);
+    }
+
+    return out;
+}
+
+function getFirstBlockInfoAliasFromTRKBLK(trkblk: DataView, absBlock: number): BlockInfo | null {
+    const aliases = getAbsBlockAliasesFromTRKBLK(trkblk, absBlock);
+    if (aliases.length === 0)
+        return null;
+
+    const parts = aliases[0].split('.', 2);
+    const mod = Number(parts[0]);
+    const sub = Number(parts[1]);
+
+    if (!Number.isFinite(mod) || !Number.isFinite(sub))
+        return null;
+
+    return { mod, sub };
+}
+
+function parseHitFootprintAlias(alias: string): BlockInfo | null {
+    const parts = alias.split('.', 2);
+    if (parts.length !== 2)
+        return null;
+
+    const mod = Number(parts[0]);
+    const sub = Number(parts[1]);
+
+    if (!Number.isFinite(mod) || !Number.isFinite(sub))
+        return null;
+
+    return {
+        mod: mod | 0,
+        sub: sub | 0,
+    };
+}
+
+function mergeHitFootprintMapCounts(
+    dst: Map<number, number>,
+    src: Map<number, number> | undefined,
+): void {
+    if (!src)
+        return;
+
+    for (const [mapNum, count] of src)
+        dst.set(mapNum, (dst.get(mapNum) ?? 0) + count);
+}
+
+function formatHitFootprintMapCountsShort(
+    usage: HitFootprintUsageDB,
+    counts: Map<number, number> | undefined,
+    emptyText: string,
+    maxItems: number = 5,
+): string {
+    if (!counts || counts.size === 0)
+        return emptyText;
+
+    const items = Array.from(counts.entries())
+        .sort((a, b) => {
+            if (b[1] !== a[1])
+                return b[1] - a[1];
+            return a[0] - b[0];
+        });
+
+    const shown = items.slice(0, maxItems).map(([mapNum, cellCount]) => {
+        const mapName = getHitFootprintMapName(usage.gameLabel, mapNum);
+        return `map ${mapNum} ${mapName} (${cellCount} cell${cellCount === 1 ? '' : 's'})`;
+    });
+
+    const remaining = items.length - shown.length;
+    if (remaining > 0)
+        shown.push(`+${remaining} more`);
+
+    return shown.join('; ');
+}
+
+function buildAbsHitFootprintSubtitleLines(
+    usage: HitFootprintUsageDB,
+    absBlock: number,
+    hitLineCount: number,
+): string[] {
+    const aliases = getAbsBlockAliasesFromTRKBLK(usage.db.trkblk, absBlock);
+    const candidateCounts = new Map<number, number>();
+    const aliasLines: string[] = [];
+
+    for (const alias of aliases) {
+        const blockInfo = parseHitFootprintAlias(alias);
+        if (!blockInfo)
+            continue;
+
+        const candidateMaps = usage.mapUsage.modToMaps.get(blockInfo.mod);
+        mergeHitFootprintMapCounts(candidateCounts, candidateMaps);
+
+        if (aliasLines.length < 4) {
+            aliasLines.push(
+                `${alias} -> ` +
+                formatHitFootprintMapCountsShort(
+                    usage,
+                    candidateMaps,
+                    'no same-mod map found',
+                    3,
+                ),
+            );
+        }
+    }
+
+    const out: string[] = [];
+
+    out.push(`UNUSED HITS | ${hitLineCount} line${hitLineCount === 1 ? '' : 's'}`);
+    out.push(`aliases: ${aliases.length > 0 ? aliases.slice(0, 8).join(', ') : 'no TRKBLK alias'}`);
+    out.push(
+        `candidate maps: ` +
+        formatHitFootprintMapCountsShort(
+            usage,
+            candidateCounts,
+            'none',
+            5,
+        ),
+    );
+
+    for (const line of aliasLines)
+        out.push(line);
+
+    return out;
+}
+
+function bumpHitFootprintMapUsage<K>(
+    dst: Map<K, Map<number, number>>,
+    key: K,
+    mapNum: number,
+): void {
+    let byMap = dst.get(key);
+    if (!byMap) {
+        byMap = new Map<number, number>();
+        dst.set(key, byMap);
+    }
+
+    byMap.set(mapNum, (byMap.get(mapNum) ?? 0) + 1);
+}
+
+async function collectUsedAbsHitBlocksForGame(
+    gameInfo: GameInfo,
+    dataFetcher: DataFetcher,
+    trkblk: DataView,
+): Promise<HitFootprintUsageScan> {
+    const usedAbsBlocks = new Set<number>();
+    const modToMaps = new Map<number, Map<number, number>>();
+    const pairToMaps = new Map<string, Map<number, number>>();
+
+    const [mapsTabBuf, mapsBinBuf] = await Promise.all([
+        dataFetcher.fetchData(`${gameInfo.pathBase}/MAPS.tab`, { allow404: true }),
+        dataFetcher.fetchData(`${gameInfo.pathBase}/MAPS.bin`, { allow404: true }),
+    ]);
+
+    if (mapsTabBuf.byteLength === 0 || mapsBinBuf.byteLength === 0) {
+        return {
+            usedAbsBlocks,
+            modToMaps,
+            pairToMaps,
+        };
+    }
+
+    const mapsTab = mapsTabBuf.createDataView();
+    const mapsBin = mapsBinBuf.createDataView();
+    const mapCount = Math.floor(mapsTab.byteLength / 0x1C);
+
+    for (let mapNum = 0; mapNum < mapCount; mapNum++) {
+        try {
+            const entryOffs = mapNum * 0x1C;
+            if (entryOffs + 0x08 > mapsTab.byteLength)
+                continue;
+
+            const infoOffset = mapsTab.getUint32(entryOffs + 0x00, false);
+            const blockTableOffset = mapsTab.getUint32(entryOffs + 0x04, false);
+
+            if (infoOffset === 0xFFFFFFFF || blockTableOffset === 0xFFFFFFFF)
+                continue;
+            if (infoOffset + 0x08 > mapsBin.byteLength)
+                continue;
+
+            const blockCols = mapsBin.getUint16(infoOffset + 0x00, false);
+            const blockRows = mapsBin.getUint16(infoOffset + 0x02, false);
+
+            if (blockCols <= 0 || blockRows <= 0 || blockCols > 256 || blockRows > 256)
+                continue;
+
+            const tableSize = blockCols * blockRows * 4;
+            if (blockTableOffset + tableSize > mapsBin.byteLength)
+                continue;
+
+            const mapInfo = getMapInfo(mapsTab, mapsBin, mapNum);
+
+            for (let row = 0; row < mapInfo.blockRows; row++) {
+                for (let col = 0; col < mapInfo.blockCols; col++) {
+                    const blockInfo = getBlockInfo(mapsBin, mapInfo, col, row);
+                    if (!blockInfo)
+                        continue;
+
+                    bumpHitFootprintMapUsage(modToMaps, blockInfo.mod, mapNum);
+                    bumpHitFootprintMapUsage(pairToMaps, `${blockInfo.mod}:${blockInfo.sub}`, mapNum);
+
+                    const absBlock = dpGetAbsoluteBlockNum(trkblk, blockInfo);
+                    if (absBlock !== null)
+                        usedAbsBlocks.add(absBlock);
+                }
+            }
+        } catch {
+        }
+    }
+
+    return {
+        usedAbsBlocks,
+        modToMaps,
+        pairToMaps,
+    };
+}
+
+function collectUnusedAbsHitBlocks(db: DPHitsDB, usedAbsBlocks: Set<number>): number[] {
+    const out: number[] = [];
+    const entryCount = db.tab.byteLength >>> 2;
+
+    for (let absBlock = 0; absBlock + 1 < entryCount; absBlock++) {
+        if (usedAbsBlocks.has(absBlock))
+            continue;
+
+        const lines = dpParseHitLinesForBlock(
+            db.tab,
+            db.bin,
+            absBlock,
+            0,
+            0,
+        );
+
+        if (lines.length > 0)
+            out.push(absBlock);
+    }
+
+    return out;
+}
+
+async function loadHitFootprintUsageDB(
+    gameLabel: string,
+    gameInfo: GameInfo,
+    dataFetcher: DataFetcher,
+): Promise<HitFootprintUsageDB> {
+    const trkblkName = getHitsTRKBLKFilenameForGameInfo(gameInfo);
+
+    const [hitsTabBuf, hitsBinBuf, trkblkBuf] = await Promise.all([
+        dataFetcher.fetchData(`${gameInfo.pathBase}/HITS.tab`, { allow404: true }),
+        dataFetcher.fetchData(`${gameInfo.pathBase}/HITS.bin`, { allow404: true }),
+        dataFetcher.fetchData(`${gameInfo.pathBase}/${trkblkName}`, { allow404: true }),
+    ]);
+
+    const db: DPHitsDB = {
+        tab: hitsTabBuf.createDataView(),
+        bin: hitsBinBuf.createDataView(),
+        trkblk: trkblkBuf.createDataView(),
+    };
+
+    const usageScan = await collectUsedAbsHitBlocksForGame(
+        gameInfo,
+        dataFetcher,
+        db.trkblk,
+    );
+
+    const usedAbsBlocks = usageScan.usedAbsBlocks;
+    const unusedAbsBlocks = collectUnusedAbsHitBlocks(db, usedAbsBlocks);
+
+    return {
+        gameLabel,
+        gameInfo,
+        db,
+        usedAbsBlocks,
+        unusedAbsBlocks,
+        mapUsage: {
+            modToMaps: usageScan.modToMaps,
+            pairToMaps: usageScan.pairToMaps,
+        },
+    };
+}
+
+function buildAbsHitFootprintSnapshot(
+    usage: HitFootprintUsageDB,
+    absBlock: number,
+): HitFootprintSnapshot {
+    const firstBlockInfo = getFirstBlockInfoAliasFromTRKBLK(usage.db.trkblk, absBlock);
+
+    const hitLines = dpParseHitLinesForBlock(
+        usage.db.tab,
+        usage.db.bin,
+        absBlock,
+        0,
+        0,
+    );
+
+    return {
+        gameLabel: usage.gameLabel,
+        mapNum: absBlock,
+        cols: 1,
+        rows: 1,
+        blocks: [[firstBlockInfo]],
+        hitLines,
+        displayName: `absolute HITS block ${absBlock} / 0x${absBlock.toString(16).toUpperCase().padStart(4, '0')}`,
+        subtitleLines: buildAbsHitFootprintSubtitleLines(usage, absBlock, hitLines.length),
+    };
 }
 
 interface MapInstanceOptions {
@@ -1362,14 +2000,14 @@ async function collectDPDiamondBayTextureIds(
                     }
                 }
             } catch (e) {
-                console.warn(`[MOD49 DP TEX COLLECT] failed block mod=${b.mod} sub=${b.sub}`, e);
+              //  console.warn(`[MOD49 DP TEX COLLECT] failed block mod=${b.mod} sub=${b.sub}`, e);
             }
         }
     }
 
     const ids = Array.from(seen.values()).sort((a, b) => a - b);
 
-    console.warn(`[MOD49 DP TEX COLLECT] Diamond Bay texture IDs:`, ids);
+  //  console.warn(`[MOD49 DP TEX COLLECT] Diamond Bay texture IDs:`, ids);
 
     return ids;
 }
@@ -2395,6 +3033,123 @@ private sfaUnusedBlocksBusy = false;
 private sfaUnusedBlocksEnabled = false;
 private sfaUnusedBlocksInfoPre: HTMLPreElement | null = null;
 private sfaUnusedBlocksStatus = 'Not scanned.';
+
+
+
+
+
+
+private drawHitFootprintSnapshotPanel(
+    ctx: CanvasRenderingContext2D,
+    snap: HitFootprintSnapshot | null,
+    boxX: number,
+    boxY: number,
+    boxW: number,
+    boxH: number,
+    hitColor: string,
+): void {
+    ctx.fillStyle = 'rgba(0,0,0,0.84)';
+    ctx.fillRect(boxX, boxY, boxW, boxH);
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+    ctx.font = '14px monospace';
+    ctx.textBaseline = 'top';
+
+    if (!snap) {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText('not loaded', boxX + 10, boxY + 10);
+        return;
+    }
+
+    const pad = 12;
+    const headerH = 46;
+
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(`${snap.gameLabel} map ${snap.mapNum}`, boxX + 10, boxY + 8);
+
+    ctx.fillStyle = '#aaaaaa';
+    ctx.fillText(
+        `grid ${snap.cols}x${snap.rows} | HITS ${snap.hitLines.length}`,
+        boxX + 10,
+        boxY + 26,
+    );
+
+    const worldW = Math.max(1, snap.cols * 640);
+    const worldH = Math.max(1, snap.rows * 640);
+
+    const areaW = Math.max(1, boxW - pad * 2);
+    const areaH = Math.max(1, boxH - headerH - pad * 2);
+
+    const scale = Math.min(
+        areaW / worldW,
+        areaH / worldH,
+    );
+
+    const mapW = worldW * scale;
+    const mapH = worldH * scale;
+
+    const mapX = boxX + Math.floor((boxW - mapW) * 0.5);
+    const mapY = boxY + headerH + pad + Math.floor((areaH - mapH) * 0.5);
+
+    const sx = (x: number) => mapX + x * scale;
+    const sy = (z: number) => mapY + z * scale;
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+    ctx.lineWidth = 1;
+
+    for (let col = 0; col <= snap.cols; col++) {
+        ctx.beginPath();
+        ctx.moveTo(sx(col * 640), sy(0));
+        ctx.lineTo(sx(col * 640), sy(worldH));
+        ctx.stroke();
+    }
+
+    for (let row = 0; row <= snap.rows; row++) {
+        ctx.beginPath();
+        ctx.moveTo(sx(0), sy(row * 640));
+        ctx.lineTo(sx(worldW), sy(row * 640));
+        ctx.stroke();
+    }
+
+    if (scale * 640 >= 34) {
+        ctx.font = '10px monospace';
+        ctx.fillStyle = 'rgba(255,255,255,0.82)';
+
+        for (let row = 0; row < snap.rows; row++) {
+            for (let col = 0; col < snap.cols; col++) {
+                const b = snap.blocks[row]?.[col] ?? null;
+                if (!b)
+                    continue;
+
+                ctx.fillText(
+                    `${b.mod}.${b.sub}`,
+                    sx(col * 640) + 3,
+                    sy(row * 640) + 3,
+                );
+            }
+        }
+    }
+
+    ctx.strokeStyle = hitColor;
+    ctx.lineWidth = 1.6;
+
+    for (const l of snap.hitLines) {
+        ctx.beginPath();
+        ctx.moveTo(sx(l.x0), sy(l.z0));
+        ctx.lineTo(sx(l.x1), sy(l.z1));
+        ctx.stroke();
+    }
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(mapX, mapY, mapW, mapH);
+}
+
+
+
 private drawDPObjectDiffOverlay(viewerInput: Viewer.ViewerRenderInput): void {
     this.projectedDiffLabels = [];
 
@@ -3023,6 +3778,8 @@ if (!labelSeen.has(type)) {
 
     ctx.restore();
 }
+
+
 private drawDPMinimapOverlay(viewerInput: Viewer.ViewerRenderInput): void {
     if (this.dpOverlayUIHidden)
         return;
@@ -3774,6 +4531,7 @@ public createPanels(): UI.Panel[] {
         };
         renderPanel.contents.append(showWireframe.elem);
 
+
         const unusedSpacer = document.createElement('div');
         unusedSpacer.style.height = '8px';
         renderPanel.contents.appendChild(unusedSpacer);
@@ -4220,6 +4978,7 @@ public override destroy(device: GfxDevice) {
     this.sfaUnusedBlocksInfoPre = null;
     this.sfaUnusedBlocksStatus = 'Not scanned.';
 
+ 
     super.destroy(device);
     if (this.sky) { this.sky.destroy(device); this.sky = null; }
     if (this.envfxMan) this.envfxMan.destroy(device);
@@ -4228,6 +4987,100 @@ public override destroy(device: GfxDevice) {
         vanillaObjectMap.destroy(device);
 }
 }
+
+function cleanupSFADPHitsCompareSceneUI(): void {
+    document.getElementById('sfa-dp-hits-compare-scene-ui')?.remove();
+    (window as any).__sfaDPHitsCompareSceneUI = undefined;
+}
+
+function ensureSFADPHitsCompareSceneUI(
+    getMapNum: () => number,
+    setMapNum: (mapNum: number) => void | Promise<void>,
+): void {
+    cleanupSFADPHitsCompareSceneUI();
+
+    const wrap = document.createElement('div');
+    wrap.id = 'sfa-dp-hits-compare-scene-ui';
+    wrap.style.position = 'fixed';
+    wrap.style.right = '8px';
+    wrap.style.top = '8px';
+    wrap.style.zIndex = '10000';
+    wrap.style.width = '260px';
+    wrap.style.background = 'rgba(0,0,0,0.86)';
+    wrap.style.color = '#fff';
+    wrap.style.font = '12px monospace';
+    wrap.style.padding = '8px';
+    wrap.style.border = '1px solid rgba(255,255,255,0.25)';
+    wrap.style.borderRadius = '8px';
+    wrap.style.display = 'grid';
+    wrap.style.gap = '6px';
+
+    const title = document.createElement('div');
+    title.textContent = 'SFA vs DP HITS Footprint';
+    title.style.fontWeight = 'bold';
+    wrap.appendChild(title);
+
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.min = '0';
+    input.step = '1';
+    input.value = String(getMapNum());
+    input.style.width = '100%';
+    input.style.boxSizing = 'border-box';
+    wrap.appendChild(input);
+
+    const row = document.createElement('div');
+    row.style.display = 'grid';
+    row.style.gridTemplateColumns = '1fr 1fr 1fr';
+    row.style.gap = '6px';
+
+    const prev = document.createElement('button');
+    prev.textContent = 'Prev';
+
+    const load = document.createElement('button');
+    load.textContent = 'Load';
+
+    const next = document.createElement('button');
+    next.textContent = 'Next';
+
+    row.appendChild(prev);
+    row.appendChild(load);
+    row.appendChild(next);
+    wrap.appendChild(row);
+
+    const loadInput = async () => {
+        let mapNum = Number(input.value);
+        if (!Number.isFinite(mapNum))
+            mapNum = 0;
+
+        mapNum = Math.max(0, mapNum | 0);
+        input.value = String(mapNum);
+        await setMapNum(mapNum);
+    };
+
+    prev.onclick = async () => {
+        const mapNum = Math.max(0, (getMapNum() | 0) - 1);
+        input.value = String(mapNum);
+        await setMapNum(mapNum);
+    };
+
+    next.onclick = async () => {
+        const mapNum = (getMapNum() | 0) + 1;
+        input.value = String(mapNum);
+        await setMapNum(mapNum);
+    };
+
+    load.onclick = () => {
+        void loadInput();
+    };
+
+    input.onchange = () => {
+        void loadInput();
+    };
+
+    document.body.appendChild(wrap);
+}
+
 function cleanupDPUI(): void {
     stopDPMPEGVoicePreview();
 document.getElementById('dp-export-toggle')?.remove();
@@ -4248,6 +5101,7 @@ cleanupDPBlockGalleryUI();
     (window as any).__dpDevObjectsToggle = undefined;
     (window as any).__dpObjectLabelsToggle = undefined;
     (window as any).__dpHitsToggle = undefined;
+        (window as any).__dpFootprintToggle = undefined;
     (window as any).__dpHitVolumesToggle = undefined;
     (window as any).__dpWireframeToggle = undefined;
     (window as any).__dpCullToggle = undefined;
@@ -5031,7 +5885,64 @@ function ensureDPHitsUI(
 
   state.cb.addEventListener('change', state.handler);
 }
+function ensureDPFootprintUI(
+  onChange: (enabled: boolean) => void | Promise<void>,
+  initial?: boolean
+): void {
+  type ToggleState = {
+    wrap: HTMLDivElement;
+    cb: HTMLInputElement;
+    handler: ((e: Event) => void) | null;
+    last?: boolean;
+  };
 
+  let state = (window as any).__dpFootprintToggle as ToggleState | undefined;
+
+  if (!state) {
+    const wrap = document.createElement('div');
+    wrap.style.padding = '1px 3px';
+    wrap.style.background = 'rgba(0,0,0,0.5)';
+    wrap.style.color = '#fff';
+    wrap.style.font = '11px sans-serif';
+    wrap.style.borderRadius = '2px';
+    wrap.style.display = 'flex';
+    wrap.style.alignItems = 'center';
+    wrap.style.height = '20px';
+    wrap.style.boxSizing = 'border-box';
+    wrap.style.order = '5';
+
+    const label = document.createElement('label');
+    label.style.cursor = 'pointer';
+    label.style.display = 'flex';
+    label.style.alignItems = 'center';
+    label.style.lineHeight = '1';
+
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.style.marginRight = '1px';
+
+    label.appendChild(cb);
+    label.appendChild(document.createTextNode('Footprint'));
+    wrap.appendChild(label);
+    getDPTopToggleBar().appendChild(wrap);
+
+    state = { wrap, cb, handler: null, last: false };
+    (window as any).__dpFootprintToggle = state;
+  }
+
+  if (state.handler)
+    state.cb.removeEventListener('change', state.handler);
+
+  const desired = (typeof initial === 'boolean') ? initial : (state.last ?? false);
+  state.cb.checked = desired;
+
+  state.handler = async () => {
+    state!.last = state!.cb.checked;
+    await onChange(state!.cb.checked);
+  };
+
+  state.cb.addEventListener('change', state.handler);
+}
 function ensureDPGameTextUI(
   onChange: (enabled: boolean) => void | Promise<void>,
   initial?: boolean
@@ -7162,6 +8073,784 @@ ensureDPBlockGalleryUI(
     }
 }
 
+class SFADPHitsCompareRenderer extends SFARenderer {
+    private mapNum = 1;
+    private sfaSnapshot: HitFootprintSnapshot | null = null;
+    private dpSnapshot: HitFootprintSnapshot | null = null;
+    private loading = false;
+    private status = 'Loading...';
+    private loadSeq = 0;
+
+    constructor(
+        public context: SceneContext,
+        animController: SFAAnimationController,
+        materialFactory: MaterialFactory,
+        private dataFetcher: DataFetcher,
+    ) {
+        super(context, animController, materialFactory);
+    }
+
+    public getMapNum(): number {
+        return this.mapNum;
+    }
+
+    public async setMapNum(mapNum: number): Promise<void> {
+        this.mapNum = Math.max(0, mapNum | 0);
+        await this.reload();
+    }
+
+    public async reload(): Promise<void> {
+        const seq = ++this.loadSeq;
+        const mapNum = this.mapNum;
+
+        this.loading = true;
+        this.status = `Loading SFA map ${mapNum} and DP map ${mapNum}...`;
+
+        try {
+            const [sfaInfo, dpInfo] = await Promise.all([
+                loadMap(SFA_GAME_INFO, this.dataFetcher, mapNum),
+                loadMap(DP_GAME_INFO, this.dataFetcher, mapNum),
+            ]);
+
+            if (seq !== this.loadSeq)
+                return;
+
+            this.sfaSnapshot = buildHitFootprintSnapshot('SFA', mapNum, sfaInfo);
+            this.dpSnapshot = buildHitFootprintSnapshot('DP', mapNum, dpInfo);
+            this.status = `Loaded map ${mapNum}.`;
+        } catch (e) {
+            if (seq !== this.loadSeq)
+                return;
+
+            this.sfaSnapshot = null;
+            this.dpSnapshot = null;
+            this.status = `Load failed for map ${mapNum}: ${String(e)}`;
+        } finally {
+            if (seq === this.loadSeq)
+                this.loading = false;
+        }
+    }
+
+    private drawHitFootprintSnapshotPanel(
+        ctx: CanvasRenderingContext2D,
+        snap: HitFootprintSnapshot | null,
+        boxX: number,
+        boxY: number,
+        boxW: number,
+        boxH: number,
+        hitColor: string,
+    ): void {
+        ctx.fillStyle = 'rgba(0,0,0,0.84)';
+        ctx.fillRect(boxX, boxY, boxW, boxH);
+
+        ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+        ctx.font = '14px monospace';
+        ctx.textBaseline = 'top';
+
+        if (!snap) {
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText('not loaded', boxX + 10, boxY + 10);
+            return;
+        }
+
+        const pad = 12;
+        const headerH = 66;
+        const mapName = getHitFootprintMapName(snap.gameLabel, snap.mapNum);
+
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(`${snap.gameLabel} map ${snap.mapNum}`, boxX + 10, boxY + 8);
+
+        ctx.fillStyle = '#ffe100';
+        ctx.fillText(mapName, boxX + 10, boxY + 26);
+
+        ctx.fillStyle = '#aaaaaa';
+        ctx.fillText(
+            `grid ${snap.cols}x${snap.rows} | HITS ${snap.hitLines.length}`,
+            boxX + 10,
+            boxY + 44,
+        );
+
+        const worldW = Math.max(1, snap.cols * 640);
+        const worldH = Math.max(1, snap.rows * 640);
+
+        const areaW = Math.max(1, boxW - pad * 2);
+        const areaH = Math.max(1, boxH - headerH - pad * 2);
+
+        const scale = Math.min(
+            areaW / worldW,
+            areaH / worldH,
+        );
+
+        const mapW = worldW * scale;
+        const mapH = worldH * scale;
+
+        const mapX = boxX + Math.floor((boxW - mapW) * 0.5);
+        const mapY = boxY + headerH + pad + Math.floor((areaH - mapH) * 0.5);
+
+        const sx = (x: number) => mapX + x * scale;
+        const sy = (z: number) => mapY + z * scale;
+
+        ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+        ctx.lineWidth = 1;
+
+        for (let col = 0; col <= snap.cols; col++) {
+            ctx.beginPath();
+            ctx.moveTo(sx(col * 640), sy(0));
+            ctx.lineTo(sx(col * 640), sy(worldH));
+            ctx.stroke();
+        }
+
+        for (let row = 0; row <= snap.rows; row++) {
+            ctx.beginPath();
+            ctx.moveTo(sx(0), sy(row * 640));
+            ctx.lineTo(sx(worldW), sy(row * 640));
+            ctx.stroke();
+        }
+
+        if (scale * 640 >= 34) {
+            ctx.font = '10px monospace';
+            ctx.fillStyle = 'rgba(255,255,255,0.82)';
+
+            for (let row = 0; row < snap.rows; row++) {
+                for (let col = 0; col < snap.cols; col++) {
+                    const b = snap.blocks[row]?.[col] ?? null;
+                    if (!b)
+                        continue;
+
+                    ctx.fillText(
+                        `${b.mod}.${b.sub}`,
+                        sx(col * 640) + 3,
+                        sy(row * 640) + 3,
+                    );
+                }
+            }
+        }
+
+        ctx.strokeStyle = hitColor;
+        ctx.lineWidth = 1.6;
+
+        for (const l of snap.hitLines) {
+            ctx.beginPath();
+            ctx.moveTo(sx(l.x0), sy(l.z0));
+            ctx.lineTo(sx(l.x1), sy(l.z1));
+            ctx.stroke();
+        }
+
+        ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(mapX, mapY, mapW, mapH);
+    }
+
+    private drawCompareOverlay(): void {
+        const ctx = getDebugOverlayCanvas2D() as CanvasRenderingContext2D | null;
+        if (!ctx)
+            return;
+
+        const canvas = ctx.canvas;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        const totalW = Math.min(1240, canvas.width - 48);
+        const totalH = Math.min(680, canvas.height - 96);
+
+        if (totalW <= 160 || totalH <= 120)
+            return;
+
+        const gap = 18;
+        const panelW = Math.floor((totalW - gap) * 0.5);
+        const panelH = totalH;
+
+        const startX = Math.floor((canvas.width - totalW) * 0.5);
+        const startY = Math.floor((canvas.height - totalH) * 0.5);
+
+        ctx.save();
+
+        this.drawHitFootprintSnapshotPanel(
+            ctx,
+            this.sfaSnapshot,
+            startX,
+            startY,
+            panelW,
+            panelH,
+            '#00e5ff',
+        );
+
+        this.drawHitFootprintSnapshotPanel(
+            ctx,
+            this.dpSnapshot,
+            startX + panelW + gap,
+            startY,
+            panelW,
+            panelH,
+            '#ffe100',
+        );
+
+        ctx.font = '14px monospace';
+        ctx.textBaseline = 'top';
+
+        ctx.fillStyle = 'rgba(0,0,0,0.86)';
+        ctx.fillRect(startX, startY - 30, totalW, 24);
+
+        ctx.fillStyle = this.loading ? '#ffe100' : '#ffffff';
+        ctx.fillText(this.status, startX + 8, startY - 26);
+
+        ctx.restore();
+    }
+
+    protected override update(viewerInput: Viewer.ViewerRenderInput): void {
+        super.update(viewerInput);
+        this.drawCompareOverlay();
+    }
+
+    protected override addWorldRenderInsts(
+        device: GfxDevice,
+        renderInstManager: GfxRenderInstManager,
+        renderLists: SFARenderLists,
+        sceneCtx: SceneRenderContext,
+    ): void {
+    }
+
+    public override destroy(device: GfxDevice): void {
+        cleanupSFADPHitsCompareSceneUI();
+
+        const ctx = getDebugOverlayCanvas2D() as CanvasRenderingContext2D | null;
+        if (ctx)
+            ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+
+        super.destroy(device);
+    }
+}
+
+export class SFADPHitsCompareSceneDesc implements Viewer.SceneDesc {
+    constructor(
+        public id: string = 'sfa_dp_hits_compare',
+        public name: string = 'SFA vs DP HITS Footprint',
+    ) {
+    }
+
+    public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+        cleanupTextureToggleUI();
+        cleanupDPBlockGalleryUI();
+        cleanupSFADPHitsCompareSceneUI();
+
+        const musicState = (window as any).musicState;
+        if (musicState.audio) {
+            musicState.audio.pause();
+            musicState.audio.currentTime = 0;
+            musicState.audio = null;
+        }
+
+        const animController = new SFAAnimationController();
+        const materialFactory = new MaterialFactory(device);
+
+        const renderer = new SFADPHitsCompareRenderer(
+            context,
+            animController,
+            materialFactory,
+            context.dataFetcher,
+        );
+
+        await renderer.reload();
+
+        ensureSFADPHitsCompareSceneUI(
+            () => renderer.getMapNum(),
+            async (mapNum: number) => {
+                await renderer.setMapNum(mapNum);
+            },
+        );
+
+        return renderer;
+    }
+}
+
+function cleanupSFAUnusedHitsCompareSceneUI(): void {
+    document.getElementById('sfa-dp-unused-hits-compare-scene-ui')?.remove();
+    (window as any).__sfaDPUnusedHitsCompareSceneUI = undefined;
+}
+
+function ensureSFAUnusedHitsCompareSceneUI(
+    getAbsBlock: () => number,
+    setAbsBlock: (absBlock: number) => void | Promise<void>,
+    stepUnused: (dir: number) => void | Promise<void>,
+): void {
+    cleanupSFAUnusedHitsCompareSceneUI();
+
+    const wrap = document.createElement('div');
+    wrap.id = 'sfa-dp-unused-hits-compare-scene-ui';
+    wrap.style.position = 'fixed';
+    wrap.style.right = '8px';
+    wrap.style.top = '8px';
+    wrap.style.zIndex = '10000';
+    wrap.style.width = '300px';
+    wrap.style.background = 'rgba(0,0,0,0.86)';
+    wrap.style.color = '#fff';
+    wrap.style.font = '12px monospace';
+    wrap.style.padding = '8px';
+    wrap.style.border = '1px solid rgba(255,255,255,0.25)';
+    wrap.style.borderRadius = '8px';
+    wrap.style.display = 'grid';
+    wrap.style.gap = '6px';
+
+    const title = document.createElement('div');
+    title.textContent = 'SFA vs DP UNUSED HITS';
+    title.style.fontWeight = 'bold';
+    wrap.appendChild(title);
+
+    const note = document.createElement('div');
+    note.textContent =
+        'Only unused HITS entries are shown.\n' +
+        'SFA and DP absolute IDs are separate; same number is not treated as a match.';    note.style.color = '#aaa';
+    note.style.whiteSpace = 'pre-wrap';
+    wrap.appendChild(note);
+
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.min = '0';
+    input.step = '1';
+    input.value = String(getAbsBlock());
+    input.style.width = '100%';
+    input.style.boxSizing = 'border-box';
+    wrap.appendChild(input);
+
+    const row = document.createElement('div');
+    row.style.display = 'grid';
+    row.style.gridTemplateColumns = '1fr 1fr 1fr';
+    row.style.gap = '6px';
+
+    const prev = document.createElement('button');
+    prev.textContent = 'Prev unused';
+
+    const load = document.createElement('button');
+    load.textContent = 'Load';
+
+    const next = document.createElement('button');
+    next.textContent = 'Next unused';
+
+    row.appendChild(prev);
+    row.appendChild(load);
+    row.appendChild(next);
+    wrap.appendChild(row);
+
+    const loadInput = async () => {
+        let absBlock = Number(input.value);
+        if (!Number.isFinite(absBlock))
+            absBlock = 0;
+
+        absBlock = Math.max(0, absBlock | 0);
+        input.value = String(absBlock);
+        await setAbsBlock(absBlock);
+    };
+
+    prev.onclick = async () => {
+        await stepUnused(-1);
+        input.value = String(getAbsBlock());
+    };
+
+    next.onclick = async () => {
+        await stepUnused(1);
+        input.value = String(getAbsBlock());
+    };
+
+    load.onclick = () => {
+        void loadInput();
+    };
+
+    input.onchange = () => {
+        void loadInput();
+    };
+
+    document.body.appendChild(wrap);
+}
+
+class SFAUnusedHitsCompareRenderer extends SFARenderer {
+    private absBlock = 0;
+
+    private sfaUsage: HitFootprintUsageDB | null = null;
+    private dpUsage: HitFootprintUsageDB | null = null;
+
+    private sfaSnapshot: HitFootprintSnapshot | null = null;
+    private dpSnapshot: HitFootprintSnapshot | null = null;
+
+    private allUnusedAbsBlocks: number[] = [];
+    private loading = false;
+    private status = 'Loading unused HITS...';
+
+    constructor(
+        public context: SceneContext,
+        animController: SFAAnimationController,
+        materialFactory: MaterialFactory,
+        private dataFetcher: DataFetcher,
+    ) {
+        super(context, animController, materialFactory);
+    }
+
+    public getAbsBlock(): number {
+        return this.absBlock;
+    }
+
+    public async init(): Promise<void> {
+        this.loading = true;
+        this.status = 'Scanning SFA and DP MAPS/HITS/TRKBLK...';
+
+        try {
+            const [sfaUsage, dpUsage] = await Promise.all([
+                loadHitFootprintUsageDB('SFA', SFA_GAME_INFO, this.dataFetcher),
+                loadHitFootprintUsageDB('DP', DP_GAME_INFO, this.dataFetcher),
+            ]);
+
+            this.sfaUsage = sfaUsage;
+            this.dpUsage = dpUsage;
+
+            const merged = new Set<number>();
+            for (const n of sfaUsage.unusedAbsBlocks)
+                merged.add(n);
+            for (const n of dpUsage.unusedAbsBlocks)
+                merged.add(n);
+
+            this.allUnusedAbsBlocks = Array.from(merged.values()).sort((a, b) => a - b);
+            this.absBlock = this.allUnusedAbsBlocks[0] ?? 0;
+
+            this.rebuildSnapshots();
+        } catch (e) {
+            this.sfaUsage = null;
+            this.dpUsage = null;
+            this.sfaSnapshot = null;
+            this.dpSnapshot = null;
+            this.status = `Unused HITS scan failed: ${String(e)}`;
+        } finally {
+            this.loading = false;
+        }
+    }
+
+    public async setAbsBlock(absBlock: number): Promise<void> {
+        this.absBlock = Math.max(0, absBlock | 0);
+        this.rebuildSnapshots();
+    }
+
+    public async stepUnused(dir: number): Promise<void> {
+        if (this.allUnusedAbsBlocks.length === 0)
+            return;
+
+        const current = this.absBlock | 0;
+        let next = this.allUnusedAbsBlocks[0];
+
+        if (dir >= 0) {
+            next = this.allUnusedAbsBlocks.find((n) => n > current) ?? this.allUnusedAbsBlocks[0];
+        } else {
+            for (let i = this.allUnusedAbsBlocks.length - 1; i >= 0; i--) {
+                if (this.allUnusedAbsBlocks[i] < current) {
+                    next = this.allUnusedAbsBlocks[i];
+                    break;
+                }
+            }
+
+            if (next === this.allUnusedAbsBlocks[0] && current <= this.allUnusedAbsBlocks[0])
+                next = this.allUnusedAbsBlocks[this.allUnusedAbsBlocks.length - 1];
+        }
+
+        await this.setAbsBlock(next);
+    }
+
+    private rebuildSnapshots(): void {
+        if (!this.sfaUsage || !this.dpUsage) {
+            this.sfaSnapshot = null;
+            this.dpSnapshot = null;
+            return;
+        }
+
+        const sfaUnused = this.sfaUsage.unusedAbsBlocks.includes(this.absBlock);
+        const dpUnused = this.dpUsage.unusedAbsBlocks.includes(this.absBlock);
+
+        this.sfaSnapshot = sfaUnused
+            ? buildAbsHitFootprintSnapshot(this.sfaUsage, this.absBlock)
+            : null;
+
+        this.dpSnapshot = dpUnused
+            ? buildAbsHitFootprintSnapshot(this.dpUsage, this.absBlock)
+            : null;
+
+        const sfaLine = this.sfaSnapshot
+            ? `SFA: ${this.sfaSnapshot.hitLines.length} unused line(s)`
+            : `SFA: not in SFA unused HITS list`;
+
+        const dpLine = this.dpSnapshot
+            ? `DP:  ${this.dpSnapshot.hitLines.length} unused line(s)`
+            : `DP:  not in DP unused HITS list`;
+
+        this.status =
+            `absolute HITS block ${this.absBlock} / 0x${this.absBlock.toString(16).toUpperCase().padStart(4, '0')}\n` +
+            `${sfaLine}\n` +
+            `${dpLine}\n` +
+            `SFA unused entries: ${this.sfaUsage.unusedAbsBlocks.length} | DP unused entries: ${this.dpUsage.unusedAbsBlocks.length}`;
+    }
+
+    private drawHitFootprintSnapshotPanel(
+        ctx: CanvasRenderingContext2D,
+        snap: HitFootprintSnapshot | null,
+        boxX: number,
+        boxY: number,
+        boxW: number,
+        boxH: number,
+        hitColor: string,
+    ): void {
+        ctx.fillStyle = 'rgba(0,0,0,0.84)';
+        ctx.fillRect(boxX, boxY, boxW, boxH);
+
+        ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+        ctx.textBaseline = 'top';
+
+        if (!snap) {
+            ctx.font = '16px monospace';
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText('not in this game unused HITS list', boxX + 12, boxY + 12);
+            return;
+        }
+
+        const pad = 14;
+        const subtitleLines = snap.subtitleLines ?? (snap.subtitle ? [snap.subtitle] : []);
+        const shownSubtitleLines = subtitleLines.slice(0, 6);
+        const headerH = 82 + shownSubtitleLines.length * 16;
+
+        const drawClippedText = (text: string, x: number, y: number, maxW: number): void => {
+            let s = text;
+            while (s.length > 4 && ctx.measureText(s).width > maxW)
+                s = s.slice(0, -2);
+
+            if (s !== text)
+                s = `${s.slice(0, -1)}…`;
+
+            ctx.fillText(s, x, y);
+        };
+
+        ctx.font = 'bold 16px monospace';
+        ctx.fillStyle = '#ffffff';
+        drawClippedText(`${snap.gameLabel}`, boxX + 12, boxY + 10, boxW - 24);
+
+        ctx.font = 'bold 14px monospace';
+        ctx.fillStyle = '#ffe100';
+        drawClippedText(snap.displayName ?? `map ${snap.mapNum}`, boxX + 12, boxY + 32, boxW - 24);
+
+        ctx.font = '12px monospace';
+        ctx.fillStyle = '#aaaaaa';
+
+        let textY = boxY + 52;
+        for (const line of shownSubtitleLines) {
+            drawClippedText(line, boxX + 12, textY, boxW - 24);
+            textY += 16;
+        }
+
+        ctx.fillStyle = '#aaaaaa';
+        drawClippedText(
+            `grid ${snap.cols}x${snap.rows} | HITS ${snap.hitLines.length}`,
+            boxX + 12,
+            textY + 2,
+            boxW - 24,
+        );
+
+        const worldW = Math.max(1, snap.cols * 640);
+        const worldH = Math.max(1, snap.rows * 640);
+
+        const areaW = Math.max(1, boxW - pad * 2);
+        const areaH = Math.max(1, boxH - headerH - pad * 2);
+
+        const scale = Math.min(
+            areaW / worldW,
+            areaH / worldH,
+        );
+
+        const mapW = worldW * scale;
+        const mapH = worldH * scale;
+
+        const mapX = boxX + Math.floor((boxW - mapW) * 0.5);
+        const mapY = boxY + headerH + pad + Math.floor((areaH - mapH) * 0.5);
+
+        const sx = (x: number) => mapX + x * scale;
+        const sy = (z: number) => mapY + z * scale;
+
+        ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+        ctx.lineWidth = 1;
+
+        for (let col = 0; col <= snap.cols; col++) {
+            ctx.beginPath();
+            ctx.moveTo(sx(col * 640), sy(0));
+            ctx.lineTo(sx(col * 640), sy(worldH));
+            ctx.stroke();
+        }
+
+        for (let row = 0; row <= snap.rows; row++) {
+            ctx.beginPath();
+            ctx.moveTo(sx(0), sy(row * 640));
+            ctx.lineTo(sx(worldW), sy(row * 640));
+            ctx.stroke();
+        }
+
+        ctx.font = '12px monospace';
+        ctx.fillStyle = 'rgba(255,255,255,0.82)';
+
+        for (let row = 0; row < snap.rows; row++) {
+            for (let col = 0; col < snap.cols; col++) {
+                const b = snap.blocks[row]?.[col] ?? null;
+                if (!b)
+                    continue;
+
+                ctx.fillText(
+                    `${b.mod}.${b.sub}`,
+                    sx(col * 640) + 5,
+                    sy(row * 640) + 5,
+                );
+            }
+        }
+
+        ctx.strokeStyle = hitColor;
+        ctx.lineWidth = 2.0;
+
+        for (const l of snap.hitLines) {
+            ctx.beginPath();
+            ctx.moveTo(sx(l.x0), sy(l.z0));
+            ctx.lineTo(sx(l.x1), sy(l.z1));
+            ctx.stroke();
+        }
+
+        ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(mapX, mapY, mapW, mapH);
+    }
+
+    private drawCompareOverlay(): void {
+        const ctx = getDebugOverlayCanvas2D() as CanvasRenderingContext2D | null;
+        if (!ctx)
+            return;
+
+        const canvas = ctx.canvas;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        const totalW = Math.min(1400, canvas.width - 48);
+        const totalH = Math.min(760, canvas.height - 96);
+
+        if (totalW <= 160 || totalH <= 120)
+            return;
+
+        const gap = 18;
+        const panelW = Math.floor((totalW - gap) * 0.5);
+        const panelH = totalH;
+
+        const startX = Math.floor((canvas.width - totalW) * 0.5);
+        const startY = Math.floor((canvas.height - totalH) * 0.5);
+
+        ctx.save();
+
+        this.drawHitFootprintSnapshotPanel(
+            ctx,
+            this.sfaSnapshot,
+            startX,
+            startY,
+            panelW,
+            panelH,
+            '#00e5ff',
+        );
+
+        this.drawHitFootprintSnapshotPanel(
+            ctx,
+            this.dpSnapshot,
+            startX + panelW + gap,
+            startY,
+            panelW,
+            panelH,
+            '#ffe100',
+        );
+
+        ctx.font = 'bold 14px monospace';
+        ctx.textBaseline = 'top';
+
+        const statusLines = this.status.split('\n');
+        const statusH = 10 + statusLines.length * 18;
+
+        ctx.fillStyle = 'rgba(0,0,0,0.86)';
+        ctx.fillRect(startX, startY - statusH - 6, totalW, statusH);
+
+        for (let i = 0; i < statusLines.length; i++) {
+            ctx.fillStyle = this.loading ? '#ffe100' : '#ffffff';
+            ctx.fillText(statusLines[i], startX + 8, startY - statusH + 2 + i * 18);
+        }
+
+        ctx.restore();
+    }
+
+    protected override update(viewerInput: Viewer.ViewerRenderInput): void {
+        super.update(viewerInput);
+        this.drawCompareOverlay();
+    }
+
+    protected override addWorldRenderInsts(
+        device: GfxDevice,
+        renderInstManager: GfxRenderInstManager,
+        renderLists: SFARenderLists,
+        sceneCtx: SceneRenderContext,
+    ): void {
+    }
+
+    public override destroy(device: GfxDevice): void {
+        cleanupSFAUnusedHitsCompareSceneUI();
+
+        const ctx = getDebugOverlayCanvas2D() as CanvasRenderingContext2D | null;
+        if (ctx)
+            ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+
+        super.destroy(device);
+    }
+}
+
+export class SFAUnusedHitsCompareSceneDesc implements Viewer.SceneDesc {
+    constructor(
+        public id: string = 'sfa_dp_unused_hits_compare',
+        public name: string = 'SFA vs DP Unused HITS',
+    ) {
+    }
+
+    public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+        cleanupTextureToggleUI();
+        cleanupDPBlockGalleryUI();
+        cleanupSFADPHitsCompareSceneUI();
+        cleanupSFAUnusedHitsCompareSceneUI();
+
+        const musicState = (window as any).musicState;
+        if (musicState.audio) {
+            musicState.audio.pause();
+            musicState.audio.currentTime = 0;
+            musicState.audio = null;
+        }
+
+        const animController = new SFAAnimationController();
+        const materialFactory = new MaterialFactory(device);
+
+        const renderer = new SFAUnusedHitsCompareRenderer(
+            context,
+            animController,
+            materialFactory,
+            context.dataFetcher,
+        );
+
+        await renderer.init();
+
+        ensureSFAUnusedHitsCompareSceneUI(
+            () => renderer.getAbsBlock(),
+            async (absBlock: number) => {
+                await renderer.setAbsBlock(absBlock);
+            },
+            async (dir: number) => {
+                await renderer.stepUnused(dir);
+            },
+        );
+
+        return renderer;
+    }
+}
+
 export class SFABlockGallerySceneDesc implements Viewer.SceneDesc {
     constructor(
         public id: string,
@@ -7897,19 +9586,34 @@ export class CombinedOldIceMtSceneDesc implements Viewer.SceneDesc {
 
         await mapRenderer.create(mapSceneInfo, this.gameInfo, context.dataFetcher, blockFetcher);
 
-        setTimeout(async () => {
-            const mr = mapRenderer as any;
-            if (mr.envSelect) {
-                const sequence = [95, 96, 97, 98, 99, 100];
-                for (const val of sequence) {
-                    mr.envSelect.setValue(val);
-                    if (mr.envSelect.onvalue) {
-                        await mr.envSelect.onvalue(val);
-                    }
-                    await new Promise(resolve => setTimeout(resolve, 16)); 
-                }
+setTimeout(async () => {
+    const mr = mapRenderer as any;
+
+    if (mr.envSelect) {
+        const sequence = [95, 96, 97, 98, 99, 100, 95];
+        for (const val of sequence) {
+            mr.envSelect.setValue(val);
+            if (mr.envSelect.onvalue) {
+                await mr.envSelect.onvalue(val);
             }
-        }, 10);
+            await new Promise(resolve => setTimeout(resolve, 16)); 
+        }
+    }
+
+    if (mr.timeSelect) {
+        const t = DP_ENV_DEFAULT.timeOfDay;
+
+        mr.timeSelect.setValue(t - 1);
+        if (mr.timeSelect.onvalue)
+            await mr.timeSelect.onvalue(t - 1);
+
+        await new Promise(resolve => setTimeout(resolve, 16));
+
+        mr.timeSelect.setValue(t);
+        if (mr.timeSelect.onvalue)
+            await mr.timeSelect.onvalue(t);
+    }
+}, 10);
 
         const matrix = mat4.create();
         mat4.rotateY(matrix, matrix, Math.PI * 3 / 4);
@@ -7992,16 +9696,32 @@ export class YetiSceneDesc implements Viewer.SceneDesc {
         const blockFetcher = await DPBlockFetcher.create(this.gameInfo, context.dataFetcher, materialFactory, Promise.resolve(texFetcher));
         await mapRenderer.create(mapSceneInfo, this.gameInfo, context.dataFetcher, blockFetcher);
 
-        setTimeout(async () => {
-            const mr = mapRenderer as any;
-            if (mr.envSelect) {
-                for (const val of [95, 96, 97, 98, 99, 100]) {
-                    mr.envSelect.setValue(val);
-                    if (mr.envSelect.onvalue) await mr.envSelect.onvalue(val);
-                    await new Promise(resolve => setTimeout(resolve, 16)); 
-                }
-            }
-        }, 10);
+setTimeout(async () => {
+    const mr = mapRenderer as any;
+
+    if (mr.envSelect) {
+        for (const val of [95, 96, 97, 98, 99, 100, 95]) {
+            mr.envSelect.setValue(val);
+            if (mr.envSelect.onvalue)
+                await mr.envSelect.onvalue(val);
+            await new Promise(resolve => setTimeout(resolve, 16)); 
+        }
+    }
+
+    if (mr.timeSelect) {
+        const t = DP_ENV_DEFAULT.timeOfDay;
+
+        mr.timeSelect.setValue(t - 1);
+        if (mr.timeSelect.onvalue)
+            await mr.timeSelect.onvalue(t - 1);
+
+        await new Promise(resolve => setTimeout(resolve, 16));
+
+        mr.timeSelect.setValue(t);
+        if (mr.timeSelect.onvalue)
+            await mr.timeSelect.onvalue(t);
+    }
+}, 10);
 
         const matrix = mat4.create();
         mat4.rotateY(matrix, matrix, Math.PI * 3 / 4);

@@ -802,6 +802,19 @@ const EARLY1_PER_MODEL_REMAP: { [mapNum: number]: { [srcId: number]: number } } 
   30: { 57: 61, 58: 62, 86: 85, 87: 86, 93: 92, 666: 657, 530: 522, 533: 525, 532: 524, 531: 523, 528: 520, 675: 666, 529: 521, 523: 515, 524: 516 },
   7: { 559: 629, 568: 5, 556: 626, 553: 621, 549: 618, 547: 616, 532: 450, 946: 1030, 952: 553 }
 };
+
+export function debugResolveEarly1TextureId(texId: number, modelId: number = 0): number | null {
+    const perModel = EARLY1_PER_MODEL_REMAP[modelId | 0];
+
+    if (perModel && perModel[texId] !== undefined)
+        return perModel[texId];
+
+    if (early1TextureIdMap[texId] !== undefined)
+        return early1TextureIdMap[texId];
+
+    return null;
+}
+
 const EARLY4_PER_MODEL_REMAP: { [mapNum: number]: { [srcId: number]: number } } = {
   11: { 649: 595, 650: 1330, 1335: 1337 },
   8: { 649: 534, 650: 535 },

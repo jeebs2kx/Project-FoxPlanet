@@ -2,7 +2,7 @@ import { mat4, vec3 } from 'gl-matrix';
 import { DataFetcher } from '../DataFetcher.js';
 import { Color, colorNewFromRGBA, colorCopy, colorNewCopy, colorFromRGBA, White, colorScale } from '../Color.js';
 import { nArray } from '../util.js';
-
+import { ModelVersion } from './modelloader.js';
 import { SFATexture, SFATextureFetcher } from './textures.js';
 import { dataSubarray, readUint16 } from './util.js';
 import { ObjectInstance } from './objects.js';
@@ -194,10 +194,16 @@ public forceKioskTextureOnlySky(): void {
         const data = dataSubarray(this.envfxactBin, byteOffs, this.ENVFX_SIZE);
         const fields = { index, type: data.getUint8(0x5c) };
 
-        if (fields.type === EnvfxType.Atmosphere) {
+if (fields.type === EnvfxType.Atmosphere) {
     this.hasLoadedAtmosphereEnvfx = true;
-            const isDP = this.world.gameInfo.pathBase.toLowerCase().includes('dp');
-            const BASE = isDP ? 0 : 0xc38;
+    const isDP = this.world.gameInfo.pathBase.toLowerCase().includes('dp');
+    if (isDP) {
+        const texFetcher: any = this.world.resColl.texFetcher;
+        if (typeof texFetcher.setModelVersion === 'function')
+            texFetcher.setModelVersion(ModelVersion.DinosaurPlanet);
+    }
+
+    const BASE = isDP ? 0 : 0xc38;
 
             const texIds: number[] = [];
             for (let i = 0; i < 4; i++) texIds.push(readUint16(data, 0x2e, i));

@@ -39,27 +39,27 @@ export class BlockCollection {
 
     public getBlockModel(num: number): Model | null {
         if (num >= 1146 && num <= 1182) {
-    console.warn(`[MOD49] ENTER getBlockModel num=${num}`, {
-        tabByteLength: this.tab.byteLength,
-        binByteLength: this.bin.byteLength,
-        cached: this.blockModels[num] !== undefined,
-    });
+  //  console.warn(`[MOD49] ENTER getBlockModel num=${num}`, {
+    //    tabByteLength: this.tab.byteLength,
+    //    binByteLength: this.bin.byteLength,
+   //     cached: this.blockModels[num] !== undefined,
+  //  });
 }
         if (this.blockModels[num] === undefined) {
 const tabValue = readUint32(this.tab, 0, num);
 
 if (num >= 1146 && num <= 1182) {
-    console.warn(`[MOD49] tab read num=${num}`, {
-        tabValue: `0x${tabValue.toString(16)}`,
-        hasFlag: !!(tabValue & 0x10000000),
-        offset: `0x${(tabValue & 0x0fffffff).toString(16)}`,
-        modelVersion: ModelVersion[this.modelVersion],
-        isCompressed: this.isCompressed,
-    });
+   // console.warn(`[MOD49] tab read num=${num}`, {
+   //     tabValue: `0x${tabValue.toString(16)}`,
+   //     hasFlag: !!(tabValue & 0x10000000),
+    //    offset: `0x${(tabValue & 0x0fffffff).toString(16)}`,
+    //    modelVersion: ModelVersion[this.modelVersion],
+    //    isCompressed: this.isCompressed,
+  //  });
 }
 
 if (tabValue === 0xffffffff) {
-    console.warn(`[MOD49] RETURN NULL: tab entry empty num=${num}`);
+  //  console.warn(`[MOD49] RETURN NULL: tab entry empty num=${num}`);
     return null;
 }
 
@@ -68,11 +68,11 @@ const blockOffset = (tabValue & 0x10000000)
     : tabValue;
 
 if (blockOffset >= this.bin.byteLength) {
-    console.warn(`[MOD49] RETURN NULL: bad blockOffset num=${num}`, {
-        tabValue: `0x${tabValue.toString(16)}`,
-        blockOffset: `0x${blockOffset.toString(16)}`,
-        binByteLength: this.bin.byteLength,
-    });
+  //  console.warn(`[MOD49] RETURN NULL: bad blockOffset num=${num}`, {
+    //    tabValue: `0x${tabValue.toString(16)}`,
+    //    blockOffset: `0x${blockOffset.toString(16)}`,
+    //    binByteLength: this.bin.byteLength,
+  //  });
     return null;
 }
 
@@ -105,15 +105,15 @@ const nextOffset = (nextValue & 0x10000000)
 const uncomp = this.isCompressed ? loadRes(blockBin) : blockBin;
 
 if (uncomp === null) {
-    console.warn(`[MOD49] RETURN NULL: uncomp null num=${num}`);
+ //   console.warn(`[MOD49] RETURN NULL: uncomp null num=${num}`);
     return null;
 }
 
 if (num >= 1146 && num <= 1182) {
-    console.warn(`[MOD49] ABOUT TO loadModel num=${num}`, {
-        byteLength: uncomp.byteLength,
-        modelVersion: ModelVersion[this.modelVersion],
-    });
+   // console.warn(`[MOD49] ABOUT TO loadModel num=${num}`, {
+    //    byteLength: uncomp.byteLength,
+     //   modelVersion: ModelVersion[this.modelVersion],
+  //  });
 }
 
 
@@ -144,14 +144,14 @@ this.blockModels[num] = loadModel(
 const m = this.blockModels[num]!;
 const ms = m.sharedModelShapes;
 
-console.warn(`[MOD49] block=${num} version=${ModelVersion[this.modelVersion]} byteLength=${uncomp.byteLength}`, {
-    shape0: ms?.shapes[0]?.length ?? 0,
-    shape1: ms?.shapes[1]?.length ?? 0,
-    shape2: ms?.shapes[2]?.length ?? 0,
-    waters: ms?.waters?.length ?? 0,
-    furs: ms?.furs?.length ?? 0,
-    wireframes: (ms as any)?.wireframes?.length ?? 0,
-});
+//console.warn(`[MOD49] block=${num} version=${ModelVersion[this.modelVersion]} byteLength=${uncomp.byteLength}`, {
+ //   shape0: ms?.shapes[0]?.length ?? 0,
+ //   shape1: ms?.shapes[1]?.length ?? 0,
+ //   shape2: ms?.shapes[2]?.length ?? 0,
+ //   waters: ms?.waters?.length ?? 0,
+ //   furs: ms?.furs?.length ?? 0,
+ //   wireframes: (ms as any)?.wireframes?.length ?? 0,
+//});
 
         }
 
@@ -461,12 +461,12 @@ export class EARLY1BLOCKFETCHER implements BlockFetcher {
 
 public async fetchBlock(mod: number, sub: number, dataFetcher: DataFetcher): Promise<Model | null> {
     if (mod === 49) {
-        console.warn(`[MOD49] fetchBlock mod=${mod} sub=${sub}`);
+      //  console.warn(`[MOD49] fetchBlock mod=${mod} sub=${sub}`);
 
         const blockColl = await this.fetchBlockCollection(mod, dataFetcher);
         const blockNum = 1146 + sub;
 
-        console.warn(`[MOD49] using blockNum=${blockNum}`);
+       // console.warn(`[MOD49] using blockNum=${blockNum}`);
 
         return blockColl.getBlockModel(blockNum);
     }

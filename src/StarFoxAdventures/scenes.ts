@@ -1,10 +1,10 @@
 import * as Viewer from '../viewer.js';
 
-import { SFAMapSceneDesc, SFABlockGallerySceneDesc, SwapcircleSceneDesc, AncientMapSceneDesc, EarlydupMapSceneDesc, EarlyfearMapSceneDesc, EarlyDFPMapSceneDesc, Early1MapSceneDesc, Early2MapSceneDesc, Early3MapSceneDesc, Early4MapSceneDesc, Mod49SceneDesc } from './maps.js';
+import { SFAMapSceneDesc, SFABlockGallerySceneDesc,SFAUnusedHitsCompareSceneDesc, SFADPHitsCompareSceneDesc, SwapcircleSceneDesc, AncientMapSceneDesc, EarlydupMapSceneDesc, EarlyfearMapSceneDesc, EarlyDFPMapSceneDesc, Early1MapSceneDesc, Early2MapSceneDesc, Early3MapSceneDesc, Early4MapSceneDesc, Mod49SceneDesc } from './maps.js';
 import { SFAWorldSceneDesc, SFAFullFinalWorldSceneDesc } from './world.js';
 import { SFAModelExhibitSceneDesc, SFATextureExhibitSceneDesc } from './modelexhibit.js';import { ModelVersion } from './modelloader.js';
 import { EARLYFEAR } from './blocks.js';
-
+import { Early1FinalMapConverterSceneDesc } from './early1_finalmap_converter_ui.js';
 export interface GameInfo {
     pathBase: string;
     subdirs: {[key: number]: string};
@@ -209,11 +209,6 @@ new SFAModelExhibitSceneDesc( 'cloudtreasuremodelexhibit', 'Early/Mid 2001 Model
 new SFAModelExhibitSceneDesc('demomodelexhibit_mid', 'Mid 2001 Models (Copy of Swaphol)', ModelVersion.Demo, SFADEMO_GAME_INFO, ['Copy of swaphol', 'linklevel']),
 new SFAModelExhibitSceneDesc('demomodelexhibit_gal', 'Mid/later 2001 Models (InsideGal)', ModelVersion.Demo, SFADEMO_GAME_INFO, ['insidegal']),
 
-'Texture Viewer',
-new SFATextureExhibitSceneDesc('finaltextureexhibit', 'Texture Viewer (Final - All Folders)', SFA_GAME_INFO),
-new SFATextureExhibitSceneDesc('kiosktextureexhibit', 'Texture Viewer (Kiosk - Main Folders)', SFADEMO_GAME_INFO, KIOSK_TEXTURE_EXHIBIT_SUBDIRS),
-new SFATextureExhibitSceneDesc('betatextureexhibit', 'Texture Viewer (Kiosk Beta Folders)', SFADEMO_GAME_INFO, BETA_TEXTURE_EXHIBIT_SUBDIRS, true),
-
 'Full World Maps (experimental)',
 new SFAFullFinalWorldSceneDesc('Full Final World'),
 new SFAFullFinalWorldSceneDesc('Full Kiosk World', SFADEMO_GAME_INFO),
@@ -245,7 +240,7 @@ new EarlyfearMapSceneDesc(33, 'demo33', 'Very Early 2001: Test of Fear (T)', SFA
     new AncientMapSceneDesc('ancient15', "Ancient Boss T-rex", ANCIENT_DP_GAME_INFO, 15),
 
     'Early/Mid 2001 Maps',
-    new Early1MapSceneDesc(26, 'demo26', 'Mid 2001: Animtest', SFADEMO_GAME_INFO),
+    new Early1MapSceneDesc(35, 'demo26', 'Mid 2001: Animtest', SFADEMO_GAME_INFO),
     new Early1MapSceneDesc(18, 'demo18', 'Mid 2001: Moon Mountain Pass (T)', SFADEMO_GAME_INFO),
     new Early1MapSceneDesc(7, 'demo7', 'Mid 2001: ThornTail Hollow (T)', SFADEMO_GAME_INFO),
     new EarlydupMapSceneDesc(7, 'demo7', 'Mid 2001: ThornTail Hollow (Copy of Swaphol map) (T)', SFADEMO_GAME_INFO),
@@ -456,9 +451,24 @@ new SFAWorldSceneDesc('dragbot', 'dragrockbot', 52, 'Kiosk: Dragon Rock Bot', SF
     new SFAWorldSceneDesc('animtest', 'bossgaldon', 28, 'Boss Galdon'),
     new SFAWorldSceneDesc('arwingdragon', 'arwingdragon', 62, 'Arwing to Dragon Rock', ),
 
+    'Tools',
+    new Early1FinalMapConverterSceneDesc(
+        'early1_finalmap_converter',
+        'Early1 -> Final ZLB Converter',
+    ),
+
+'Texture Viewer',
+new SFATextureExhibitSceneDesc('finaltextureexhibit', 'Texture Viewer (Final - All Folders)', SFA_GAME_INFO),
+new SFATextureExhibitSceneDesc('kiosktextureexhibit', 'Texture Viewer (Kiosk - Main Folders)', SFADEMO_GAME_INFO, KIOSK_TEXTURE_EXHIBIT_SUBDIRS),
+new SFATextureExhibitSceneDesc('betatextureexhibit', 'Texture Viewer (Kiosk Beta Folders)', SFADEMO_GAME_INFO, BETA_TEXTURE_EXHIBIT_SUBDIRS, true),
+
 'Block Viewer',
 new SFABlockGallerySceneDesc('sfablockgallery_final', 'SFA Block Gallery (Final)', SFA_GAME_INFO),
 new SFABlockGallerySceneDesc('sfablockgallery_kiosk', 'SFA Block Gallery (Kiosk)', SFADEMO_GAME_INFO),
+
+'HITS / Map Debug',
+new SFADPHitsCompareSceneDesc('sfa_dp_hits_compare', 'SFA vs DP HITS Footprint'),
+new SFAUnusedHitsCompareSceneDesc('sfa_dp_unused_hits_compare', 'SFA vs DP Unused HITS'),
 
 ];
 

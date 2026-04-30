@@ -711,15 +711,15 @@ export function loadModel(
   version: ModelVersion,
   blockNum: number = -1,
 ): Model {
-  console.warn(`[LOADMODEL ENTRY] version=${ModelVersion[version]} numeric=${version} byteLength=${data.byteLength}`);
+ // console.warn(`[LOADMODEL ENTRY] version=${ModelVersion[version]} numeric=${version} byteLength=${data.byteLength}`);
 
 if (version === ModelVersion.Mod49Old) {
-    console.warn(`[MOD49 DISPATCH HIT] calling loadMod49OldModel`);
+  //  console.warn(`[MOD49 DISPATCH HIT] calling loadMod49OldModel`);
 
     try {
         return loadMod49OldModel(data, texFetcher, materialFactory, version, blockNum);
     } catch (e) {
-        console.error(`[MOD49 OLD RENDER ERROR]`, e);
+     //   console.error(`[MOD49 OLD RENDER ERROR]`, e);
         throw e;
     }
 }

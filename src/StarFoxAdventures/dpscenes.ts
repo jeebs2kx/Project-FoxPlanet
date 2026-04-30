@@ -165,9 +165,6 @@ function makeLazyDPGlobalWorldExplorerSceneDesc(id: string, name: string, gameIn
 const sceneDescs: (string | Viewer.SceneDesc)[] = [
     'Dinosaur Planet Map + Model Viewer ',
     makeLazyDPModelExhibitSceneDesc('dp_models', 'DP: Models', DP_GAME_INFO),
-'Textures',
-
-makeLazyDPTextureExhibitSceneDesc('dp_textures', 'DP: Texture Viewer', DP_GAME_INFO),
 
 'Full World Maps (experimental)',
     makeLazyDPFullWorldSceneDesc('dp_full_world', 'DP: Full World', DP_GAME_INFO),
@@ -175,7 +172,7 @@ makeLazyDPTextureExhibitSceneDesc('dp_textures', 'DP: Texture Viewer', DP_GAME_I
     'Ancient Maps',
     makeLazyCombinedOldIceMtSceneDesc('dp_old_icemt_combo', 'DP: Old Ice Mountain (1, 2 & 3)', DP_GAME_INFO),    
 makeLazyManualGridSceneDesc('dp_yeti_mt_multi', 'Yeti Mountain', DP_GAME_INFO), makeLazyDPMapSceneDesc(17, 'dp11_cr_traprooms',      'DP: CloudRunner - TrapRooms', DP_GAME_INFO),
-    makeLazyDPMapSceneDesc(36, 'dp24_earthwalker_temple','DP: EarthWalker Temple (Unused)', DP_GAME_INFO),
+    makeLazyDPMapSceneDesc(36, 'dp24_earthwalker_temple','DP: EarthWalker Temple', DP_GAME_INFO),
 
     'Dinosaur Planet Maps',
     makeLazyDPMapSceneDesc( 2, 'dp02_dragrock_top',      'DP: Dragon Rock - Top', DP_GAME_INFO),
@@ -229,6 +226,11 @@ makeLazyManualGridSceneDesc('dp_yeti_mt_multi', 'Yeti Mountain', DP_GAME_INFO), 
     makeLazyDPMapSceneDesc(52, 'dp34_dragrock_bottom',   'DP: Dragon Rock - Bottom', DP_GAME_INFO),
     makeLazyDPMapSceneDesc(53, 'dp35_boss_kamerian',     'DP: BOSS Kamerian Dragon', DP_GAME_INFO),
     makeLazyDPMapSceneDesc(54, 'dp36_magic_cave_small',  'DP: Magic Cave - Small', DP_GAME_INFO),
+
+'Textures',
+
+makeLazyDPTextureExhibitSceneDesc('dp_textures', 'DP: Texture Viewer', DP_GAME_INFO),
+
 
 'Documentation Tools',
 makeLazyDPBlockGallerySceneDesc('dp_block_gallery', 'DP: Block Gallery', DP_GAME_INFO),
