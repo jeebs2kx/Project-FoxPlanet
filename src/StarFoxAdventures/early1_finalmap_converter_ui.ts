@@ -1,4 +1,6 @@
-import { debugResolveEarly1TextureId } from './textures.js';
+import { debugResolveEarly1TextureId, debugResolveEarly4TextureId } from './textures.js';
+import ArrayBufferSlice from '../ArrayBufferSlice.js';
+import { decompress as lzoDecompress } from '../Common/Compression/LZO.js';
 import type * as Viewer from '../viewer.js';
 import type { SceneContext } from '../SceneBase.js';
 import type { GfxDevice } from '../gfx/platform/GfxPlatform.js';
@@ -6,7 +8,49 @@ type Tri = [number, number, number, number];
 type GroupMode = 'single' | 'nibble0' | 'nibble1' | 'nibble2' | 'nibble3';
 type ColorMode = 'zero' | 'pidx' | 'neutral_shade';
 type TextureMode = 'mapped' | 'viewer_textureless' | 'pseudo_textureless';
+type EarlyMapFormat = 'early1_raw' | 'early4_lzo';
 type CollisionYMode = 'none' | 'raw' | 'subtract' | 'subtract_expand8' | 'subtract_expand32';
+
+type EarlyMapSourceInfo = {
+    format: EarlyMapFormat;
+    dlInfoStride: number;
+    shaderStride: number;
+    bitsOffsets: [number, number, number];
+    bitsByteCounts: [number, number, number];
+    shaderMode: 'early1' | 'early4_final';
+    forceColorIndex16: boolean;
+    expandColorPalette16: boolean;
+    textureRemapMode: 'early1' | 'early4' | 'identity';
+};
+
+const EARLY1_SOURCE_INFO: EarlyMapSourceInfo = {
+    format: 'early1_raw',
+    dlInfoStride: 0x34,
+    shaderStride: 0x40,
+    bitsOffsets: [0x74, 0x7C, 0x84],
+    bitsByteCounts: [0x78, 0x80, 0x88],
+    shaderMode: 'early1',
+    forceColorIndex16: false,
+    expandColorPalette16: false,
+    textureRemapMode: 'early1',
+};
+
+const EARLY4_SOURCE_INFO: EarlyMapSourceInfo = {
+    format: 'early4_lzo',
+    dlInfoStride: 0x38,
+    shaderStride: 0x44,
+    bitsOffsets: [0x78, 0x7C, 0x80],
+    bitsByteCounts: [0x84, 0x86, 0x88],
+    shaderMode: 'early4_final',
+    forceColorIndex16: true,
+    expandColorPalette16: true,
+
+    textureRemapMode: 'early4',
+};
+
+function earlyMapSourceInfo(format: EarlyMapFormat): EarlyMapSourceInfo {
+    return format === 'early4_lzo' ? EARLY4_SOURCE_INFO : EARLY1_SOURCE_INFO;
+}
 type CollisionWinding = 'keep' | 'swap12' | 'swap01' | 'swap02';
 function textureModeUsesFlatSample(mode: TextureMode): boolean {
     return mode === 'viewer_textureless' || mode === 'pseudo_textureless';
@@ -14,15 +58,22 @@ function textureModeUsesFlatSample(mode: TextureMode): boolean {
 export type Early1FinalMapConvertOptions = {
     modelId: number;
     outBaseName: string;
+    earlyMapFormat: EarlyMapFormat;
     groupMode: GroupMode;
     colorMode: ColorMode;
     textureMode: TextureMode;
-flatTextureId: number;
-flatTexS: number;
-flatTexT: number;
-collisionYMode: CollisionYMode;
+    flatTextureId: number;
+    flatTexS: number;
+    flatTexT: number;
+    collisionYMode: CollisionYMode;
     collisionWinding: CollisionWinding;
     maxTrisPerDL?: number;
+
+    objectsEnabled?: boolean;
+    objectMapId?: number;
+    keepObjectTypes?: number[];
+    mapsBin?: ArrayBuffer | Uint8Array;
+    mapsTab?: ArrayBuffer | Uint8Array;
 };
 
 export type Early1FinalMapConvertResult = {
@@ -30,6 +81,9 @@ export type Early1FinalMapConvertResult = {
     tab: Uint8Array;
     logs: string[];
     processedResourceIds: number[];
+
+    mapsBin?: Uint8Array;
+    mapsTab?: Uint8Array;
 };
 
 const TAB_FLAG = 0x10000000;
@@ -138,6 +192,57 @@ function readRawArchive(bin: Uint8Array, tabIn: Uint8Array): ArchiveBlocks {
     return { tab, blocks, ids: [...blocks.keys()].sort((a, b) => a - b) };
 }
 
+function fourCC(b: Uint8Array, o: number): string {
+    return String.fromCharCode(
+        u8(b, o + 0),
+        u8(b, o + 1),
+        u8(b, o + 2),
+        u8(b, o + 3),
+    );
+}
+
+function decompressLZOnResource(block: Uint8Array, rid: number): OwnedU8 {
+    if (block.byteLength < 4)
+        return copyU8(block);
+
+    if (fourCC(block, 0) !== 'LZOn')
+        return copyU8(block);
+
+    if (block.byteLength < 0x10)
+        throw new Error(`resource ${rid} has truncated LZOn header, len=0x${block.byteLength.toString(16)}`);
+
+    const rawLen = u32(block, 0x08);
+    const comp = ArrayBufferSlice.fromView(block.subarray(0x10));
+    const raw = lzoDecompress(comp, rawLen);
+
+    return copyU8(new Uint8Array(raw.copyToBuffer()));
+}
+
+function readLzoArchive(bin: Uint8Array, tabIn: Uint8Array): ArchiveBlocks {
+    const rawArc = readRawArchive(bin, tabIn);
+    const blocks = new Map<number, Uint8Array>();
+
+    for (const rid of rawArc.ids) {
+        const block = rawArc.blocks.get(rid);
+        if (!block)
+            continue;
+
+        blocks.set(rid, decompressLZOnResource(block, rid));
+    }
+
+    return {
+        tab: rawArc.tab,
+        blocks,
+        ids: [...blocks.keys()].sort((a, b) => a - b),
+    };
+}
+
+function readEarlyMapSourceArchive(bin: Uint8Array, tabIn: Uint8Array, format: EarlyMapFormat): ArchiveBlocks {
+    return format === 'early4_lzo'
+        ? readLzoArchive(bin, tabIn)
+        : readRawArchive(bin, tabIn);
+}
+
 async function streamTransform(kind: 'deflate' | 'inflate', input: Uint8Array): Promise<Uint8Array> {
     const streamCtorName = kind === 'deflate' ? 'CompressionStream' : 'DecompressionStream';
     const StreamCtor = (globalThis as any)[streamCtorName];
@@ -189,6 +294,504 @@ async function writeZlb(raw: Uint8Array): Promise<Uint8Array> {
     p32(out, 0x0C, comp.byteLength);
     out.set(comp, 0x10);
     return out;
+}
+
+function parseMaybeHexInt(text: string, fallback: number): number {
+    const s = text.trim();
+
+    if (s.length === 0)
+        return fallback;
+
+    const isHex =
+        s.startsWith('0x') ||
+        s.startsWith('0X') ||
+        /[a-fA-F]/.test(s);
+
+    const v = parseInt(isHex ? s.replace(/^0x/i, '') : s, isHex ? 16 : 10);
+
+    return Number.isFinite(v) ? v : fallback;
+}
+
+function parseSfaMapId(text: string, fallback: number): number {
+    const s = text.trim();
+
+    if (s.length === 0)
+        return fallback;
+
+    const clean = s.startsWith('0x') || s.startsWith('0X') ? s.slice(2) : s;
+
+    if (!/^[0-9a-fA-F]+$/.test(clean))
+        throw new Error(`bad SFA map ID "${text}"`);
+
+    return parseInt(clean, 16);
+}
+
+const SFA_OBJECT_ALWAYS_KEEP_TYPES: number[] = [
+    0x000D,
+    0x004C,
+    0x004B,
+    0x0230,
+    0x004D,
+    0x004E,
+    0x004F,
+    0x0050,
+    0x0054,
+    0x017E,
+    0x07F1,
+    0x04EF,
+    0x060D,
+    0x0554,
+    0x02B0,
+    0x0509,
+    0x0312,
+    0x071E,
+    0x0525,
+    0x048E,
+    0x0282,
+    0x02FF,
+    0x0431
+
+ 
+];
+
+function parseHexObjectKeepList(text: string): number[] {
+    const out: number[] = [];
+
+    for (const part of text.split(/[,\s]+/g)) {
+        const s = part.trim();
+
+        if (s.length === 0)
+            continue;
+
+        const clean = s.startsWith('0x') || s.startsWith('0X') ? s.slice(2) : s;
+        const v = parseInt(clean, 16);
+
+        if (!Number.isFinite(v) || v < 0 || v > 0xFFFF)
+            throw new Error(`bad object type "${part}" in keep list`);
+
+        out.push(v & 0xFFFF);
+    }
+
+return out;
+}
+
+
+type SfaMapAutoEntry = {
+    id: number;
+    romlist: string;
+    directory: string;
+    name: string;
+};
+
+const SFA_MAP_AUTO_ENTRIES: SfaMapAutoEntry[] = [
+    { id: 0x00, romlist: 'frontend', directory: 'shipbattle', name: 'Ship Battle' },
+    { id: 0x01, romlist: 'frontend2', directory: 'animtest', name: 'ZNot Used - Front End2' },
+    { id: 0x02, romlist: 'dragrock', directory: 'dragrock', name: 'Dragon Rock - Top' },
+    { id: 0x03, romlist: 'krazoapalace', directory: 'animtest', name: 'ZNot Used - Krazoa Palace' },
+    { id: 0x04, romlist: 'temple', directory: 'volcano', name: 'Volcano Force Point' },
+    { id: 0x05, romlist: 'hightop', directory: 'animtest', name: 'Rolling Demo - Just In Case' },
+    { id: 0x06, romlist: 'discovery', directory: 'animtest', name: 'ZNot Used - Discovery Falls' },
+    { id: 0x07, romlist: 'hollow', directory: 'swaphol', name: 'ThornTail Hollow' },
+    { id: 0x08, romlist: 'hollow2', directory: 'swapholbot', name: 'ThornTail Hollow - Undergro' },
+    { id: 0x09, romlist: 'mazecave', directory: 'mazecave', name: 'MazeTest' },
+    { id: 0x0A, romlist: 'wastes', directory: 'nwastes', name: 'SnowHorn Wastes' },
+    { id: 0x0B, romlist: 'warlock', directory: 'warlock', name: 'Krazoa Palace' },
+    { id: 0x0C, romlist: 'fortress', directory: 'crfort', name: 'CloudRunner Fortress' },
+    { id: 0x0D, romlist: 'wallcity', directory: 'wallcity', name: 'Walled City' },
+    { id: 0x0E, romlist: 'swapcircle', directory: 'lightfoot', name: 'LightFoot Village' },
+    { id: 0x0F, romlist: 'cloudtreasure', directory: 'cloudtreasure', name: 'ZNot Used - CloudRunner - T' },
+    { id: 0x10, romlist: 'clouddungeon', directory: 'clouddungeon', name: 'CloudRunner - Dungeon' },
+    { id: 0x11, romlist: 'cloudtrap', directory: 'animtest', name: 'ZNot Used - CloudRunner - T' },
+    { id: 0x12, romlist: 'moonpass', directory: 'mmpass', name: 'Moon Mountain Pass' },
+    { id: 0x13, romlist: 'snowmines', directory: 'darkicemines', name: 'DarkIce Mines - Top' },
+    { id: 0x14, romlist: 'krashrin2', directory: 'animtest', name: 'ZNot Used - Krazoa Shrine' },
+    { id: 0x15, romlist: 'kraztest', directory: 'desert', name: 'Ocean Force Point - Bottom' },
+    { id: 0x16, romlist: 'krazchamber', directory: 'animtest', name: 'krazchamber' },
+    { id: 0x17, romlist: 'newicemount', directory: 'icemountain', name: 'Ice Mountain' },
+    { id: 0x18, romlist: 'newicemount2', directory: 'animtest', name: 'ZNot Used - Ice Mountain 2' },
+    { id: 0x19, romlist: 'newicemount3', directory: 'animtest', name: 'ZNot Used - Ice Mountain 3' },
+    { id: 0x1A, romlist: 'animtest', directory: 'animtest', name: 'Animtest' },
+    { id: 0x1B, romlist: 'snowmines2', directory: 'darkicemines2', name: 'DarkIce Mines - Bottom' },
+    { id: 0x1C, romlist: 'snowmines3', directory: 'bossgaldon', name: 'BOSS DarkIce' },
+    { id: 0x1D, romlist: 'capeclaw', directory: 'capeclaw', name: 'Cape Claw' },
+    { id: 0x1E, romlist: 'insidegal', directory: 'insidegal', name: 'ZNot Used - Inside Galleon' },
+    { id: 0x1F, romlist: 'dfshrine', directory: 'dfshrine', name: 'Test Of Combat' },
+    { id: 0x20, romlist: 'mmshrine', directory: 'mmshrine', name: 'Test Of Fear' },
+    { id: 0x21, romlist: 'ecshrine', directory: 'ecshrine', name: 'Test Of Skill' },
+    { id: 0x22, romlist: 'gpshrine', directory: 'gpshrine', name: 'Test Of Knowledge' },
+    { id: 0x23, romlist: 'diamondbay', directory: 'dbay', name: 'ZNot Used - Diamond Bay' },
+    { id: 0x24, romlist: 'earthwalker', directory: 'animtest', name: 'ZNot Used - EarthWalker Tem' },
+    { id: 0x25, romlist: 'willow', directory: 'animtest', name: 'ZNot Used - Willow Grove' },
+    { id: 0x26, romlist: 'arwing', directory: 'arwing', name: 'ArWing Level - Andross' },
+    { id: 0x27, romlist: 'dbshrine', directory: 'dbshrine', name: 'Test Of Strength' },
+    { id: 0x28, romlist: 'nwshrine', directory: 'worldmap', name: 'BOSS Scales' },
+    { id: 0x29, romlist: 'ccshrine', directory: 'worldmap', name: 'World Map' },
+    { id: 0x2A, romlist: 'wgshrine', directory: 'animtest', name: 'ZNot Used - WGShrine' },
+    { id: 0x2B, romlist: 'cloudrace', directory: 'cloudrace', name: 'CloudRunner - Race' },
+    { id: 0x2C, romlist: 'finalboss', directory: 'bossdrakor', name: 'BOSS Drakor' },
+    { id: 0x2D, romlist: 'wminsert', directory: 'animtest', name: 'ZNot Used - WMinsert' },
+    { id: 0x2E, romlist: 'snowmines4', directory: 'animtest', name: 'ZNot Used - DarkIce Mines -' },
+    { id: 0x2F, romlist: 'snowmines5', directory: 'animtest', name: 'ZNot Used - DarkIce Mines -' },
+    { id: 0x30, romlist: 'trexboss', directory: 'bosstrex', name: 'BOSS TRex' },
+    { id: 0x31, romlist: 'mikelava', directory: 'animtest', name: 'ZNot Used - MikesLava' },
+    { id: 0x32, romlist: 'dfptop', directory: 'dfptop', name: 'Ocean Force Point - Top' },
+    { id: 0x33, romlist: 'swapstore', directory: 'shop', name: 'Shop' },
+    { id: 0x34, romlist: 'dragbot', directory: 'dragrockbot', name: 'Dragon Rock - Bottom' },
+    { id: 0x35, romlist: 'kamdrag', directory: 'animtest', name: 'ZNot Used - BOSS Kamerian D' },
+    { id: 0x36, romlist: 'magicave', directory: 'magiccave', name: 'Magic Cave - Small\\Big' },
+    { id: 0x37, romlist: 'duster', directory: 'cloudjoin', name: 'ZNot Used - Duster Cave' },
+    { id: 0x38, romlist: 'linkb', directory: 'linkb', name: 'LinkB - Ice2Wastes' },
+    { id: 0x39, romlist: 'cloudjoin', directory: 'animtest', name: 'ZNot Used - CloudRunner2Rac' },
+    { id: 0x3A, romlist: 'arwingtoplanet', directory: 'arwingtoplanet', name: 'Arwing to Planet' },
+    { id: 0x3B, romlist: 'arwingdarkice', directory: 'arwingdarkice', name: 'Arwing Darkice' },
+    { id: 0x3C, romlist: 'arwingcloud', directory: 'arwingcloud', name: 'Arwing Cloud' },
+    { id: 0x3D, romlist: 'arwingcity', directory: 'arwingcity', name: 'Arwing City' },
+    { id: 0x3E, romlist: 'arwingdragon', directory: 'arwingdragon', name: 'Arwing Dragon' },
+    { id: 0x3F, romlist: 'gamefront', directory: 'gamefront', name: 'Game Front' },
+    { id: 0x40, romlist: 'linklevel', directory: 'linklevel', name: 'LinkK - Nik Test' },
+    { id: 0x41, romlist: 'greatfox', directory: 'greatfox', name: 'Great Fox' },
+    { id: 0x42, romlist: 'linka', directory: 'linka', name: 'LinkA - Warpstone to Others' },
+    { id: 0x43, romlist: 'linkc', directory: 'linkc', name: 'LinkC - Wastes to Hollow' },
+    { id: 0x44, romlist: 'linkd', directory: 'linkd', name: 'LinkD - Darkmines top 2 bot' },
+    { id: 0x45, romlist: 'linke', directory: 'linke', name: 'LinkE - hollow to moon pass' },
+    { id: 0x46, romlist: 'linkf', directory: 'linkf', name: 'LinkF - moonpass to volcano' },
+    { id: 0x47, romlist: 'linkg', directory: 'linkg', name: 'LinkG - hollow to lightfoot' },
+    { id: 0x48, romlist: 'linkh', directory: 'linkh', name: 'LinkH - lightfoot to capecl' },
+    { id: 0x49, romlist: 'linkj', directory: 'linkj', name: 'LinkJ - capeclaw 2 ocean fo' },
+    { id: 0x4A, romlist: 'linki', directory: 'linki', name: 'LinkI - CloudRunner2Race' },
+];
+
+
+const FINAL_MOD_TO_SFA_MAP_ID = new Map<number, number>([
+    [4, 0x02],   // Dragon Rock - Top
+    [8, 0x04],   // Volcano Force Point
+[13, 0x07],  // Swaphol
+[15, 0x0A],  // Snowhorn Wastes
+    [16, 0x0B],  // Krazoa Palace
+    [17, 0x33],  // Shop
+    [19, 0x0C],  // Cloudrunner Fortress
+    [21, 0x0D],  // Walled City
+    [22, 0x0E],  // Lightfoot
+    [26, 0x12],  // MMpass
+    [27, 0x13],  // Darkice Mines 1
+    [35, 0x1B],  // Darkice Mines 2
+    [45, 0x28],  // NWShrine
+    [48, 0x1D],  // Cape Claw
+]);
+
+function hexMapId(v: number): string {
+    return v.toString(16).toUpperCase().padStart(2, '0');
+}
+
+function hexObjectResourceIdForMap(mapId: number): string {
+    return (mapId * 7 + 6).toString(16).toUpperCase().padStart(2, '0');
+}
+
+function normalizeAutoDetectText(s: string): string {
+    return s.toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function parseModNumberFromFilename(filename: string): number | null {
+    const m = /(?:^|[_\-.])(?:root_)?mod([0-9a-fA-F]+)(?=[_\-.]|$)/i.exec(filename);
+
+    if (!m)
+        return null;
+
+    return parseMaybeHexInt(m[1], -1) >= 0
+        ? parseMaybeHexInt(m[1], -1)
+        : null;
+}
+
+function longestMapDetectToken(e: SfaMapAutoEntry): number {
+    return Math.max(
+        normalizeAutoDetectText(e.romlist).length,
+        normalizeAutoDetectText(e.directory).length,
+        normalizeAutoDetectText(e.name).length,
+    );
+}
+
+function inferSfaMapFromText(text: string): SfaMapAutoEntry | null {
+    const hay = normalizeAutoDetectText(text);
+
+    const entries = SFA_MAP_AUTO_ENTRIES
+        .slice()
+        .sort((a, b) => longestMapDetectToken(b) - longestMapDetectToken(a));
+
+    for (const entry of entries) {
+        const tokens = [
+            entry.romlist,
+            entry.directory,
+            entry.name,
+        ]
+            .map(normalizeAutoDetectText)
+            .filter((s) => s.length >= 3);
+
+        for (const token of tokens) {
+            if (hay.includes(token))
+                return entry;
+        }
+    }
+
+    return null;
+}
+
+function sfaMapEntryById(id: number): SfaMapAutoEntry | null {
+    return SFA_MAP_AUTO_ENTRIES.find((e) => e.id === id) ?? null;
+}
+
+function inferSfaMapFromFilename(filename: string, modId: number | null): SfaMapAutoEntry | null {
+    const byText = inferSfaMapFromText(filename);
+    if (byText)
+        return byText;
+
+    if (modId !== null) {
+        const mappedId = FINAL_MOD_TO_SFA_MAP_ID.get(modId);
+
+        if (mappedId !== undefined)
+            return sfaMapEntryById(mappedId);
+    }
+
+    return null;
+}
+
+function autoFillConverterFromFinalFile(
+    file: File | null,
+    modelInput: HTMLInputElement,
+    nameInput: HTMLInputElement,
+    objectMapInput: HTMLInputElement,
+    log: HTMLTextAreaElement,
+): void {
+    if (!file)
+        return;
+
+    const filename = file.name;
+    const modId = parseModNumberFromFilename(filename);
+
+    if (modId !== null) {
+        modelInput.value = String(modId);
+        nameInput.value = `mod${modId}`;
+    }
+
+    const mapEntry = inferSfaMapFromFilename(filename, modId);
+
+    if (mapEntry) {
+        objectMapInput.value = hexMapId(mapEntry.id);
+
+        log.value =
+            `Auto-detected from ${filename}\n` +
+            `visual mod=${modId !== null ? modId : 'unknown'}\n` +
+            `SFA map=${hexMapId(mapEntry.id)} ${mapEntry.romlist} / ${mapEntry.name}\n` +
+            `MAPS object resource=0x${hexObjectResourceIdForMap(mapEntry.id)}\n` +
+            `Keep list objects stay in-place; all other objects move far away.\n`;
+    } else if (modId !== null) {
+        log.value =
+            `Auto-detected from ${filename}\n` +
+            `visual mod=${modId}\n` +
+            `No SFA map match found. Fill "SFA object map ID" manually.\n`;
+    }
+}
+
+function findNextMapsArchiveOffset(tab: Uint8Array, start: number, binSize: number): number {
+    let best = binSize;
+
+    for (let i = 0; i + 4 <= tab.byteLength; i += 4) {
+        const raw = u32(tab, i);
+
+        if (raw === 0 || raw === 0xFFFFFFFF)
+            continue;
+
+        const off = raw & 0x0FFFFFFF;
+
+        if (off > start && off < best)
+            best = off;
+    }
+
+    if (best <= start || best > binSize)
+        throw new Error(`could not find end offset for MAPS resource at 0x${start.toString(16)}`);
+
+    return best;
+}
+
+type PackedObjectList = {
+    raw: Uint8Array;
+    total: number;
+    kept: number;
+    removed: number;
+    keepSummary: string;
+};
+
+function stripSfaObjectListRaw(raw: Uint8Array, keepObjectTypes: number[]): PackedObjectList {
+const keep = new Set<number>(
+    [
+        ...SFA_OBJECT_ALWAYS_KEEP_TYPES,
+        ...keepObjectTypes,
+    ].map((v) => v & 0xFFFF),
+);
+    const out = copyU8(raw);
+
+    let readOff = 0;
+    let total = 0;
+    let kept = 0;
+    let moved = 0;
+
+    const farXBits = 0x46EA6000; // 30000.0f
+    const farYBits = 0xC6EA6000; // -30000.0f
+    const farZBits = 0x46EA6000; // 30000.0f
+
+    while (readOff + 4 <= raw.byteLength) {
+        const objectType = u16(raw, readOff + 0x00);
+        const words = u8(raw, readOff + 0x02);
+        const recordLen = words * 4;
+
+        if (recordLen === 0)
+            break;
+
+        if (recordLen < 4 || readOff + recordLen > raw.byteLength) {
+            throw new Error(
+                `bad object record at raw+0x${readOff.toString(16)}` +
+                ` type=0x${objectType.toString(16).padStart(4, '0')}` +
+                ` words=0x${words.toString(16)}` +
+                ` len=0x${recordLen.toString(16)}` +
+                ` rawLen=0x${raw.byteLength.toString(16)}`,
+            );
+        }
+
+        total++;
+
+        if (keep.has(objectType)) {
+            kept++;
+        } else {
+            if (recordLen >= 0x14) {
+                p32(out, readOff + 0x08, farXBits);
+                p32(out, readOff + 0x0C, farYBits);
+                p32(out, readOff + 0x10, farZBits);
+                moved++;
+            }
+        }
+
+        readOff += recordLen;
+    }
+
+    const keepSummary = [...keep]
+        .sort((a, b) => a - b)
+        .map((v) => `0x${v.toString(16).padStart(4, '0')}`)
+        .join(',');
+
+    return {
+        raw: out,
+        total,
+        kept,
+        removed: moved,
+        keepSummary,
+    };
+}
+
+async function patchSfaMapsObjectsForMap(
+    mapsBinIn: ArrayBuffer | Uint8Array,
+    mapsTabIn: ArrayBuffer | Uint8Array,
+    mapId: number,
+    keepObjectTypes: number[],
+): Promise<{ mapsBin: Uint8Array; mapsTab: Uint8Array; log: string }> {
+    const mapsBin = asU8(mapsBinIn);
+    const mapsTab = asU8(mapsTabIn);
+
+    const objectResourceId = mapId * 7 + 6;
+    const tabOff = objectResourceId * 4;
+
+    if (tabOff + 4 > mapsTab.byteLength)
+        throw new Error(`map ${mapId} object resource ${objectResourceId} is outside MAPS.tab`);
+
+    const start = u32(mapsTab, tabOff) & 0x0FFFFFFF;
+
+    if (start <= 0 || start >= mapsBin.byteLength) {
+        throw new Error(
+            `bad MAPS.tab object offset for map ${mapId}` +
+            ` resource=${objectResourceId}` +
+            ` offset=0x${start.toString(16)}`,
+        );
+    }
+
+    const end = findNextMapsArchiveOffset(mapsTab, start, mapsBin.byteLength);
+    const oldSpan = end - start;
+
+    let zlbOff = start;
+    let hasFaceFeed = false;
+
+    if (u32(mapsBin, start) === 0xFACEFEED) {
+        hasFaceFeed = true;
+        zlbOff = start + 0x20;
+    }
+
+    if (fourCC(mapsBin, zlbOff) !== 'ZLB\0') {
+        throw new Error(
+            `map ${mapId} object resource ${objectResourceId}` +
+            ` is not ZLB/FACEFEED-ZLB at MAPS.bin+0x${start.toString(16)}`,
+        );
+    }
+
+    const rawLen = u32(mapsBin, zlbOff + 0x08);
+    const compLen = u32(mapsBin, zlbOff + 0x0C);
+
+    if (zlbOff + 0x10 + compLen > mapsBin.byteLength) {
+        throw new Error(
+            `map ${mapId} object ZLB compressed data exceeds MAPS.bin` +
+            ` zlbOff=0x${zlbOff.toString(16)}` +
+            ` compLen=0x${compLen.toString(16)}`,
+        );
+    }
+
+    const raw = await decompressZlib(mapsBin.slice(zlbOff + 0x10, zlbOff + 0x10 + compLen));
+
+    if (raw.byteLength !== rawLen) {
+        throw new Error(
+            `map ${mapId} object raw length mismatch:` +
+            ` got 0x${raw.byteLength.toString(16)}` +
+            ` expected 0x${rawLen.toString(16)}`,
+        );
+    }
+
+    const stripped = stripSfaObjectListRaw(raw, keepObjectTypes);
+    const newZlb = await writeZlb(stripped.raw);
+
+    const maxZlbLen = oldSpan - (hasFaceFeed ? 0x20 : 0);
+
+    if (newZlb.byteLength > maxZlbLen) {
+        throw new Error(
+            `stripped object ZLB grew too large:` +
+            ` new=0x${newZlb.byteLength.toString(16)}` +
+            ` max=0x${maxZlbLen.toString(16)}` +
+            ` oldSpan=0x${oldSpan.toString(16)}`,
+        );
+    }
+
+    const outBin = copyU8(mapsBin);
+    outBin.fill(0, start, end);
+
+    if (hasFaceFeed) {
+        outBin.set(mapsBin.subarray(start, start + 0x20), start);
+        p32(outBin, start + 0x04, stripped.raw.byteLength);
+        p32(outBin, start + 0x0C, newZlb.byteLength);
+
+        outBin.set(newZlb, start + 0x20);
+    } else {
+        outBin.set(newZlb, start);
+    }
+
+const log =
+    `objects moved far for map=${mapId}` +
+    ` objectResource=${objectResourceId}` +
+    ` offset=0x${start.toString(16)}` +
+    ` span=0x${oldSpan.toString(16)}` +
+    ` raw=0x${raw.byteLength.toString(16)}` +
+    ` oldZlb=0x${(0x10 + compLen).toString(16)}` +
+    ` newZlb=0x${newZlb.byteLength.toString(16)}` +
+    ` total=${stripped.total}` +
+    ` kept=${stripped.kept}` +
+    ` moved=${stripped.removed}` +
+    ` keep=[${stripped.keepSummary}]` +
+    ` far=(30000,-30000,30000)`;
+
+    return { mapsBin: outBin, mapsTab, log };
 }
 
 type EarlyInfo = ReturnType<typeof earlyInfo>;
@@ -275,6 +878,43 @@ function colors(root: Uint8Array, ri: EarlyInfo): Uint8Array {
     return root.slice(ri.clrOff, ri.clrOff + ri.clrCount * 2);
 }
 
+function expandedEarly34Colors(root: Uint8Array, ri: EarlyInfo): Uint8Array {
+    const palBytes = colors(root, ri);
+    const palCount = palBytes.byteLength >>> 1;
+    const dst = new Uint8Array(0x10000 * 2);
+
+    if (palCount <= 0) {
+        dst.fill(0xFF);
+        return dst;
+    }
+
+    const mask = (palCount <= 0x0100) ? 0x00FF : (palCount <= 0x1000) ? 0x0FFF : -1;
+
+    for (let idx = 0; idx < 0x10000; idx++) {
+        let srcIdx = idx & 0x7FFF;
+
+        if (mask !== -1)
+            srcIdx &= mask;
+
+        if (srcIdx >= palCount)
+            srcIdx %= palCount;
+
+        const s = srcIdx << 1;
+        const d = idx << 1;
+
+        dst[d + 0] = palBytes[s + 0] ?? 0xFF;
+        dst[d + 1] = palBytes[s + 1] ?? 0xFF;
+    }
+
+    return dst;
+}
+
+function colorsForFinalMapOutput(root: Uint8Array, ri: EarlyInfo, sourceInfo: EarlyMapSourceInfo): Uint8Array {
+    return sourceInfo.expandColorPalette16
+        ? expandedEarly34Colors(root, ri)
+        : colors(root, ri);
+}
+
 function texcoords(root: Uint8Array, ri: EarlyInfo): Uint8Array {
     return root.slice(ri.texcoordOff, ri.texcoordOff + ri.texcoordCount * 4);
 }
@@ -355,9 +995,6 @@ function tryDecodeEarlyShaderForDLs(root: Uint8Array, bitOff: number, dlCount: n
         } else if (op === OP_SET_VCD) {
             if (!br.canRead(3))
                 break;
-
-            // Same bit order your final writer uses:
-            // bit0 = POS16, bit1 = CLR16, bit2 = TEX16.
             currentVcdBits = br.get(1) | (br.get(1) << 1) | (br.get(1) << 2);
         } else if (op === OP_SET_MATRICES) {
             if (!br.canRead(12))
@@ -378,14 +1015,15 @@ function tryDecodeEarlyShaderForDLs(root: Uint8Array, bitOff: number, dlCount: n
     return { shaderForDL, vcdBitsForDL, score, calls };
 }
 
-function decodeEarlyShaderForDLs(root: Uint8Array, dlCount: number, shaderCount: number): { shaderForDL: number[]; vcdBitsForDL: number[]; bitOff: number; calls: number } {
-    const candidates = [
-        u32(root, 0x74),
-        u32(root, 0x78),
-        u32(root, 0x7C),
-        u32(root, 0x80),
-        u32(root, 0x84),
-    ].filter((v, i, a) => v > 0 && v < root.byteLength && a.indexOf(v) === i);
+function decodeEarlyShaderForDLs(
+    root: Uint8Array,
+    dlCount: number,
+    shaderCount: number,
+    sourceInfo: EarlyMapSourceInfo = EARLY1_SOURCE_INFO,
+): { shaderForDL: number[]; vcdBitsForDL: number[]; bitOff: number; calls: number } {
+    const candidates = sourceInfo.bitsOffsets
+        .map((off) => u32(root, off))
+        .filter((v, i, a) => v > 0 && v < root.byteLength && a.indexOf(v) === i);
 
     let best = {
         shaderForDL: new Array<number>(dlCount).fill(-1),
@@ -817,7 +1455,6 @@ function buildTriMaterialHintsForCollisionTris(
             fmt = chooseEarlyDLVertexFormat(dl, ri, targetKeys);
 
         scanEarlyDLTriangles(dl, fmt, (corners) => {
-            // Only require POS/TEX to be valid. Color can be missing or wider than FinalMap supports.
             for (const c of corners) {
                 if (c.pos >= ri.posCount)
                     return;
@@ -877,9 +1514,6 @@ function buildTriMaterialHintsForCollisionTris(
 
         const used = usedPerKey.get(key) ?? 0;
         const fallbackIndex = Math.min(used, list.length - 1);
-
-        // Keep Early decoded shader only as metadata.
-        // It is not safe enough to choose final texture/material candidates.
         void groupMode;
         void texCount;
         void textureIndexForShader;
@@ -970,15 +1604,11 @@ function rgba4(r: number, g: number, b: number, a: number = 0xF): number {
     return ((r & 0xF) << 12) | ((g & 0xF) << 8) | ((b & 0xF) << 4) | (a & 0xF);
 }
 
-function neutralShadeColors(): Uint8Array {
-    // 16 light warm-grey / off-white RGBA4 shades.
-    const out = new Uint8Array(16 * 2);
+function neutralShadeColors(): Uint8Array {   
+     const out = new Uint8Array(16 * 2);
 
     for (let i = 0; i < 16; i++) {
-        // Keep the ramp readable but brighter and warmer.
-        const base = 6 + Math.round((i / 15) * 7); // 6..13
-
-        // Slight warm tint: a little more R/G than B.
+        const base = 6 + Math.round((i / 15) * 7); 
         const r = Math.min(15, base + 1);
         const g = Math.min(15, base + 1);
         const b = Math.min(15, base);
@@ -1141,8 +1771,6 @@ function buildBitstreamForDLOrder(
     for (const listNum of dlOrder) {
         const shaderNum = shaderForDL[listNum] ?? 0;
         const vcdBits = vcdBitsForDL[listNum] ?? 0x05;
-
-        // DLInfo +0x14 is the bit offset of this command packet inside its own layer stream.
         special[listNum] = bw.bitIndex;
 
         bw.put(OP_SET_SHADER, 4);
@@ -1221,22 +1849,19 @@ function buildLayerBitstreamsFromEarlyPasses(
     shaderForDL: number[],
     vcdBitsForDL: number[],
     earlyDLIndexes: number[],
+    sourceInfo: EarlyMapSourceInfo = EARLY1_SOURCE_INFO,
 ): BuiltLayerBitstreams {
-    const earlyDLInfoStride = 0x34;
+    const earlyDLInfoStride = sourceInfo.dlInfoStride;
     const earlyDLCount = Math.min(
         ri.dlInfoCount,
         Math.max(0, ((root.byteLength - ri.dlInfoOff) / earlyDLInfoStride) | 0),
         255,
     );
 
-    // Early1 map blocks use three render-pass bitstreams:
-    // 0x74/0x78 = normal,
-    // 0x7C/0x80 = translucent/effect,
-    // 0x84/0x88 = water/special.
     const earlyLayerStreams = [
-        { bitOff: u32(root, 0x74), byteCount: u16(root, 0x78) },
-        { bitOff: u32(root, 0x7C), byteCount: u16(root, 0x80) },
-        { bitOff: u32(root, 0x84), byteCount: u16(root, 0x88) },
+        { bitOff: u32(root, sourceInfo.bitsOffsets[0]), byteCount: u16(root, sourceInfo.bitsByteCounts[0]) },
+        { bitOff: u32(root, sourceInfo.bitsOffsets[1]), byteCount: u16(root, sourceInfo.bitsByteCounts[1]) },
+        { bitOff: u32(root, sourceInfo.bitsOffsets[2]), byteCount: u16(root, sourceInfo.bitsByteCounts[2]) },
     ];
 
     const outputIndexForEarlyDL = new Map<number, number>();
@@ -1270,9 +1895,6 @@ function buildLayerBitstreamsFromEarlyPasses(
             assigned.add(outListNum);
         }
     }
-
-    // Safety: if a copied DL was not called by any decoded Early1 stream,
-    // keep it visible in the normal stream instead of dropping geometry.
     for (let outListNum = 0; outListNum < shaderForDL.length; outListNum++) {
         if (!assigned.has(outListNum)) {
             layerCalls[0].push(outListNum);
@@ -1299,9 +1921,6 @@ function buildShaderTable(final: Uint8Array, fi: FinalInfo, shaderCount: number,
 
     for (let i = 0; i < shaderCount; i++) {
         const sh = new Uint8Array(proto);
-
-        // Shader index can be larger than texture count.
-        // Texture slot must stay inside the generated texture table.
         const texSlot = textureIndexForShader?.[i] ?? (i % Math.max(1, texCount));
         p32(sh, 0x24, texSlot % Math.max(1, texCount));
         p32(sh, 0x40, 0x06010000);
@@ -1400,8 +2019,6 @@ function retagDisplayListToVat5(dlIn: Uint8Array, vcdBits: number): Uint8Array {
         const prim = cmd & 0xF8;
         if (prim < 0x80 || prim > 0xB8)
             break;
-
-        // Keep primitive, force VAT 5. FinalMap VAT 5 has POS shift 3 and TEX shift 8.
         out[p++] = prim | 5;
 
         const count = u16(out, p);
@@ -1415,6 +2032,297 @@ function retagDisplayListToVat5(dlIn: Uint8Array, vcdBits: number): Uint8Array {
     }
 
     return out;
+}
+
+type RepackedDLResult = {
+    dl: Uint8Array;
+    ok: boolean;
+    log: string;
+};
+
+function writeDLIndex(out: number[], value: number, size: 1 | 2): void {
+    if (size === 2) {
+        out.push((value >>> 8) & 0xFF, value & 0xFF);
+    } else {
+        out.push(value & 0xFF);
+    }
+}
+
+function compactEarly4ColorIndex(color: number, ri: EarlyInfo): number {
+    const count = Math.max(1, ri.clrCount);
+
+    const lo = color & 0xFF;
+    if (lo < count)
+        return lo;
+
+    const hi = (color >>> 8) & 0xFF;
+    if (hi < count)
+        return hi;
+
+    return color % count;
+}
+
+function repackDisplayListToVat5(
+    dlIn: Uint8Array,
+    readVcdBits: number,
+    writeVcdBits: number,
+    ri: EarlyInfo,
+    compactColor: boolean,
+): RepackedDLResult {
+    const readPosSize: 1 | 2 = (readVcdBits & 0x01) !== 0 ? 2 : 1;
+    const readColorSize: 1 | 2 = (readVcdBits & 0x02) !== 0 ? 2 : 1;
+    const readTexSize: 1 | 2 = (readVcdBits & 0x04) !== 0 ? 2 : 1;
+    const readRecSize = readPosSize + readColorSize + readTexSize;
+
+    const writePosSize: 1 | 2 = (writeVcdBits & 0x01) !== 0 ? 2 : 1;
+    const writeColorSize: 1 | 2 = (writeVcdBits & 0x02) !== 0 ? 2 : 1;
+    const writeTexSize: 1 | 2 = (writeVcdBits & 0x04) !== 0 ? 2 : 1;
+
+    const out: number[] = [];
+    let p = 0;
+    let prims = 0;
+    let verts = 0;
+    let compactedColors = 0;
+
+    while (p + 3 <= dlIn.byteLength) {
+        const cmd = dlIn[p];
+
+        if (cmd === 0) {
+            out.push(0);
+            return {
+                dl: new Uint8Array(out),
+                ok: true,
+                log: `repackOK/prims=${prims}/verts=${verts}/colors=${compactedColors}/old=0x${dlIn.byteLength.toString(16)}/new=0x${out.length.toString(16)}`,
+            };
+        }
+
+        const prim = cmd & 0xF8;
+        if (prim < 0x80 || prim > 0xB8) {
+            return {
+                dl: retagDisplayListToVat5(dlIn, readVcdBits),
+                ok: false,
+                log: `repackBAD/badPrim=0x${prim.toString(16)}@0x${p.toString(16)}/keptReadVcd/old=0x${dlIn.byteLength.toString(16)}`,
+            };
+        }
+
+        const count = u16(dlIn, p + 1);
+        p += 3;
+
+        const next = p + count * readRecSize;
+        if (next > dlIn.byteLength) {
+            return {
+                dl: retagDisplayListToVat5(dlIn, readVcdBits),
+                ok: false,
+                log: `repackBAD/oob@0x${p.toString(16)}/count=${count}/readRec=${readRecSize}/end=0x${next.toString(16)}/len=0x${dlIn.byteLength.toString(16)}/keptReadVcd`,
+            };
+        }
+
+        out.push(prim | 5);
+        out.push((count >>> 8) & 0xFF, count & 0xFF);
+
+        for (let i = 0; i < count; i++) {
+            let q = p + i * readRecSize;
+
+            const pos = readDLIndex(dlIn, q, readPosSize);
+            q += readPosSize;
+
+            const rawColor = readDLIndex(dlIn, q, readColorSize);
+            q += readColorSize;
+
+            const tex = readDLIndex(dlIn, q, readTexSize);
+
+            const color = compactColor
+                ? compactEarly4ColorIndex(rawColor, ri)
+                : rawColor;
+
+            if (compactColor && color !== rawColor)
+                compactedColors++;
+
+            writeDLIndex(out, pos, writePosSize);
+            writeDLIndex(out, color, writeColorSize);
+            writeDLIndex(out, tex, writeTexSize);
+            verts++;
+        }
+
+        p = next;
+        prims++;
+    }
+
+    return {
+        dl: new Uint8Array(out),
+        ok: true,
+        log: `repackOK/noEnd/prims=${prims}/verts=${verts}/colors=${compactedColors}/old=0x${dlIn.byteLength.toString(16)}/new=0x${out.length.toString(16)}`,
+    };
+}
+
+type Early4DLParseStats = {
+    prims: number;
+    verts: number;
+    ended: boolean;
+    stop: string;
+    parsedBytes: number;
+    trailingBytes: number;
+    badPos: number;
+    badColor: number;
+    badTex: number;
+    posMin: number;
+    posMax: number;
+    colorMin: number;
+    colorMax: number;
+    texMin: number;
+    texMax: number;
+    firstCmd: number;
+};
+
+function debugVcdName(vcdBits: number): string {
+    const v = vcdBits & 0x07;
+    return `0x${v.toString(16)}/p${(v & 0x01) !== 0 ? 16 : 8}c${(v & 0x02) !== 0 ? 16 : 8}t${(v & 0x04) !== 0 ? 16 : 8}`;
+}
+
+function debugRangeForLog(min: number, max: number): string {
+    return min <= max ? `${min}-${max}` : `none`;
+}
+
+function debugScanEarly4DLForLog(dl: Uint8Array, vcdBits: number, ri: EarlyInfo): Early4DLParseStats {
+    const posSize: 1 | 2 = (vcdBits & 0x01) !== 0 ? 2 : 1;
+    const colorSize: 1 | 2 = (vcdBits & 0x02) !== 0 ? 2 : 1;
+    const texSize: 1 | 2 = (vcdBits & 0x04) !== 0 ? 2 : 1;
+    const recSize = posSize + colorSize + texSize;
+
+    let p = 0;
+    let prims = 0;
+    let verts = 0;
+    let ended = false;
+    let stop = 'eof';
+    let firstCmd = -1;
+
+    let badPos = 0;
+    let badColor = 0;
+    let badTex = 0;
+
+    let posMin = 0x7FFFFFFF;
+    let posMax = -1;
+    let colorMin = 0x7FFFFFFF;
+    let colorMax = -1;
+    let texMin = 0x7FFFFFFF;
+    let texMax = -1;
+
+    while (p + 3 <= dl.byteLength) {
+        const cmd = dl[p];
+
+        if (firstCmd < 0)
+            firstCmd = cmd;
+
+        if (cmd === 0) {
+            ended = true;
+            stop = `end@0x${p.toString(16)}`;
+            break;
+        }
+
+        const prim = cmd & 0xF8;
+        if (prim < 0x80 || prim > 0xB8) {
+            stop = `badPrim0x${prim.toString(16)}@0x${p.toString(16)}`;
+            break;
+        }
+
+        const count = u16(dl, p + 1);
+        p += 3;
+
+        const next = p + count * recSize;
+        if (next > dl.byteLength) {
+            stop = `vertexOOB@0x${p.toString(16)} count=${count} rec=${recSize} end=0x${next.toString(16)} len=0x${dl.byteLength.toString(16)}`;
+            break;
+        }
+
+        for (let i = 0; i < count; i++) {
+            let q = p + i * recSize;
+
+            const pos = readDLIndex(dl, q, posSize);
+            q += posSize;
+
+            const color = readDLIndex(dl, q, colorSize);
+            q += colorSize;
+
+            const tex = readDLIndex(dl, q, texSize);
+
+            verts++;
+
+            posMin = Math.min(posMin, pos);
+            posMax = Math.max(posMax, pos);
+            colorMin = Math.min(colorMin, color);
+            colorMax = Math.max(colorMax, color);
+            texMin = Math.min(texMin, tex);
+            texMax = Math.max(texMax, tex);
+
+            if (pos >= ri.posCount)
+                badPos++;
+            const colorLimit = colorSize === 2 ? 0x10000 : ri.clrCount;
+            if (color >= colorLimit)
+                badColor++;
+
+            if (tex >= ri.texcoordCount)
+                badTex++;
+        }
+
+        p = next;
+        prims++;
+    }
+
+    return {
+        prims,
+        verts,
+        ended,
+        stop,
+        parsedBytes: p,
+        trailingBytes: Math.max(0, dl.byteLength - p),
+        badPos,
+        badColor,
+        badTex,
+        posMin,
+        posMax,
+        colorMin,
+        colorMax,
+        texMin,
+        texMax,
+        firstCmd,
+    };
+}
+
+function debugEarly4DLStatsForLog(s: Early4DLParseStats): string {
+    return (
+        `prim=${s.prims}` +
+        `/verts=${s.verts}` +
+        `/end=${s.ended ? 1 : 0}` +
+        `/stop=${s.stop}` +
+        `/trail=0x${s.trailingBytes.toString(16)}` +
+        `/badPCT=${s.badPos}/${s.badColor}/${s.badTex}` +
+        `/pos=${debugRangeForLog(s.posMin, s.posMax)}` +
+        `/clr=${debugRangeForLog(s.colorMin, s.colorMax)}` +
+        `/tex=${debugRangeForLog(s.texMin, s.texMax)}` +
+        `/first=0x${Math.max(0, s.firstCmd).toString(16)}`
+    );
+}
+
+function debugNumberSetForLog(set: Set<number>): string {
+    const xs = [...set].sort((a, b) => a - b);
+    return xs.length > 0 ? xs.join('/') : 'none';
+}
+
+function debugMissingLayerCallsForLog(copiedCount: number, layerCalls: [number[], number[], number[]]): string {
+    const called = new Set<number>();
+
+    for (const layer of layerCalls) {
+        for (const dl of layer)
+            called.add(dl);
+    }
+
+    const missing: number[] = [];
+    for (let i = 0; i < copiedCount; i++) {
+        if (!called.has(i))
+            missing.push(i);
+    }
+
+    return missing.length > 0 ? missing.join('/') : 'none';
 }
 
 function boundsForAllPositions(root: Uint8Array, ri: EarlyInfo, yTranslate: number): [number, number, number, number, number, number] {
@@ -1497,8 +2405,6 @@ const EARLY1_STRONG_WATER_TEXIDS = new Set<number>([
     899,
     2871,
     1392, 24, 1391,
-    // Final/ancient water ID.
-    // Do not include raw Early1 2727 here globally.
     2373,
 ]);
 
@@ -1506,10 +2412,6 @@ const EARLY1_CANDIDATE_WATER_TEXIDS = new Set<number>([
     899,
     2871,
     2373,
-
-    // mod22:
-    // Early1 raw 2640 remaps to Final water texture 788.
-    // Keep 2640 out of this list so it only becomes water when the Final block actually has 788.
     788,
 ]);
 
@@ -1518,9 +2420,6 @@ const EARLY1_LAYER2_WATER_PROMOTE_TEXIDS = new Set<number>([
     899,
     2871,
     2373,
-
-    // mod29 Early1 water/special pass textures.
-    // These are only trusted when the DL is actually called from layer 2.
     2638,
     2640,
 ]);
@@ -1546,13 +2445,9 @@ const EARLY1_CANDIDATE_TRANSLUCENT_TEXIDS = new Set<number>([
 
 const EARLY1_KNOWN_CUTOUT_TEXIDS = new Set<number>([
     1692, 1135, 1695, 1131, 176, 783, 785, 549,
-
-    // From your old/isold path too, useful for Early1 map blocks.
     177, 526, 525, 982, 536, 1294, 1295, 418, 88, 571,
     44, 668, 417, 2090, 568, 567, 638, 810, 2094, 691,
     944, 7, 769, 767, 1156, 996, 811, 2056, 189,
-
-    // Ancient/common cutout list also appears in early/beta maps.
     630, 646, 672, 1094, 1098, 1103, 1107, 1110, 1111, 1112,
 ]);
 
@@ -1576,8 +2471,6 @@ type NormalizedLayerTex = {
 function normalizeEarly1LayerTex(field: number, srcTex: number[], mappedTex: number[]): NormalizedLayerTex {
     if (field === 0xFFFFFFFF)
         return { slot: null, rawId: null, mappedId: null };
-
-    // Normal case: Early1 shader layer field is a texture table slot.
     if (field >= 0 && field < srcTex.length) {
         return {
             slot: field,
@@ -1585,8 +2478,6 @@ function normalizeEarly1LayerTex(field: number, srcTex: number[], mappedTex: num
             mappedId: mappedTex[field] ?? null,
         };
     }
-
-    // Safety case: some rows can contain a raw Early1 texture ID.
     const rawSlot = srcTex.indexOf(field);
     if (rawSlot >= 0) {
         return {
@@ -1595,8 +2486,6 @@ function normalizeEarly1LayerTex(field: number, srcTex: number[], mappedTex: num
             mappedId: mappedTex[rawSlot] ?? null,
         };
     }
-
-    // Safety case: some rows can contain the already-remapped Final texture ID.
     const mappedSlot = mappedTex.indexOf(field);
     if (mappedSlot >= 0) {
         return {
@@ -1612,9 +2501,6 @@ function normalizeEarly1LayerTex(field: number, srcTex: number[], mappedTex: num
 function early1LayerTexIdFromField(field: number, srcTex: number[]): number | null {
     if (field === 0xFFFFFFFF)
         return null;
-
-    // Important: only treat the field as an Early1 texture table slot.
-    // Do not guess raw IDs or remapped Final IDs here; remapped IDs collide.
     if (field >= 0 && field < srcTex.length)
         return srcTex[field] ?? null;
 
@@ -1643,8 +2529,6 @@ function convertEarly1ShaderFlagsToFinal(
     if (rawAlphaCompare) flags |= FINAL_SHADER_ALPHA_COMPARE;
     if (raw16 & 0x4000) flags |= FINAL_SHADER_SHORT_FUR;
     if (raw16 & 0x8000) flags |= FINAL_SHADER_MEDIUM_FUR;
-
-    // Preserve original stable combine/lighting quirks.
     if (raw16 & 0x0800) flags |= 0x0800;
     if (raw16 & 0x1000) flags |= 0x1000;
 
@@ -1654,9 +2538,6 @@ function convertEarly1ShaderFlagsToFinal(
 
     const singleLayer = numLayers <= 1 || tex1Raw === null;
     const hasTex0 = tex0Raw !== null || tex0Mapped !== null;
-
-    // Early1 water is showing up as tev0=0x80, so do NOT require tev 2/3 here.
-    // Gate candidate water by low nibble and first real layer only.
     const waterByStrongTex =
         texIdInSet(EARLY1_STRONG_WATER_TEXIDS, tex0Raw, tex1Raw, tex0Mapped, tex1Mapped);
 
@@ -1667,13 +2548,9 @@ function convertEarly1ShaderFlagsToFinal(
         texIdInSet(EARLY1_CANDIDATE_WATER_TEXIDS, tex0Raw, tex0Mapped);
 
     if (waterByStrongTex || waterByCandidateTex) {
-        // Match normal FinalMap water more closely.
-        // For mod45 this turns Early1 raw16=0x030c + tex 2727 into 0xc058000c.
         flags |= FINAL_SHADER_WATER | FINAL_SHADER_TRUE_TRANS | FINAL_SHADER_WATER_EXTRA;
         flags &= ~FINAL_SHADER_ALPHA_COMPARE;
     }
-
-    // Effect cards/lightbeams. 7/1156 need to be allowed even when raw alpha bits are set.
     const effectByStrongTex =
         texIdInSet(EARLY1_STRONG_TRANSLUCENT_TEXIDS, tex0Raw, tex1Raw);
 
@@ -1736,9 +2613,6 @@ function buildFinalShaderTableFromEarly1(
             continue;
         }
 
-        // Restore the original working behavior:
-        // copy Early1 shader prefix/layer records exactly.
-        // Do NOT normalize or rewrite 0x24 / 0x2C texture layer fields.
         out.set(root.subarray(src, src + earlyShaderStride), dst);
 
         const numLayers = Math.max(0, Math.min(2, u8(root, src + 0x3B)));
@@ -1785,10 +2659,7 @@ const finalFlags = convertEarly1ShaderFlagsToFinal(
     numLayers,
 );
 
-// FinalMap shader rows are 0x44 bytes.
-// Early1 leaves raw flags / attr / layer count at +0x38.
-// In FinalMap, +0x34 and +0x38 are extra layer texture slots.
-// For one-layer converted map shaders, both must be disabled.
+
 p32(out, dst + 0x34, 0xFFFFFFFF);
 p32(out, dst + 0x38, 0xFFFFFFFF);
 
@@ -1797,8 +2668,7 @@ if (
     (finalFlags & FINAL_SHADER_TRANSLUCENT) !== 0 &&
     (finalFlags & FINAL_SHADER_WATER) === 0
 ) {
-    // Only strip the high TEV bit for non-water translucent cards.
-    // Normal FinalMap water in mod45 keeps tev0=0x80.
+
     p8(out, dst + 0x28, tev0 & 0x7F);
     p8(out, dst + 0x30, tev1 & 0x7F);
 }
@@ -1821,13 +2691,119 @@ if ((finalFlags & (FINAL_SHADER_WATER | FINAL_SHADER_TRANSLUCENT | FINAL_SHADER_
 
 p8(out, dst + 0x40, attr);
         p8(out, dst + 0x41, numLayers);
-
-        // Clear Final-only tail bytes that Early1 did not have.
         p8(out, dst + 0x42, 0);
         p8(out, dst + 0x43, 0);
     }
 
     return out;
+}
+
+function buildFinalShaderTableFromEarly4(
+    root: Uint8Array,
+    ri: EarlyInfo,
+    shaderCount: number,
+    texCount: number,
+    srcTex: number[],
+    mappedTex: number[],
+): Uint8Array {
+    const out = new Uint8Array(shaderCount * SHADER_STRIDE);
+    const earlyShaderStride = SHADER_STRIDE;
+
+    for (let i = 0; i < shaderCount; i++) {
+        const src = ri.shaderOff + i * earlyShaderStride;
+        const dst = i * SHADER_STRIDE;
+
+        if (src + earlyShaderStride <= root.byteLength) {
+            out.set(root.subarray(src, src + earlyShaderStride), dst);
+        } else {
+            p32(out, dst + 0x24, i % Math.max(1, texCount));
+            p32(out, dst + 0x2C, 0xFFFFFFFF);
+            p32(out, dst + 0x34, 0xFFFFFFFF);
+            p32(out, dst + 0x38, 0xFFFFFFFF);
+            p32(out, dst + 0x3C, FINAL_SHADER_CULL_BACKFACE);
+            p8(out, dst + 0x40, 0x04);
+            p8(out, dst + 0x41, 1);
+            p8(out, dst + 0x42, 0);
+            p8(out, dst + 0x43, 0);
+        }
+
+        let attr = u8(out, dst + 0x40);
+        const numLayersIn = Math.max(0, Math.min(2, u8(out, dst + 0x41)));
+        let numLayersOut = 0;
+
+        for (let layer = 0; layer < 2; layer++) {
+            const layerOff = dst + 0x24 + layer * 8;
+            const rawField = u32(out, layerOff + 0x00);
+
+            const texInfo = normalizeEarly1LayerTex(rawField, srcTex, mappedTex);
+            const slot = texInfo.slot;
+
+            if (layer < numLayersIn && slot !== null && slot >= 0 && slot < texCount) {
+                p32(out, layerOff + 0x00, slot);
+                numLayersOut = layer + 1;
+                attr |= layer === 0 ? 0x04 : 0x08;
+            } else {
+                p32(out, layerOff + 0x00, 0xFFFFFFFF);
+                p8(out, layerOff + 0x04, 0);
+                p8(out, layerOff + 0x05, 0);
+                p8(out, layerOff + 0x06, 0);
+                p8(out, layerOff + 0x07, 0);
+            }
+        }
+
+        if (numLayersOut === 0 && texCount > 0) {
+            p32(out, dst + 0x24, i % texCount);
+            p8(out, dst + 0x28, 0);
+            p8(out, dst + 0x29, 0);
+            p8(out, dst + 0x2A, 0);
+            p8(out, dst + 0x2B, 0);
+
+            numLayersOut = 1;
+            attr |= 0x04;
+        }
+        p32(out, dst + 0x34, 0xFFFFFFFF);
+        p32(out, dst + 0x38, 0xFFFFFFFF);
+
+        if ((attr & 0x0D) === 0)
+            attr |= 0x01;
+
+        p8(out, dst + 0x40, attr);
+        p8(out, dst + 0x41, numLayersOut);
+        p8(out, dst + 0x42, 0);
+        p8(out, dst + 0x43, 0);
+    }
+
+    return out;
+}
+
+function patchEarly4BackfaceCullForDebug(shaderTable: Uint8Array, shaderCount: number): string {
+    const touched: string[] = [];
+
+    for (let shader = 0; shader < shaderCount; shader++) {
+        const off = shader * SHADER_STRIDE;
+        if (off + SHADER_STRIDE > shaderTable.byteLength)
+            continue;
+
+        const before = u32(shaderTable, off + 0x3C);
+        const after = (before & ~FINAL_SHADER_CULL_BACKFACE) >>> 0;
+
+        if (before !== after) {
+            p32(shaderTable, off + 0x3C, after);
+
+            touched.push(
+                `sh${shader}` +
+                `/flags=0x${before.toString(16)}->0x${after.toString(16)}` +
+                `/attr=0x${u8(shaderTable, off + 0x40).toString(16)}` +
+                `/layers=${u8(shaderTable, off + 0x41)}` +
+                `/tex0=${u32(shaderTable, off + 0x24)}` +
+                `/tex1=${u32(shaderTable, off + 0x2C)}`,
+            );
+        }
+    }
+
+    return touched.length > 0
+        ? `early4CullDebug=clearedBackfaceCull[${touched.join(',')}]`
+        : `early4CullDebug=noBackfaceCullBits`;
 }
 
 function patchLayer2WaterFlagsInShaderTable(
@@ -1887,9 +2863,6 @@ function patchLayer2WaterFlagsInShaderTable(
         flags &= ~FINAL_SHADER_ALPHA_COMPARE;
 
         p32(shaderTable, dst + 0x3C, flags >>> 0);
-
-        // Do not touch layer records, texture slots, TEV, VCD, or shader binding.
-        // Just make the already-textured layer-2 shader render as FinalMap water.
         p8(shaderTable, dst + 0x40, u8(shaderTable, dst + 0x40) | 0x04);
 
         if (u8(shaderTable, dst + 0x41) === 0)
@@ -1910,21 +2883,17 @@ function patchLayer2WaterFlagsInShaderTable(
 }
 
 function remapEarly1Texture(texId: number, modelId: number, finalTexIds?: Set<number>): number {
-    // Kiosk / mod22 water:
-    // Early1 uses raw 2640, FinalMap uses 788.
-    // Only remap it when this specific Final block already contains 788.
     if (texId === 2640)
         return finalTexIds?.has(788) ? 788 : 2640;
-
-    // mod45 case:
-    // Early1 slot uses raw 2727, but only resources 1024/1025 have real Final water.
-    // Those base Final blocks contain texture 2373.
-    // Resources 1026/1027 also contain raw 2727 in Early1, but their base Final blocks
-    // do not contain 2373, so do not turn those into water.
     if (texId === 2727 && finalTexIds?.has(2373))
         return 2373;
 
     const mapped = debugResolveEarly1TextureId(texId, modelId);
+    return mapped !== null ? mapped : texId;
+}
+
+function remapEarly4Texture(texId: number, modelId: number): number {
+    const mapped = debugResolveEarly4TextureId(texId, modelId);
     return mapped !== null ? mapped : texId;
 }
 
@@ -1990,8 +2959,6 @@ function readEarlyShaderTextureSlots(root: Uint8Array, ri: EarlyInfo, shaderCoun
 
         const distinct = counts.size;
         const maxDup = counts.size > 0 ? Math.max(...counts.values()) : shaderCount;
-
-        // Reject bogus "all shaders use slot 0" reads when the block clearly has multiple textures.
         if (distinct < minDistinctNeeded)
             return;
 
@@ -2014,8 +2981,6 @@ function readEarlyShaderTextureSlots(root: Uint8Array, ri: EarlyInfo, shaderCoun
         }
     };
 
-    // Strong path: scan shader rows for actual Early texture IDs like 1246/1276/etc.
-    // This is much safer than guessing that some byte field is a texture slot.
     const strides = [SHADER_STRIDE, 0x40, 0x38, 0x34, 0x48, 0x4C, 0x30];
 
     for (const stride of strides) {
@@ -2055,8 +3020,6 @@ function readEarlyShaderTextureSlots(root: Uint8Array, ri: EarlyInfo, shaderCoun
         }
     }
 
-    // Weak path: only trust direct slot fields if EVERY shader row has a valid slot.
-    // Partial reads like [0,0,0,255,6...] are usually flags/sentinels, not texture slots.
     const slotModes = [
         { name: 'u32@0x24', off: 0x24, size: 4, read: (o: number) => u32(root, o) },
         { name: 'u16@0x24', off: 0x24, size: 2, read: (o: number) => u16(root, o) },
@@ -2086,8 +3049,6 @@ function readEarlyShaderTextureSlots(root: Uint8Array, ri: EarlyInfo, shaderCoun
                 valid++;
             }
         }
-
-        // Important: do not accept partial slot reads. The current logs show these are probably junk.
         if (valid === shaderCount) {
             consider(
                 `slotScan ${mode.name}`,
@@ -2107,11 +3068,17 @@ function readEarlyShaderTextureSlots(root: Uint8Array, ri: EarlyInfo, shaderCoun
     };
 }
 
-function rebuildResourceAppend(root: Uint8Array, final: Uint8Array, opts: Required<Pick<Early1FinalMapConvertOptions, 'modelId' | 'groupMode' | 'colorMode' | 'textureMode' | 'flatTextureId' | 'flatTexS' | 'flatTexT' | 'maxTrisPerDL'>>): { raw: Uint8Array; log: string } {
+function rebuildResourceAppend(root: Uint8Array, final: Uint8Array, opts: Required<Pick<Early1FinalMapConvertOptions, 'modelId' | 'outBaseName' | 'earlyMapFormat' | 'groupMode' | 'colorMode' | 'textureMode' | 'flatTextureId' | 'flatTexS' | 'flatTexT' | 'maxTrisPerDL'>>): { raw: Uint8Array; log: string } {
+    const sourceInfo = earlyMapSourceInfo(opts.earlyMapFormat);
     const ri = earlyInfo(root);
 const srcTex = earlyTextures(root);
 const finalTexIdSet = new Set(finalTextures(final));
-const mappedFromEarly = srcTex.map((t) => remapEarly1Texture(t, opts.modelId, finalTexIdSet));
+const mappedFromEarly =
+    sourceInfo.textureRemapMode === 'early1'
+        ? srcTex.map((t) => remapEarly1Texture(t, opts.modelId, finalTexIdSet))
+        : sourceInfo.textureRemapMode === 'early4'
+            ? srcTex.map((t) => remapEarly4Texture(t, opts.modelId))
+            : srcTex.slice();
     const textureless = isTexturelessMode(opts.textureMode);
 
     let mapped = textureless
@@ -2124,7 +3091,7 @@ const mappedFromEarly = srcTex.map((t) => remapEarly1Texture(t, opts.modelId, fi
     const texCount = Math.max(1, Math.min(255, mapped.length));
     mapped = mapped.slice(0, texCount);
 
-    const earlyDLInfoStride = 0x34;
+        const earlyDLInfoStride = sourceInfo.dlInfoStride;
     const earlyDLCount = Math.min(
         ri.dlInfoCount,
         Math.max(0, ((root.byteLength - ri.dlInfoOff) / earlyDLInfoStride) | 0),
@@ -2134,12 +3101,7 @@ const mappedFromEarly = srcTex.map((t) => remapEarly1Texture(t, opts.modelId, fi
     const earlyShaderCount = Math.max(1, Math.min(64, ri.shaderCount || 1));
     const shaderCount = textureless ? 1 : earlyShaderCount;
 
-const decoded = decodeEarlyShaderForDLs(root, earlyDLCount, earlyShaderCount);
-
-// Early1 DLInfo usually already has the intended shader at +0x12.
-// The decoded bitstream can miss calls: your log shows e.g. 19/22 and 17/19.
-// If we bind DLs from that incomplete decode, water/cutout/effect shaders exist,
-// but they get attached to the wrong geometry.
+const decoded = decodeEarlyShaderForDLs(root, earlyDLCount, earlyShaderCount, sourceInfo);
 const infoShaderForDL: number[] = [];
 for (let i = 0; i < earlyDLCount; i++) {
     const infoOff = ri.dlInfoOff + i * earlyDLInfoStride;
@@ -2150,24 +3112,40 @@ for (let i = 0; i < earlyDLCount; i++) {
 const distinctInfoShaders = new Set(infoShaderForDL.filter((v) => v >= 0));
 const canUseInfoShader = distinctInfoShaders.size > 1;
 
-// Only layer 2 water/special DLs are allowed to use guessed VCD.
-// Do NOT guess VCD for normal geometry; it causes huge exploded triangles.
-const layer2EarlyDLSet = new Set<number>(
+const layer1EarlyDLSet = new Set<number>(
     decodeEarlyLayerCallOrder(
         root,
-        u32(root, 0x84),
-        u16(root, 0x88),
+        u32(root, sourceInfo.bitsOffsets[1]),
+        u16(root, sourceInfo.bitsByteCounts[1]),
         earlyDLCount,
         earlyShaderCount,
     ),
 );
 
+const layer2EarlyDLSet = new Set<number>(
+    decodeEarlyLayerCallOrder(
+        root,
+        u32(root, sourceInfo.bitsOffsets[2]),
+        u16(root, sourceInfo.bitsByteCounts[2]),
+        earlyDLCount,
+        earlyShaderCount,
+    ),
+);
+
+const specialEarlyDLSet = new Set<number>([
+    ...layer1EarlyDLSet,
+    ...layer2EarlyDLSet,
+]);
+
 const copiedDLs: Uint8Array[] = [];
     const shaderFor: number[] = [];
     const vcdFor: number[] = [];
+    const vcdReadFor: number[] = [];
     const vcdDecodedFor: number[] = [];
     const earlyDLIndexes: number[] = [];
-
+    const early4DLDiag: string[] = [];
+    const early4RepackDiag: string[] = [];
+    const early4SortLayerDiag: string[] = [];
     for (let i = 0; i < earlyDLCount; i++) {
         const infoOff = ri.dlInfoOff + i * earlyDLInfoStride;
         const dlOff = u32(root, infoOff + 0x00);
@@ -2182,13 +3160,33 @@ const copiedDLs: Uint8Array[] = [];
         const rawDL = root.subarray(dlOff, dlOff + dlSize);
         const decodedVcdBits = decoded.vcdBitsForDL[i] ?? 0x05;
 
-        // Normal geometry keeps decoded VCD exactly.
-        // Only layer 2 water/special DLs get the rescue guess.
-        const vcdBits = layer2EarlyDLSet.has(i)
+        let readVcdBits = specialEarlyDLSet.has(i)
             ? chooseRetagVcdBits(rawDL, decodedVcdBits)
             : decodedVcdBits;
 
-        const dl = retagDisplayListToVat5(rawDL, vcdBits);
+        if (sourceInfo.forceColorIndex16 && !specialEarlyDLSet.has(i))
+            readVcdBits |= 0x02;
+
+        let vcdBits = readVcdBits;
+        let dl: Uint8Array;
+
+        if (opts.earlyMapFormat === 'early4_lzo' && (readVcdBits & 0x02) !== 0) {
+        
+            const writeVcdBits = readVcdBits;
+            const repacked = repackDisplayListToVat5(rawDL, readVcdBits, writeVcdBits, ri, true);
+
+            dl = repacked.dl;
+            vcdBits = readVcdBits;
+
+            early4RepackDiag.push(
+                `dl${i}` +
+                `/read=${debugVcdName(readVcdBits)}` +
+                `/write=${debugVcdName(vcdBits)}` +
+                `/${repacked.log}`,
+            );
+        } else {
+            dl = retagDisplayListToVat5(rawDL, vcdBits);
+        }
 const decodedShader = decoded.shaderForDL[i];
 const infoShader = infoShaderForDL[i];
 
@@ -2201,8 +3199,30 @@ const earlyShader = canUseInfoShader && infoShader >= 0
 copiedDLs.push(dl);
 shaderFor.push(textureless ? 0 : (earlyShader % shaderCount));
 vcdDecodedFor.push(decodedVcdBits);
+vcdReadFor.push(readVcdBits);
 vcdFor.push(vcdBits);
 earlyDLIndexes.push(i);
+
+if (opts.earlyMapFormat === 'early4_lzo') {
+    const early4Layer =
+        layer2EarlyDLSet.has(i) ? 'L2' :
+        layer1EarlyDLSet.has(i) ? 'L1' :
+        'L0';
+
+    const decodedStats = debugScanEarly4DLForLog(rawDL, decodedVcdBits, ri);
+    const usedStats = debugScanEarly4DLForLog(dl, vcdBits, ri);
+
+    early4DLDiag.push(
+        `dl${i}{` +
+        `off=0x${dlOff.toString(16)}` +
+        `/size=0x${dlSize.toString(16)}` +
+        `/layer=${early4Layer}` +
+        `/shader=${earlyShader}` +
+        `/decoded=${debugVcdName(decodedVcdBits)}:${debugEarly4DLStatsForLog(decodedStats)}` +
+        `/used=${debugVcdName(vcdBits)}:${debugEarly4DLStatsForLog(usedStats)}` +
+        `}`,
+    );
+}
     }
 
     if (copiedDLs.length === 0)
@@ -2232,15 +3252,24 @@ earlyDLIndexes.push(i);
         cursor += dlSizeAligned;
     }
 
+    const compactEarly4Palette = opts.earlyMapFormat === 'early4_lzo';
+
+    const colorData = compactEarly4Palette
+        ? colors(root, ri)
+        : colorsForFinalMapOutput(root, ri, sourceInfo);
+
+    const outClrCount = compactEarly4Palette
+        ? ri.clrCount
+        : sourceInfo.expandColorPalette16 ? 0xFFFF : ri.clrCount;
+
     const posOff = align(cursor, 0x20);
     const clrOff = align(posOff + ri.posCount * 6, 0x20);
-    const texcoordOff = align(clrOff + ri.clrCount * 2, 0x20);
+    const texcoordOff = align(clrOff + colorData.byteLength, 0x20);
     const texOff = align(texcoordOff + ri.texcoordCount * 4, 0x20);
     const shaderOff = align(texOff + texCount * 4, 0x20);
     const bitsOff = align(shaderOff + shaderCount * SHADER_STRIDE, 0x20);
 
-    const layerBits = buildLayerBitstreamsFromEarlyPasses(root, ri, shaderFor, vcdFor, earlyDLIndexes);
-    const bitstream0 = layerBits.bitstreams[0];
+    const layerBits = buildLayerBitstreamsFromEarlyPasses(root, ri, shaderFor, vcdFor, earlyDLIndexes, sourceInfo);    const bitstream0 = layerBits.bitstreams[0];
     const bitstream1 = layerBits.bitstreams[1];
     const bitstream2 = layerBits.bitstreams[2];
 
@@ -2255,7 +3284,7 @@ earlyDLIndexes.push(i);
     const yTranslate = computeY(root, ri);
 
     out = setBytes(out, posOff, convertedPositions(root, ri, yTranslate));
-    out = setBytes(out, clrOff, colors(root, ri));
+    out = setBytes(out, clrOff, colorData);
     out = setBytes(out, texcoordOff, texcoords(root, ri));
 
     for (let i = 0; i < texCount; i++)
@@ -2263,19 +3292,27 @@ earlyDLIndexes.push(i);
 
     const shaderTable = textureless
         ? buildShaderTable(final, finalInfo(final), shaderCount, texCount)
-        : buildFinalShaderTableFromEarly1(root, ri, shaderCount, texCount, srcTex, mapped);
+        : sourceInfo.shaderMode === 'early4_final'
+            ? buildFinalShaderTableFromEarly4(root, ri, shaderCount, texCount, srcTex, mapped)
+            : buildFinalShaderTableFromEarly1(root, ri, shaderCount, texCount, srcTex, mapped);
+
+const early4CullDebugLog = !textureless && sourceInfo.shaderMode === 'early4_final'
+    ? 'early4CullDebug=disabled_keepOriginalCull'
+    : 'early4CullDebug=notEarly4';
 
     const layer2WaterLog = textureless
         ? 'layer2WaterFlags=textureless'
-        : patchLayer2WaterFlagsInShaderTable(
-            shaderTable,
-            root,
-            ri,
-            shaderFor,
-            layerBits.layerForDL,
-            srcTex,
-            mapped,
-        );
+        : sourceInfo.shaderMode === 'early4_final'
+            ? 'layer2WaterFlags=early4_final_shader_flags'
+            : patchLayer2WaterFlagsInShaderTable(
+                shaderTable,
+                root,
+                ri,
+                shaderFor,
+                layerBits.layerForDL,
+                srcTex,
+                mapped,
+            );
 
     out = setBytes(out, shaderOff, shaderTable);
 
@@ -2306,8 +3343,9 @@ earlyDLIndexes.push(i);
         p32(out, ro + 0x00, dlOffsets[i]);
         p16(out, ro + 0x04, dlSizes[i]);
 
-        const dlBounds = boundsFromEarlyDLInfo(root, oldInfoOff, yTranslate, broadBounds);
-
+        const dlBounds = opts.earlyMapFormat === 'early4_lzo'
+            ? broadBounds
+            : boundsFromEarlyDLInfo(root, oldInfoOff, yTranslate, broadBounds);
         ps16(out, ro + 0x06, dlBounds[0]);
         ps16(out, ro + 0x08, dlBounds[1]);
         ps16(out, ro + 0x0A, dlBounds[2]);
@@ -2317,15 +3355,28 @@ earlyDLIndexes.push(i);
 
         p16(out, ro + 0x12, shaderFor[i]);
         p16(out, ro + 0x14, layerBits.special[i] ?? 0);
-        // Preserve old sort layer if present.
-        // Early1 mod45 has zero here, but normal FinalMap water DLs use layer 11.
         const oldLayer = u8(root, oldInfoOff + 0x18);
         const shaderFlags = finalFlagsForCopiedDL[i] ?? 0;
         const fallbackLayer =
             layerBits.layerForDL[i] === 2 || (shaderFlags & FINAL_SHADER_WATER) !== 0
                 ? 11
                 : 7;
-                        p8(out, ro + 0x18, oldLayer || fallbackLayer);
+
+        const finalSortLayer = opts.earlyMapFormat === 'early4_lzo'
+            ? fallbackLayer
+            : (oldLayer || fallbackLayer);
+
+        if (opts.earlyMapFormat === 'early4_lzo') {
+            early4SortLayerDiag.push(
+                `dl${i}` +
+                `/early=0x${oldLayer.toString(16)}` +
+                `/final=${finalSortLayer}` +
+                `/pass=${layerBits.layerForDL[i]}` +
+                `/flags=0x${shaderFlags.toString(16)}`,
+            );
+        }
+
+        p8(out, ro + 0x18, finalSortLayer);
         p8(out, ro + 0x19, 0);
         p16(out, ro + 0x1A, 0);
     }
@@ -2350,16 +3401,43 @@ earlyDLIndexes.push(i);
     ps16(out, 0x8E, yTranslate);
 
     p16(out, 0x90, ri.posCount);
-    p16(out, 0x94, ri.clrCount);
-    p16(out, 0x96, ri.texcoordCount);
+    p16(out, 0x94, outClrCount);
+        p16(out, 0x96, ri.texcoordCount);
 
     p8(out, 0xA0, texCount);
     p8(out, 0xA1, copiedDLs.length);
     p8(out, 0xA2, shaderCount);
 
+    const early4DiagLog = opts.earlyMapFormat === 'early4_lzo'
+        ? (
+            `; early4Header=` +
+            `pos=0x${ri.posOff.toString(16)}/${ri.posCount}` +
+            ` clr=0x${ri.clrOff.toString(16)}/${ri.clrCount}` +
+            ` texcoord=0x${ri.texcoordOff.toString(16)}/${ri.texcoordCount}` +
+            ` tex=0x${ri.texOff.toString(16)}/${ri.texCount}` +
+            ` shader=0x${ri.shaderOff.toString(16)}/${ri.shaderCount}` +
+            ` dlinfo=0x${ri.dlInfoOff.toString(16)}/${ri.dlInfoCount}` +
+            ` bits0=0x${u32(root, sourceInfo.bitsOffsets[0]).toString(16)}/0x${u16(root, sourceInfo.bitsByteCounts[0]).toString(16)}` +
+            ` bits1=0x${u32(root, sourceInfo.bitsOffsets[1]).toString(16)}/0x${u16(root, sourceInfo.bitsByteCounts[1]).toString(16)}` +
+            ` bits2=0x${u32(root, sourceInfo.bitsOffsets[2]).toString(16)}/0x${u16(root, sourceInfo.bitsByteCounts[2]).toString(16)}` +
+                        `; early4PaletteMode=` +
+            `${compactEarly4Palette ? 'compactC16ToC8' : 'expandedC16'}` +
+            `/colorBytes=0x${colorData.byteLength.toString(16)}` +
+            `/outClrCount=${outClrCount}` +
+            `; early4Repack=[${early4RepackDiag.length > 0 ? early4RepackDiag.join(' ; ') : 'none'}]` +
+            `; early4DecodedLayerSets=` +
+            `L1=[${debugNumberSetForLog(layer1EarlyDLSet)}]` +
+            ` L2=[${debugNumberSetForLog(layer2EarlyDLSet)}]` +
+            ` special=[${debugNumberSetForLog(specialEarlyDLSet)}]` +
+            `; early4MissingGeneratedCalls=[${debugMissingLayerCallsForLog(copiedDLs.length, layerBits.layerCalls)}]` +
+            `; early4DLInfoSort=[${early4SortLayerDiag.length > 0 ? early4SortLayerDiag.join(',') : 'none'}]` +
+            `; early4DLDiag=[${early4DLDiag.join(' ; ')}]`
+        )
+        : '';
+
     return {
         raw: out,
-log: `visual copy Early1DLs=${copiedDLs.length}/${earlyDLCount}; shaders=${shaderCount}/${earlyShaderCount}; bounds=earlyDLInfo; vcdDecoded=[${vcdDecodedFor.map((v) => `0x${v.toString(16)}`).join(',')}]; vcdUsed=[${vcdFor.map((v) => `0x${v.toString(16)}`).join(',')}]; shaderFor=[${shaderFor.join(',')}]; infoShaderForDL=[${infoShaderForDL.join(',')}]; useInfoShader=${canUseInfoShader}; textureMode=${opts.textureMode}; ${layer2WaterLog}; layerCalls=[${layerBits.layerCalls.map((xs) => xs.join('/')).join('|')}]; bitsLen=[${bitstream0.byteLength},${bitstream1.byteLength},${bitstream2.byteLength}]; tris=${triangles(root).length}/${ri.triCount}; y=${yTranslate}; oldLen=0x${final.byteLength.toString(16)} newLen=0x${out.byteLength.toString(16)}; earlyTex=[${srcTex.join(',')}]; mappedFromEarly=[${mappedFromEarly.join(',')}]; usedTex=[${mapped.join(',')}]; decodedBitOff=0x${decoded.bitOff.toString(16)} decodedCalls=${decoded.calls}`,        };
+log: `visual copy source=${opts.earlyMapFormat}; EarlyDLs=${copiedDLs.length}/${earlyDLCount}; shaders=${shaderCount}/${earlyShaderCount}; bounds=earlyDLInfo; vcdDecoded=[${vcdDecodedFor.map((v) => `0x${v.toString(16)}`).join(',')}]; vcdRead=[${vcdReadFor.map((v) => `0x${v.toString(16)}`).join(',')}]; vcdUsed=[${vcdFor.map((v) => `0x${v.toString(16)}`).join(',')}];shaderFor=[${shaderFor.join(',')}]; infoShaderForDL=[${infoShaderForDL.join(',')}]; useInfoShader=${canUseInfoShader}; textureMode=${opts.textureMode}; ${early4CullDebugLog}; ${layer2WaterLog}; layerCalls=[${layerBits.layerCalls.map((xs) => xs.join('/')).join('|')}]; bitsLen=[${bitstream0.byteLength},${bitstream1.byteLength},${bitstream2.byteLength}]; tris=${triangles(root).length}/${ri.triCount}; y=${yTranslate}; oldLen=0x${final.byteLength.toString(16)} newLen=0x${out.byteLength.toString(16)}; earlyTex=[${srcTex.join(',')}]; mappedFromEarly=[${mappedFromEarly.join(',')}]; usedTex=[${mapped.join(',')}]; decodedBitOff=0x${decoded.bitOff.toString(16)} decodedCalls=${decoded.calls}${early4DiagLog}`,        };
 }
 
 function patchCollisionTriWinding(tris: Uint8Array, mode: CollisionWinding): Uint8Array {
@@ -2443,6 +3521,7 @@ export async function convertEarly1ArchiveToFinalMapZlb(
     const opts: Early1FinalMapConvertOptions = {
         modelId: options.modelId ?? 0,
         outBaseName: options.outBaseName ?? 'mod',
+        earlyMapFormat: options.earlyMapFormat ?? 'early1_raw',
         groupMode: options.groupMode ?? 'nibble0',
         colorMode: options.colorMode ?? 'pidx',
         textureMode: options.textureMode ?? 'mapped',
@@ -2452,6 +3531,12 @@ flatTexT: options.flatTexT ?? 256,
 collisionYMode: options.collisionYMode ?? 'subtract',
         collisionWinding: options.collisionWinding ?? 'keep',
         maxTrisPerDL: options.maxTrisPerDL ?? 128,
+
+        objectsEnabled: options.objectsEnabled ?? true,
+        objectMapId: options.objectMapId ?? options.modelId ?? 0,
+        keepObjectTypes: options.keepObjectTypes ?? [0x000D, 0x004C],
+        mapsBin: options.mapsBin,
+        mapsTab: options.mapsTab,
     };
 
     const earlyBin = asU8(earlyBinIn);
@@ -2460,8 +3545,7 @@ collisionYMode: options.collisionYMode ?? 'subtract',
     const finalTab = asU8(finalTabIn);
 
     const finalArc = await readZlbArchive(finalZlbBin, finalTab);
-    const rootArc = readRawArchive(earlyBin, earlyTab);
-
+    const rootArc = readEarlyMapSourceArchive(earlyBin, earlyTab, opts.earlyMapFormat);
     const outDataParts: Uint8Array[] = [];
     const outTab = copyU8(finalArc.tab);
     const logs: string[] = [];
@@ -2473,9 +3557,12 @@ collisionYMode: options.collisionYMode ?? 'subtract',
         const early = rootArc.blocks.get(rid);
 
         if (early) {
-            const vis = rebuildResourceAppend(early, raw, {
-                modelId: opts.modelId,
-                groupMode: opts.groupMode,
+            const vis = rebuildResourceAppend(early, raw,                
+                 {
+                    modelId: opts.modelId,
+                    outBaseName: opts.outBaseName,
+                    earlyMapFormat: opts.earlyMapFormat,
+                    groupMode: opts.groupMode,
                 colorMode: opts.colorMode,
                 textureMode: opts.textureMode,
 flatTextureId: opts.flatTextureId,
@@ -2511,11 +3598,59 @@ maxTrisPerDL: opts.maxTrisPerDL ?? 128,
     }
 
     logs.push(`final_ids=[${finalArc.ids.join(',')}]`);
+    logs.push(`early_format=${opts.earlyMapFormat}`);
     logs.push(`early_ids=[${rootArc.ids.join(',')}]`);
     logs.push(`processed=[${processed.join(',')}]`);
     logs.push(`output ${opts.outBaseName}.zlb.bin bytes=${outData.byteLength}, ${opts.outBaseName}.tab bytes=${outTab.byteLength}`);
 
-    return { zlbBin: outData, tab: outTab, logs, processedResourceIds: processed };
+    let patchedMapsBin: Uint8Array | undefined = undefined;
+    let patchedMapsTab: Uint8Array | undefined = undefined;
+
+    if (opts.objectsEnabled === false) {
+        if (!opts.mapsBin || !opts.mapsTab)
+            throw new Error('objects disabled, but SFA MAPS.bin / MAPS.tab were not provided');
+
+        const patched = await patchSfaMapsObjectsForMap(
+            opts.mapsBin,
+            opts.mapsTab,
+            opts.objectMapId ?? opts.modelId,
+            opts.keepObjectTypes ?? [0x000D, 0x004C],
+        );
+
+        patchedMapsBin = patched.mapsBin;
+        patchedMapsTab = patched.mapsTab;
+        logs.push(patched.log);
+    } else {
+        logs.push('objects enabled: SFA MAPS.bin/MAPS.tab not modified');
+    }
+
+    return {
+        zlbBin: outData,
+        tab: outTab,
+        logs,
+        processedResourceIds: processed,
+        mapsBin: patchedMapsBin,
+        mapsTab: patchedMapsTab,
+    };
+}
+
+export async function convertEarly4ArchiveToFinalMapZlb(
+    earlyBinIn: ArrayBuffer | Uint8Array,
+    earlyTabIn: ArrayBuffer | Uint8Array,
+    finalZlbBinIn: ArrayBuffer | Uint8Array,
+    finalTabIn: ArrayBuffer | Uint8Array,
+    options: Partial<Early1FinalMapConvertOptions> = {},
+): Promise<Early1FinalMapConvertResult> {
+    return convertEarly1ArchiveToFinalMapZlb(
+        earlyBinIn,
+        earlyTabIn,
+        finalZlbBinIn,
+        finalTabIn,
+        {
+            ...options,
+            earlyMapFormat: 'early4_lzo',
+        },
+    );
 }
 
 function downloadBytes(filename: string, data: Uint8Array): void {
@@ -2531,6 +3666,14 @@ function downloadBytes(filename: string, data: Uint8Array): void {
 function readFile(file: File | null): Promise<ArrayBuffer> {
     if (!file)
         throw new Error('missing file input');
+
+    return file.arrayBuffer();
+}
+
+function readOptionalFile(file: File | null): Promise<ArrayBuffer | undefined> {
+    if (!file)
+        return Promise.resolve(undefined);
+
     return file.arrayBuffer();
 }
 
@@ -2596,20 +3739,27 @@ panel.style.userSelect = 'auto';
     panel.style.boxShadow = '0 4px 24px rgba(0,0,0,0.55)';
 
     const title = document.createElement('div');
-    title.textContent = 'Early1 -> Final ZLB';
+    title.textContent = 'Early1/Early4 -> Final ZLB';
     title.style.fontWeight = 'bold';
     title.style.marginBottom = '6px';
     panel.appendChild(title);
 
-    const earlyBin = fileInput('Early1 raw root_modXX.bin', '.bin');
-    const earlyTab = fileInput('Early1 root_modXX.tab', '.tab');
+    const earlyBin = fileInput('Early source root_modXX.bin', '.bin');
+    const earlyTab = fileInput('Early source root_modXX.tab', '.tab');
     const finalBin = fileInput('Final modXX.zlb.bin', '.bin');
     const finalTab = fileInput('Final modXX.tab', '.tab');
+    const mapsBin = fileInput('SFA MAPS.bin optional', '.bin');
+    const mapsTab = fileInput('SFA MAPS.tab optional', '.tab');
 
     panel.appendChild(earlyBin.wrap);
     panel.appendChild(earlyTab.wrap);
     panel.appendChild(finalBin.wrap);
     panel.appendChild(finalTab.wrap);
+    panel.appendChild(mapsBin.wrap);
+    panel.appendChild(mapsTab.wrap);
+
+    const earlyFormat = selectInput<EarlyMapFormat>('early source format', ['early1_raw', 'early4_lzo'], 'early1_raw');
+    panel.appendChild(earlyFormat.wrap);
 
     const row = document.createElement('div');
     row.style.display = 'grid';
@@ -2620,9 +3770,9 @@ panel.style.userSelect = 'auto';
     const modelLabel = document.createElement('label');
     modelLabel.style.display = 'grid';
     modelLabel.style.gap = '2px';
-    modelLabel.textContent = 'map/model ID';
+    modelLabel.textContent = 'map/model ID hex/dec';
     const modelInput = document.createElement('input');
-    modelInput.type = 'number';
+    modelInput.type = 'text';
     modelInput.value = '16';
     modelInput.style.fontSize = '11px';
     modelLabel.appendChild(modelInput);
@@ -2685,13 +3835,46 @@ flatUVRow.appendChild(flatSLabel);
 flatUVRow.appendChild(flatTLabel);
     const cy = selectInput<CollisionYMode>('collision Y', ['none', 'raw', 'subtract', 'subtract_expand8', 'subtract_expand32'], 'subtract');
     const cw = selectInput<CollisionWinding>('collision winding', ['keep', 'swap12', 'swap01', 'swap02'], 'keep');
+
+    const objectMode = selectInput<'enabled' | 'disabled_keep_list'>(
+        'SFA MAPS objects',
+        ['enabled', 'disabled_keep_list'],
+        'enabled',
+    );
+
+    const objectMapLabel = document.createElement('label');
+    objectMapLabel.style.display = 'grid';
+    objectMapLabel.style.gap = '2px';
+    objectMapLabel.style.fontSize = '11px';
+    objectMapLabel.textContent = 'SFA object map ID hex/dec';
+
+    const objectMapInput = document.createElement('input');
+    objectMapInput.type = 'text';
+    objectMapInput.placeholder = 'blank = map/model ID';
+    objectMapInput.style.fontSize = '11px';
+    objectMapLabel.appendChild(objectMapInput);
+
+    const keepObjLabel = document.createElement('label');
+    keepObjLabel.style.display = 'grid';
+    keepObjLabel.style.gap = '2px';
+    keepObjLabel.style.fontSize = '11px';
+keepObjLabel.textContent = 'keep these object types in-place hex';
+    const keepObjInput = document.createElement('input');
+keepObjInput.value = '';
+keepObjInput.placeholder = 'extra keeps only, e.g. 0012,00AB';
+    keepObjInput.style.fontSize = '11px';
+    keepObjLabel.appendChild(keepObjInput);
+
     panel.appendChild(group.wrap);
     panel.appendChild(color.wrap);
     panel.appendChild(texMode.wrap);
-panel.appendChild(flatTexLabel);
-panel.appendChild(flatUVRow);
-panel.appendChild(cy.wrap);
+    panel.appendChild(flatTexLabel);
+    panel.appendChild(flatUVRow);
+    panel.appendChild(cy.wrap);
     panel.appendChild(cw.wrap);
+    panel.appendChild(objectMode.wrap);
+    panel.appendChild(objectMapLabel);
+    panel.appendChild(keepObjLabel);
 
     const convertButton = document.createElement('button');
     convertButton.textContent = 'Convert + download';
@@ -2712,19 +3895,42 @@ panel.appendChild(cy.wrap);
     log.value = 'Preset: FULL_group_nibble0_PLUS_collision_subtract_keep\n';
     panel.appendChild(log);
 
+    finalBin.input.addEventListener('change', () => {
+        autoFillConverterFromFinalFile(
+            finalBin.input.files?.[0] ?? null,
+            modelInput,
+            nameInput,
+            objectMapInput,
+            log,
+        );
+    });
+
     convertButton.onclick = async () => {
         try {
             convertButton.disabled = true;
             log.value = 'Reading files...\n';
+const objectPatchDisabled = objectMode.input.value !== 'enabled';
+const objectMapText = objectMapInput.value.trim();
 
+if (objectPatchDisabled && objectMapText.length === 0) {
+    throw new Error(
+        'SFA MAPS objects are disabled, but no SFA object map ID was entered. ' +
+        'Dragon Rock is 02. Do not leave this blank unless you really want it to use map/model ID.',
+    );
+}
+
+const sfaObjectMapId = objectPatchDisabled
+    ? parseSfaMapId(objectMapText, 0)
+    : 0;
             const result = await convertEarly1ArchiveToFinalMapZlb(
                 await readFile(earlyBin.input.files?.[0] ?? null),
                 await readFile(earlyTab.input.files?.[0] ?? null),
                 await readFile(finalBin.input.files?.[0] ?? null),
                 await readFile(finalTab.input.files?.[0] ?? null),
                 {
-                    modelId: parseInt(modelInput.value, 10) || 0,
-                    outBaseName: nameInput.value || 'mod',
+                    modelId: parseMaybeHexInt(modelInput.value, 0),
+                                        outBaseName: nameInput.value || 'mod',
+                    earlyMapFormat: earlyFormat.input.value as EarlyMapFormat,
                     groupMode: group.input.value as GroupMode,
                     colorMode: color.input.value as ColorMode,
                     textureMode: texMode.input.value as TextureMode,
@@ -2734,12 +3940,25 @@ flatTexT: parseInt(flatTInput.value, 10) || 0,
 collisionYMode: cy.input.value as CollisionYMode,
                     collisionWinding: cw.input.value as CollisionWinding,
                     maxTrisPerDL: 128,
+
+objectsEnabled: !objectPatchDisabled,
+objectMapId: sfaObjectMapId,
+                    keepObjectTypes: parseHexObjectKeepList(keepObjInput.value),
+                    mapsBin: await readOptionalFile(mapsBin.input.files?.[0] ?? null),
+                    mapsTab: await readOptionalFile(mapsTab.input.files?.[0] ?? null),
                 },
             );
 
             const base = nameInput.value || 'mod';
+
             downloadBytes(`${base}.zlb.bin`, result.zlbBin);
             downloadBytes(`${base}.tab`, result.tab);
+
+            if (result.mapsBin && result.mapsTab) {
+                downloadBytes(`${base}_MAPS_noobjects.bin`, result.mapsBin);
+                downloadBytes(`${base}_MAPS_noobjects.tab`, result.mapsTab);
+            }
+
             log.value = result.logs.join('\n');
             console.warn('[EARLY1 FINALMAP CONVERT]', result.logs.join('\n'));
         } catch (e) {

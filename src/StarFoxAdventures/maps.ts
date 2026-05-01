@@ -2076,6 +2076,705 @@ function projectWorldToCanvasUnclamped(
     };
 }
 
+type MissingTextureLayerRef = {
+    texId: number;
+    useTex1: boolean | null;
+};
+
+type DebugLocalAABB = {
+    minX: number; maxX: number;
+    minY: number; maxY: number;
+    minZ: number; maxZ: number;
+};
+
+type MissingTextureShapeHit = {
+    shape: any;
+    center: vec3;
+    aabb: DebugLocalAABB | null;
+    refs: MissingTextureLayerRef[];
+};
+
+const missingTextureProbeCache = new WeakMap<object, { tex0?: any; tex1?: any }>();
+const missingTextureShapeHitCache = new WeakMap<object, MissingTextureShapeHit[]>();
+
+function safeGetTextureForMissingDebug(
+    texFetcher: any,
+    cache: any,
+    texId: number,
+    useTex1: boolean,
+): any {
+    try {
+        if (!texFetcher || typeof texFetcher.getTexture !== 'function')
+            return null;
+
+        return texFetcher.getTexture(cache, texId, useTex1);
+    } catch {
+        return null;
+    }
+}
+
+function getMissingTextureProbe(
+    texFetcher: any,
+    cache: any,
+    useTex1: boolean,
+): any {
+    if (!texFetcher || typeof texFetcher !== 'object')
+        return null;
+
+    let entry = missingTextureProbeCache.get(texFetcher);
+    if (!entry) {
+        entry = {};
+        missingTextureProbeCache.set(texFetcher, entry);
+    }
+
+    if (useTex1) {
+        if (entry.tex1 === undefined)
+            entry.tex1 = safeGetTextureForMissingDebug(texFetcher, cache, 0x7FFE, true);
+        return entry.tex1;
+    } else {
+        if (entry.tex0 === undefined)
+            entry.tex0 = safeGetTextureForMissingDebug(texFetcher, cache, 0x7FFD, false);
+        return entry.tex0;
+    }
+}
+
+function debugTextureSameObject(a: any, b: any): boolean {
+    if (!a || !b)
+        return false;
+
+    if (a === b)
+        return true;
+
+    if (a.viewerTexture && b.viewerTexture && a.viewerTexture === b.viewerTexture)
+        return true;
+
+    if (a.gfxTexture && b.gfxTexture && a.gfxTexture === b.gfxTexture)
+        return true;
+
+    if (a.texture && b.texture && a.texture === b.texture)
+        return true;
+
+    return false;
+}
+
+function debugTextureNameText(tex: any): string {
+    const names = [
+        tex?.name,
+        tex?.debugName,
+        tex?.viewerTexture?.name,
+        tex?.viewerTexture?.debugName,
+        tex?.viewerTexture?.extraInfo?.name,
+        tex?.gfxTexture?.name,
+        tex?.gfxTexture?.debugName,
+    ];
+
+    return names
+        .filter((v) => typeof v === 'string')
+        .join(' ')
+        .toLowerCase();
+}
+
+function debugTextureResultLooksMissing(
+    texFetcher: any,
+    cache: any,
+    tex: any,
+    requestedTexId: number,
+    useTex1: boolean,
+): boolean {
+    if (tex === null || tex === undefined)
+        return true;
+
+    if (
+        tex.missing === true ||
+        tex.isMissing === true ||
+        tex.__missing === true ||
+        tex.__isMissing === true ||
+        tex.fallback === true ||
+        tex.isFallback === true ||
+        tex.__fallback === true ||
+        tex.__isFallback === true
+    )
+        return true;
+
+    const nameText = debugTextureNameText(tex);
+    if (
+        nameText.includes('missing') ||
+        nameText.includes('checker') ||
+        nameText.includes('checkboard') ||
+        nameText.includes('placeholder') ||
+        nameText.includes('fallback') ||
+        nameText.includes('dummy') ||
+        nameText.includes('invalid') ||
+        nameText.includes('fake')
+    )
+        return true;
+
+    const probe = getMissingTextureProbe(texFetcher, cache, useTex1);
+    if (probe) {
+        if (debugTextureSameObject(tex, probe))
+            return true;
+
+        const texW = Number(tex?.width ?? tex?.viewerTexture?.width ?? 0);
+        const texH = Number(tex?.height ?? tex?.viewerTexture?.height ?? 0);
+        const probeW = Number(probe?.width ?? probe?.viewerTexture?.width ?? 0);
+        const probeH = Number(probe?.height ?? probe?.viewerTexture?.height ?? 0);
+
+        const texName = debugTextureNameText(tex);
+        const probeName = debugTextureNameText(probe);
+
+        // Some fetchers return a new checker texture object per missing ID.
+        // Object identity then fails, so compare the tiny generated fallback texture shape too.
+        if (
+            texW > 0 && texH > 0 &&
+            texW === probeW &&
+            texH === probeH &&
+            (
+                (texName !== '' && texName === probeName) ||
+                (texW <= 32 && texH <= 32)
+            )
+        ) {
+            return true;
+        }
+    }
+
+    const actualId =
+        tex.id ??
+        tex.texId ??
+        tex.textureId ??
+        tex.sourceTexId ??
+        tex.originalTexId;
+
+    if (typeof actualId === 'number' && (actualId | 0) !== (requestedTexId | 0))
+        return true;
+
+    return false;
+}
+
+function getDebugLayerUseTex1(layer: any, fallback: boolean | null = null): boolean | null {
+    if (typeof layer?.useTex1 === 'boolean')
+        return layer.useTex1;
+
+    if (typeof layer?.tex1 === 'boolean')
+        return layer.tex1;
+
+    if (typeof layer?.useTexture1 === 'boolean')
+        return layer.useTexture1;
+
+    if (typeof layer?.textureBank === 'number')
+        return layer.textureBank === 1;
+
+    if (typeof layer?.texBank === 'number')
+        return layer.texBank === 1;
+
+    if (typeof layer?.bank === 'number')
+        return layer.bank === 1;
+
+    return fallback;
+}
+
+function addDebugTextureRef(
+    out: MissingTextureLayerRef[],
+    texIdRaw: unknown,
+    useTex1: boolean | null,
+): void {
+    if (typeof texIdRaw !== 'number')
+        return;
+
+    if (!Number.isFinite(texIdRaw) || texIdRaw < 0)
+        return;
+
+    const texId = texIdRaw | 0;
+
+    if (out.some((r) => r.texId === texId && r.useTex1 === useTex1))
+        return;
+
+    out.push({ texId, useTex1 });
+}
+
+function collectDebugMaterialTextureRefs(material: any): MissingTextureLayerRef[] {
+    const out: MissingTextureLayerRef[] = [];
+
+    const realMaterial =
+        typeof material?.getExportMaterial === 'function'
+            ? material.getExportMaterial()
+            : material;
+
+    const shader =
+        realMaterial?.shader ??
+        realMaterial?.sfaShader ??
+        realMaterial?.materialShader ??
+        null;
+
+    const scanLayer = (layer: any, fallbackUseTex1: boolean | null): void => {
+        const useTex1 = getDebugLayerUseTex1(layer, fallbackUseTex1);
+
+        addDebugTextureRef(out, layer?.texId, useTex1);
+        addDebugTextureRef(out, layer?.textureId, useTex1);
+        addDebugTextureRef(out, layer?.id, useTex1);
+
+        if (Array.isArray(layer?.texIds)) {
+            for (const id of layer.texIds)
+                addDebugTextureRef(out, id, useTex1);
+        }
+
+        if (Array.isArray(layer?.textureIds)) {
+            for (const id of layer.textureIds)
+                addDebugTextureRef(out, id, useTex1);
+        }
+    };
+
+    // SFA map materials actually request shader layer textures from TEX1.
+    // This is why the first patch found nothing.
+    const shaderLayerLists = [
+        shader?.layers,
+        shader?.textureLayers,
+    ];
+
+    for (const list of shaderLayerLists) {
+        if (!Array.isArray(list))
+            continue;
+
+        for (const layer of list)
+            scanLayer(layer, true);
+    }
+
+    const materialLayerLists = [
+        realMaterial?.layers,
+        realMaterial?.textureLayers,
+    ];
+
+    for (const list of materialLayerLists) {
+        if (!Array.isArray(list))
+            continue;
+
+        for (const layer of list)
+            scanLayer(layer, null);
+    }
+
+    addDebugTextureRef(out, shader?.reflectiveProbeMaskTexId, true);
+    addDebugTextureRef(out, shader?.nbtTexId, true);
+    addDebugTextureRef(out, shader?.furRegionsTexId, true);
+
+    if (Array.isArray(realMaterial?.texIds)) {
+        for (const id of realMaterial.texIds)
+            addDebugTextureRef(out, id, null);
+    }
+
+    if (typeof realMaterial?.texId === 'number')
+        addDebugTextureRef(out, realMaterial.texId, null);
+
+    return out;
+}
+
+function debugTextureRefIsMissing(
+    material: any,
+    fallbackTexFetcher: any,
+    fallbackCache: any,
+    ref: MissingTextureLayerRef,
+): boolean {
+    const realMaterial =
+        typeof material?.getExportMaterial === 'function'
+            ? material.getExportMaterial()
+            : material;
+
+    const texFetcher =
+        realMaterial?.texFetcher ??
+        realMaterial?.textureFetcher ??
+        realMaterial?.shader?.texFetcher ??
+        fallbackTexFetcher;
+
+    const cache =
+        realMaterial?.cache ??
+        realMaterial?.renderCache ??
+        fallbackCache;
+
+    if (!texFetcher || typeof texFetcher.getTexture !== 'function')
+        return false;
+
+    const testBank = (useTex1: boolean): boolean => {
+        const tex = safeGetTextureForMissingDebug(texFetcher, cache, ref.texId, useTex1);
+        return debugTextureResultLooksMissing(texFetcher, cache, tex, ref.texId, useTex1);
+    };
+
+    if (ref.useTex1 !== null)
+        return testBank(ref.useTex1);
+
+    // Unknown bank. Only mark missing if neither bank can provide it.
+    // This avoids false positives when the same ID exists in TEX0 but not TEX1, or vice versa.
+    return testBank(false) && testBank(true);
+}
+
+function getDebugShapeLocalAABB(shape: any): DebugLocalAABB | null {
+    const candidates = [
+        shape?.geom?.aabb,
+        shape?.geom?.bbox,
+        shape?.geom?.bounds,
+        shape?.aabb,
+        shape?.bbox,
+        shape?.bounds,
+    ];
+
+    for (const aabb of candidates) {
+        if (!aabb)
+            continue;
+
+        if (aabb.min && aabb.max) {
+            return {
+                minX: aabb.min[0],
+                maxX: aabb.max[0],
+                minY: aabb.min[1],
+                maxY: aabb.max[1],
+                minZ: aabb.min[2],
+                maxZ: aabb.max[2],
+            };
+        }
+
+        if (
+            typeof aabb.minX === 'number' &&
+            typeof aabb.maxX === 'number' &&
+            typeof aabb.minY === 'number' &&
+            typeof aabb.maxY === 'number' &&
+            typeof aabb.minZ === 'number' &&
+            typeof aabb.maxZ === 'number'
+        ) {
+            return {
+                minX: aabb.minX,
+                maxX: aabb.maxX,
+                minY: aabb.minY,
+                maxY: aabb.maxY,
+                minZ: aabb.minZ,
+                maxZ: aabb.maxZ,
+            };
+        }
+
+        if (aabb.center) {
+            const cx = aabb.center[0];
+            const cy = aabb.center[1];
+            const cz = aabb.center[2];
+
+            return {
+                minX: cx, maxX: cx,
+                minY: cy, maxY: cy,
+                minZ: cz, maxZ: cz,
+            };
+        }
+    }
+
+    return null;
+}
+
+function getDebugShapeLocalCenter(shape: any, dst: vec3 = vec3.create()): vec3 | null {
+    const aabb = getDebugShapeLocalAABB(shape);
+    if (!aabb)
+        return null;
+
+    dst[0] = (aabb.minX + aabb.maxX) * 0.5;
+    dst[1] = (aabb.minY + aabb.maxY) * 0.5;
+    dst[2] = (aabb.minZ + aabb.maxZ) * 0.5;
+    return dst;
+}
+
+function collectMissingTextureShapeHits(
+    modelInst: ModelInstance,
+    fallbackTexFetcher: any,
+    fallbackCache: any,
+): MissingTextureShapeHit[] {
+    const cached = missingTextureShapeHitCache.get(modelInst as any);
+    if (cached)
+        return cached;
+
+    const hits: MissingTextureShapeHit[] = [];
+    const modelShapes = (modelInst as any).getModelShapes?.();
+
+    const scanShape = (shape: any): void => {
+        if (!shape)
+            return;
+
+        const shapeMaterial = shape.material ?? shape.shapeMaterial ?? shape.drawMaterial;
+        if (!shapeMaterial)
+            return;
+
+        const material =
+            typeof shapeMaterial?.getExportMaterial === 'function'
+                ? shapeMaterial.getExportMaterial()
+                : shapeMaterial;
+
+        if (!material)
+            return;
+
+        const refs = collectDebugMaterialTextureRefs(material);
+        if (refs.length === 0)
+            return;
+
+        const missingRefs: MissingTextureLayerRef[] = [];
+
+        for (const ref of refs) {
+            if (debugTextureRefIsMissing(material, fallbackTexFetcher, fallbackCache, ref))
+                missingRefs.push(ref);
+        }
+
+        if (missingRefs.length === 0)
+            return;
+
+        const center = getDebugShapeLocalCenter(shape);
+        if (!center)
+            return;
+
+        hits.push({
+            shape,
+            center: vec3.clone(center),
+            aabb: getDebugShapeLocalAABB(shape),
+            refs: missingRefs,
+        });
+    };
+
+    const shapeLists = Array.isArray(modelShapes?.shapes) ? modelShapes.shapes : [];
+    for (const shapeList of shapeLists) {
+        if (Array.isArray(shapeList)) {
+            for (const shape of shapeList)
+                scanShape(shape);
+        } else {
+            scanShape(shapeList);
+        }
+    }
+
+    const waters = Array.isArray(modelShapes?.waters) ? modelShapes.waters : [];
+    for (const water of waters)
+        scanShape(water);
+
+    const furs = Array.isArray(modelShapes?.furs) ? modelShapes.furs : [];
+    for (const fur of furs)
+        scanShape(fur?.shape ?? fur);
+
+    missingTextureShapeHitCache.set(modelInst as any, hits);
+    return hits;
+}
+
+function buildDebugBlockPlacementMatrix(map: any, b: BlockIter, dst: mat4): mat4 {
+    if (map?.mapOpts?.galleryCenterBlock) {
+        const bounds = dpGetBlockLocalXYZBounds(b.block);
+
+        if (bounds) {
+            const cx = (bounds.minX + bounds.maxX) * 0.5;
+            const cy = (bounds.minY + bounds.maxY) * 0.5;
+            const cz = (bounds.minZ + bounds.maxZ) * 0.5;
+
+            const sx = Math.max(1, bounds.maxX - bounds.minX);
+            const sy = Math.max(1, bounds.maxY - bounds.minY);
+            const sz = Math.max(1, bounds.maxZ - bounds.minZ);
+            const longest = Math.max(sx, sy, sz);
+
+            const scale = Math.min(2.5, Math.max(0.15, 720 / longest));
+
+            mat4.fromScaling(dst, [scale, scale, scale]);
+            dst[12] = (-cx * scale) + 900;
+            dst[13] = (-cy * scale) - 100;
+            dst[14] = (-cz * scale) + 1200;
+        } else {
+            mat4.fromTranslation(dst, [-320, -120, -320]);
+        }
+    } else {
+        mat4.fromTranslation(dst, [640 * b.x, 0, 640 * b.z]);
+    }
+
+    mat4.mul(dst, map.getMapMatrix(), dst);
+    return dst;
+}
+
+function getViewerTexturePanelName(vt: any): string {
+    return String(
+        vt?.name ??
+        vt?.debugName ??
+        vt?.extraInfo?.name ??
+        vt?.viewerTexture?.name ??
+        vt?.viewerTexture?.debugName ??
+        ''
+    );
+}
+
+function shortenTexturePanelName(name: string): string {
+    const parts = name.split(/[\\/]/g).filter((s) => s.length > 0);
+
+    // StarFoxAdventuresDemo/warlock/TEX1.bin #1005 -> warlock/TEX1.bin #1005
+    if (parts.length >= 2)
+        return parts.slice(-2).join('/');
+
+    return name;
+}
+
+function inferTexturePanelNameForRef(
+    ref: MissingTextureLayerRef,
+    textureHolder: UI.TextureListHolder | null | undefined,
+): string | null {
+    const viewerTextures = ((textureHolder as any)?.viewerTextures ?? []) as any[];
+    const bankName =
+        ref.useTex1 === true ? 'TEX1.bin' :
+        ref.useTex1 === false ? 'TEX0.bin' :
+        null;
+
+    if (!bankName)
+        return null;
+
+    for (const vt of viewerTextures) {
+        const name = getViewerTexturePanelName(vt);
+        if (!name.includes(bankName))
+            continue;
+
+        const hash = name.lastIndexOf('#');
+        if (hash < 0)
+            continue;
+
+        return `${name.slice(0, hash + 1)}${ref.texId >>> 0}`;
+    }
+
+    return null;
+}
+
+function formatMissingTextureRef(
+    ref: MissingTextureLayerRef,
+    textureHolder?: UI.TextureListHolder | null,
+): string {
+    const hex = `0x${dpHex(ref.texId).toUpperCase()}`;
+    const dec = `${ref.texId >>> 0}`;
+
+    const inferred = inferTexturePanelNameForRef(ref, textureHolder);
+    if (inferred)
+        return `${shortenTexturePanelName(inferred)} (${hex})`;
+
+    const bank =
+        ref.useTex1 === true ? 'TEX1.bin ' :
+        ref.useTex1 === false ? 'TEX0.bin ' :
+        'TEX?.bin ';
+
+    return `${bank}#${dec} (${hex})`;
+}
+
+function getDebugAABBCandidatePoints(aabb: DebugLocalAABB): Array<[number, number, number]> {
+    const cx = (aabb.minX + aabb.maxX) * 0.5;
+    const cy = (aabb.minY + aabb.maxY) * 0.5;
+    const cz = (aabb.minZ + aabb.maxZ) * 0.5;
+
+    return [
+        [cx, cy, cz],
+
+        [aabb.minX, aabb.minY, aabb.minZ],
+        [aabb.maxX, aabb.minY, aabb.minZ],
+        [aabb.minX, aabb.maxY, aabb.minZ],
+        [aabb.maxX, aabb.maxY, aabb.minZ],
+        [aabb.minX, aabb.minY, aabb.maxZ],
+        [aabb.maxX, aabb.minY, aabb.maxZ],
+        [aabb.minX, aabb.maxY, aabb.maxZ],
+        [aabb.maxX, aabb.maxY, aabb.maxZ],
+
+        [cx, aabb.minY, cz],
+        [cx, aabb.maxY, cz],
+        [aabb.minX, cy, cz],
+        [aabb.maxX, cy, cz],
+        [cx, cy, aabb.minZ],
+        [cx, cy, aabb.maxZ],
+    ];
+}
+
+function getProjectedDebugAABBLabelPoint(
+    clipFromWorld: mat4,
+    canvas: HTMLCanvasElement,
+    placement: mat4,
+    aabb: DebugLocalAABB,
+    modelTranslate: any,
+): { x: number; y: number; depth: number } | null {
+    let best: { x: number; y: number; depth: number } | null = null;
+
+    for (const [lx, ly, lz] of getDebugAABBCandidatePoints(aabb)) {
+        const world = transformMapPoint(
+            placement,
+            lx + (modelTranslate[0] ?? 0),
+            ly + (modelTranslate[1] ?? 0),
+            lz + (modelTranslate[2] ?? 0),
+        );
+
+        const p = projectWorldToCanvas(
+            clipFromWorld,
+            canvas,
+            world[0],
+            world[1],
+            world[2],
+        );
+
+        if (!p)
+            continue;
+
+        // Lower NDC depth is usually nearer. This puts the text on a visible edge/face,
+        // not in the empty middle of a huge shape bounds.
+        if (!best || p.depth < best.depth)
+            best = p;
+    }
+
+    return best;
+}
+
+function drawProjectedDebugAABB(
+    ctx: CanvasRenderingContext2D,
+    clipFromWorld: mat4,
+    canvas: HTMLCanvasElement,
+    placement: mat4,
+    aabb: DebugLocalAABB,
+    modelTranslate: any,
+): void {
+    const corners: Array<[number, number, number]> = [
+        [aabb.minX, aabb.minY, aabb.minZ],
+        [aabb.maxX, aabb.minY, aabb.minZ],
+        [aabb.maxX, aabb.maxY, aabb.minZ],
+        [aabb.minX, aabb.maxY, aabb.minZ],
+
+        [aabb.minX, aabb.minY, aabb.maxZ],
+        [aabb.maxX, aabb.minY, aabb.maxZ],
+        [aabb.maxX, aabb.maxY, aabb.maxZ],
+        [aabb.minX, aabb.maxY, aabb.maxZ],
+    ];
+
+    const projected = corners.map(([lx, ly, lz]) => {
+        const world = transformMapPoint(
+            placement,
+            lx + (modelTranslate[0] ?? 0),
+            ly + (modelTranslate[1] ?? 0),
+            lz + (modelTranslate[2] ?? 0),
+        );
+
+        return projectWorldToCanvasUnclamped(
+            clipFromWorld,
+            canvas,
+            world[0],
+            world[1],
+            world[2],
+        );
+    });
+
+    const edges = [
+        [0, 1], [1, 2], [2, 3], [3, 0],
+        [4, 5], [5, 6], [6, 7], [7, 4],
+        [0, 4], [1, 5], [2, 6], [3, 7],
+    ];
+
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,32,32,0.95)';
+    ctx.lineWidth = 2;
+
+    for (const [a, b] of edges) {
+        const p0 = projected[a];
+        const p1 = projected[b];
+
+        if (!p0 || !p1)
+            continue;
+
+        ctx.beginPath();
+        ctx.moveTo(p0.x, p0.y);
+        ctx.lineTo(p1.x, p1.y);
+        ctx.stroke();
+    }
+
+    ctx.restore();
+}
+
 // ===================== DP CURVES / ROUTE + FBFX + OBJ HIT DEBUG =====================
 
 type DPCurveNode = {
@@ -3148,7 +3847,182 @@ private drawHitFootprintSnapshotPanel(
     ctx.strokeRect(mapX, mapY, mapW, mapH);
 }
 
+private drawMissingTextureLabelOverlay(viewerInput: Viewer.ViewerRenderInput): void {
+    if (this.isDPMapScene)
+        return;
 
+    if (!this.showMissingTextureLabels)
+        return;
+
+    if (this.currentTexFetcher?.getTexturesEnabled?.() === false)
+        return;
+
+    const ctx = getDebugOverlayCanvas2D() as CanvasRenderingContext2D | null;
+    if (!ctx)
+        return;
+
+    const canvas = ctx.canvas;
+
+    const drawStatus = (msg: string): void => {
+        ctx.save();
+        ctx.font = '13px monospace';
+        ctx.textBaseline = 'top';
+
+        const w = Math.ceil(ctx.measureText(msg).width) + 12;
+        const x = Math.max(8, canvas.width - w - 12);
+        const y = 38;
+
+        ctx.fillStyle = 'rgba(0,0,0,0.86)';
+        ctx.fillRect(x, y, w, 22);
+
+        ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+        ctx.strokeRect(x, y, w, 22);
+
+        ctx.fillStyle = '#ffeb3b';
+        ctx.fillText(msg, x + 6, y + 4);
+        ctx.restore();
+    };
+
+    const clipFromWorld = getClipFromWorldMatrix(viewerInput);
+    if (!clipFromWorld) {
+        drawStatus('missing texture label: no clipFromWorld matrix');
+        return;
+    }
+
+    const texFetcher = this.currentTexFetcher;
+    const cache =
+        (this.materialFactory as any).cache ??
+        (this.materialFactory as any).getCache?.();
+
+    if (!texFetcher) {
+        drawStatus('missing texture label: no texFetcher');
+        return;
+    }
+
+    if (!cache) {
+        drawStatus('missing texture label: no material cache');
+        return;
+    }
+
+    const placement = mat4.create();
+    let totalMissingHits = 0;
+
+    ctx.save();
+    ctx.font = '13px monospace';
+    ctx.textBaseline = 'top';
+
+    for (const b of this.map.iterateBlocks()) {
+        const hits = collectMissingTextureShapeHits(b.block, texFetcher, cache);
+        totalMissingHits += hits.length;
+
+        if (hits.length === 0)
+            continue;
+
+        buildDebugBlockPlacementMatrix(this.map, b, placement);
+
+        for (const hit of hits) {
+            const modelTranslate =
+                (((b.block as any).model as any)?.modelTranslate ?? [0, 0, 0]) as any;
+
+            if (hit.aabb) {
+                drawProjectedDebugAABB(
+                    ctx,
+                    clipFromWorld,
+                    canvas,
+                    placement,
+                    hit.aabb,
+                    modelTranslate,
+                );
+            }
+
+            let p = hit.aabb
+                ? getProjectedDebugAABBLabelPoint(
+                    clipFromWorld,
+                    canvas,
+                    placement,
+                    hit.aabb,
+                    modelTranslate,
+                )
+                : null;
+
+            if (!p) {
+                const world = transformMapPoint(
+                    placement,
+                    hit.center[0] + (modelTranslate[0] ?? 0),
+                    hit.center[1] + (modelTranslate[1] ?? 0),
+                    hit.center[2] + (modelTranslate[2] ?? 0),
+                );
+
+                p = projectWorldToCanvas(
+                    clipFromWorld,
+                    canvas,
+                    world[0],
+                    world[1],
+                    world[2],
+                );
+            }
+
+            if (!p)
+                continue;
+
+            const refs = hit.refs
+                .slice(0, 2)
+                .map((ref) => formatMissingTextureRef(ref, this.textureHolder))
+                .join(' | ');
+
+            const extra = hit.refs.length > 2 ? ` +${hit.refs.length - 2}` : '';
+
+            const blockInfo = this.map.info.getBlockInfoAt(b.x, b.z);
+            const blockText = blockInfo
+                ? ` block ${blockInfo.mod}.${blockInfo.sub}`
+                : ` cell ${b.x},${b.z}`;
+
+            const label = `MISSING ${refs}${extra}${blockText}`;
+
+            const textW = Math.ceil(ctx.measureText(label).width);
+            const boxX = p.x + 10;
+            const boxY = p.y - 11;
+            const boxW = textW + 10;
+            const boxH = 20;
+
+            ctx.fillStyle = '#ff2020';
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.strokeStyle = 'rgba(255,32,32,0.95)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(p.x - 9, p.y);
+            ctx.lineTo(p.x + 9, p.y);
+            ctx.moveTo(p.x, p.y - 9);
+            ctx.lineTo(p.x, p.y + 9);
+            ctx.stroke();
+
+            ctx.strokeStyle = 'rgba(255,32,32,0.8)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(p.x + 6, p.y);
+            ctx.lineTo(boxX, boxY + 10);
+            ctx.stroke();
+
+            ctx.fillStyle = 'rgba(0,0,0,0.90)';
+            ctx.fillRect(boxX, boxY, boxW, boxH);
+
+            ctx.strokeStyle = 'rgba(255,32,32,0.95)';
+            ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+            ctx.fillStyle = '#ff4040';
+            ctx.fillText(label, boxX + 5, boxY + 3);
+        }
+    }
+
+    if (totalMissingHits === 0) {
+        drawStatus('missing texture label scanner active: 0 missing shape refs found');
+    }
+
+    ctx.restore();
+}
 
 private drawDPObjectDiffOverlay(viewerInput: Viewer.ViewerRenderInput): void {
     this.projectedDiffLabels = [];
@@ -3311,6 +4185,7 @@ public showObjectLabels = false;
 public showHits = false;
 public showHitVolumes = false;
 public showMapWireframe = false;
+public showMissingTextureLabels = false;
 public showGameText = false;
 public showObjectDiff = false;
 private dpGameTextRenderer: DPGameTextRenderer | null = null;
@@ -4247,7 +5122,19 @@ private drawObjectDebugOverlay(viewerInput: Viewer.ViewerRenderInput): void {
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     this.projectedObjectLabels = [];
+
+    if (!this.isDPMapScene)
+        return;
+
+    if (!this.showObjectLabels && !this.selectedObject)
+        return;
+
+    const clipFromWorld = getClipFromWorldMatrix(viewerInput);
+    if (!clipFromWorld)
+        return;
+
     ctx.save();
+    try {
 
 const labelFontPx = 20;
 const labelLineH = 24;
@@ -4257,14 +5144,6 @@ const infoLineH = 20;
 ctx.textBaseline = 'middle';
 ctx.lineWidth = 3;
 ctx.font = `${labelFontPx}px sans-serif`;
-        if (!this.isDPMapScene)
-            return;
-        if (!this.showObjectLabels && !this.selectedObject)
-            return;
-
-        const clipFromWorld = getClipFromWorldMatrix(viewerInput);
-        if (!clipFromWorld)
-            return;
 
         for (const obj of this.map.objects) {
             if ((obj as any)._isDevDP && !this.showDevObjects)
@@ -4333,8 +5212,10 @@ const boxY = canvas.height - boxH - 8;
             }
         }
 
+    } finally {
         ctx.restore();
     }
+}
     private playMusic(mapNum: number) {
         const musicState = (window as any).musicState;
         if (musicState.audio) {
@@ -4530,6 +5411,12 @@ public createPanels(): UI.Panel[] {
             this.showMapWireframe = showWireframe.checked;
         };
         renderPanel.contents.append(showWireframe.elem);
+
+        const showMissingTextureLabels = new UI.Checkbox('Label missing texture surfaces', this.showMissingTextureLabels);
+        showMissingTextureLabels.onchanged = () => {
+            this.showMissingTextureLabels = showMissingTextureLabels.checked;
+        };
+        renderPanel.contents.append(showMissingTextureLabels.elem);
 
 
         const unusedSpacer = document.createElement('div');
@@ -4850,6 +5737,7 @@ protected override update(viewerInput: Viewer.ViewerRenderInput) {
         this.dpGameTextRenderer.tick(viewerInput);
 
 this.drawObjectDebugOverlay(viewerInput);
+this.drawMissingTextureLabelOverlay(viewerInput);
 this.drawDPObjectDiffOverlay(viewerInput);
 this.drawDPObjectHitOverlay(viewerInput);
 this.drawDPHitOverlay(viewerInput);

@@ -451,10 +451,10 @@ new SFAWorldSceneDesc('dragbot', 'dragrockbot', 52, 'Kiosk: Dragon Rock Bot', SF
     new SFAWorldSceneDesc('animtest', 'bossgaldon', 28, 'Boss Galdon'),
     new SFAWorldSceneDesc('arwingdragon', 'arwingdragon', 62, 'Arwing to Dragon Rock', ),
 
-    'Tools',
+    'Tools - EXPERIMENTAL AND VERY EARLY',
     new Early1FinalMapConverterSceneDesc(
         'early1_finalmap_converter',
-        'Early1 -> Final ZLB Converter',
+        ' Early Maps -> ZLB Converter',
     ),
 
 'Texture Viewer',
