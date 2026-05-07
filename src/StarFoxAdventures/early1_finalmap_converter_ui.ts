@@ -1,4 +1,4 @@
-import { debugResolveEarly1TextureId, debugResolveEarly4TextureId } from './textures.js';
+import { debugResolveEarly1TextureId, debugResolveEarly4TextureId, debugResolveAncientTextureId } from './textures.js';
 import ArrayBufferSlice from '../ArrayBufferSlice.js';
 import { decompress as lzoDecompress } from '../Common/Compression/LZO.js';
 import type * as Viewer from '../viewer.js';
@@ -8,8 +8,17 @@ type Tri = [number, number, number, number];
 type GroupMode = 'single' | 'nibble0' | 'nibble1' | 'nibble2' | 'nibble3';
 type ColorMode = 'zero' | 'pidx' | 'neutral_shade';
 type TextureMode = 'mapped' | 'viewer_textureless' | 'pseudo_textureless';
-type EarlyMapFormat = 'early1_raw' | 'early4_lzo';
-type CollisionYMode = 'none' | 'raw' | 'subtract' | 'subtract_expand8' | 'subtract_expand32';
+type EarlyMapFormat = 'early1_raw' | 'early4_lzo' | 'ancient_blocks';
+type CollisionYMode =
+    | 'none'
+    | 'raw'
+    | 'raw_scale8'
+    | 'subtract'
+    | 'subtract_scale8'
+    | 'subtract_expand8'
+    | 'subtract_expand32'
+    | 'subtract_scale8_expand64'
+    | 'subtract_scale8_expand256';
 
 type EarlyMapSourceInfo = {
     format: EarlyMapFormat;
@@ -44,9 +53,82 @@ const EARLY4_SOURCE_INFO: EarlyMapSourceInfo = {
     shaderMode: 'early4_final',
     forceColorIndex16: true,
     expandColorPalette16: true,
-
     textureRemapMode: 'early4',
 };
+
+const ANCIENT_TRKBLK: { [key: number]: number } = {
+    1: 0x16,
+    2: 0x23,
+    3: 0x39,
+    4: 0x57,
+    5: 0x00,
+    6: 0x8E,
+    7: 0xA4,
+    8: 0xBA,
+    9: 0xD0,
+    10: 0xE6,
+    11: 0xFC,
+    12: 0x113,
+    13: 0x129,
+    14: 0x143,
+    15: 0x159,
+    16: 0x180,
+    17: 0x1C0,
+    18: 0x1C5,
+    19: 0x1DB,
+    20: 0x1FE,
+    21: 0x214,
+    22: 0x22A,
+    23: 0x240,
+    24: 0x256,
+    25: 0x26C,
+    26: 0x282,
+    27: 0x298,
+    28: 0x2C4,
+    29: 0x2DA,
+    30: 0x2F0,
+    31: 0x306,
+    32: 0x314,
+    33: 0x325,
+    34: 0x335,
+    35: 0x34B,
+    36: 0x363,
+    37: 0x368,
+    38: 0x37E,
+    39: 0x394,
+    40: 0x3AA,
+    41: 0x3C0,
+    42: 0x3D6,
+    43: 0x3EC,
+    44: 0x402,
+    45: 0x418,
+    46: 0x42E,
+    47: 0x42F,
+    48: 0x445,
+    49: 0x45B,
+    50: 0x471,
+    51: 0x487,
+    52: 0x49F,
+    53: 0x4B5,
+    54: 0x4CB,
+    55: 0x4DB,
+};
+
+function ancientBlockResourceIdForFinalSub(modelId: number, finalSubIndex: number): number {
+    const base = ANCIENT_TRKBLK[modelId];
+
+    if (base === undefined)
+        throw new Error(`no Ancient BLOCKS base for mod/model ${modelId}`);
+
+    if (finalSubIndex < 0)
+        throw new Error(`bad Ancient final sub index ${finalSubIndex}`);
+
+    return base + finalSubIndex;
+}
+
+function ancientSubIndexForFinalResource(finalResourceId: number, firstFinalResourceId: number): number {
+    return finalResourceId - firstFinalResourceId;
+}
 
 function earlyMapSourceInfo(format: EarlyMapFormat): EarlyMapSourceInfo {
     return format === 'early4_lzo' ? EARLY4_SOURCE_INFO : EARLY1_SOURCE_INFO;
@@ -74,6 +156,10 @@ export type Early1FinalMapConvertOptions = {
     keepObjectTypes?: number[];
     mapsBin?: ArrayBuffer | Uint8Array;
     mapsTab?: ArrayBuffer | Uint8Array;
+
+    hitsEnabled?: boolean;
+    hitsBin?: ArrayBuffer | Uint8Array;
+    hitsTab?: ArrayBuffer | Uint8Array;
 };
 
 export type Early1FinalMapConvertResult = {
@@ -84,6 +170,9 @@ export type Early1FinalMapConvertResult = {
 
     mapsBin?: Uint8Array;
     mapsTab?: Uint8Array;
+
+    hitsBin?: Uint8Array;
+    hitsTab?: Uint8Array;
 };
 
 const TAB_FLAG = 0x10000000;
@@ -238,9 +327,10 @@ function readLzoArchive(bin: Uint8Array, tabIn: Uint8Array): ArchiveBlocks {
 }
 
 function readEarlyMapSourceArchive(bin: Uint8Array, tabIn: Uint8Array, format: EarlyMapFormat): ArchiveBlocks {
-    return format === 'early4_lzo'
-        ? readLzoArchive(bin, tabIn)
-        : readRawArchive(bin, tabIn);
+    if (format === 'early4_lzo')
+        return readLzoArchive(bin, tabIn);
+
+    return readRawArchive(bin, tabIn);
 }
 
 async function streamTransform(kind: 'deflate' | 'inflate', input: Uint8Array): Promise<Uint8Array> {
@@ -295,6 +385,193 @@ async function writeZlb(raw: Uint8Array): Promise<Uint8Array> {
     out.set(comp, 0x10);
     return out;
 }
+
+type TextureInjectEntry = {
+    targetTexId: number;
+    png: Uint8Array;
+    name: string;
+};
+
+type TextureInjectResult = {
+    texBin: Uint8Array;
+    texTab: Uint8Array;
+    logs: string[];
+};
+
+function textureTabValueForOffset(off: number): number {
+    if ((off & 1) !== 0)
+        throw new Error(`texture BIN offset must be 2-byte aligned, got 0x${off.toString(16)}`);
+
+    const halfOff = off >>> 1;
+
+    if (halfOff > 0x00FFFFFF)
+        throw new Error(`texture BIN offset too large for SFA texture tab: 0x${off.toString(16)}`);
+
+    // bit31 valid + arrayLength=1 + halfword offset
+    return (0x81000000 | halfOff) >>> 0;
+}
+
+function isValidTextureTabValue(raw: number): boolean {
+    return raw !== 0xFFFFFFFF && (raw & 0x80000000) !== 0;
+}
+
+function textureTabOffset(raw: number): number {
+    return (raw & 0x00FFFFFF) * 2;
+}
+
+function textureTabArrayLength(raw: number): number {
+    return (raw >>> 24) & 0x3F;
+}
+
+async function decodePngToRgba(pngBytes: Uint8Array): Promise<{ width: number; height: number; rgba: Uint8Array }> {
+    const bmp = await createImageBitmap(new Blob([toBlobBuffer(pngBytes)], { type: 'image/png' }));
+
+    try {
+        const canvas = new OffscreenCanvas(bmp.width, bmp.height);
+        const ctx = canvas.getContext('2d');
+
+        if (!ctx)
+            throw new Error('could not create PNG decode canvas');
+
+        ctx.drawImage(bmp, 0, 0);
+
+        const img = ctx.getImageData(0, 0, bmp.width, bmp.height);
+        return {
+            width: bmp.width,
+            height: bmp.height,
+            rgba: new Uint8Array(img.data.buffer, img.data.byteOffset, img.data.byteLength).slice(),
+        };
+    } finally {
+        bmp.close();
+    }
+}
+
+// GX_TF_RGBA8 tile order:
+// 4x4 tiles, first AR plane, then GB plane.
+function encodeGxRgba8(rgba: Uint8Array, width: number, height: number): Uint8Array {
+    const bw = align(width, 4);
+    const bh = align(height, 4);
+    const out = new Uint8Array(bw * bh * 4);
+    let p = 0;
+
+    for (let ty = 0; ty < bh; ty += 4) {
+        for (let tx = 0; tx < bw; tx += 4) {
+            // AR plane.
+            for (let y = 0; y < 4; y++) {
+                for (let x = 0; x < 4; x++) {
+                    const sx = tx + x;
+                    const sy = ty + y;
+
+                    if (sx < width && sy < height) {
+                        const src = (sy * width + sx) * 4;
+                        out[p++] = rgba[src + 3]; // A
+                        out[p++] = rgba[src + 0]; // R
+                    } else {
+                        out[p++] = 0xFF;
+                        out[p++] = 0x00;
+                    }
+                }
+            }
+
+            // GB plane.
+            for (let y = 0; y < 4; y++) {
+                for (let x = 0; x < 4; x++) {
+                    const sx = tx + x;
+                    const sy = ty + y;
+
+                    if (sx < width && sy < height) {
+                        const src = (sy * width + sx) * 4;
+                        out[p++] = rgba[src + 1]; // G
+                        out[p++] = rgba[src + 2]; // B
+                    } else {
+                        out[p++] = 0x00;
+                        out[p++] = 0x00;
+                    }
+                }
+            }
+        }
+    }
+
+    return out;
+}
+
+function makeSfaTextureResourceRgba8(width: number, height: number, rgba: Uint8Array): Uint8Array {
+    const texData = encodeGxRgba8(rgba, width, height);
+    const out = new Uint8Array(0x60 + texData.byteLength);
+
+    // Final SFA texture header.
+    p16(out, 0x0A, width);
+    p16(out, 0x0C, height);
+
+    // GX_TF_RGBA8.
+    p8(out, 0x16, 0x06);
+
+    // Wrap/filter defaults. These can be tuned later.
+    // 1 is usually repeat-ish in GX-style enums; good enough for map textures.
+    p8(out, 0x17, 1); // wrapS
+    p8(out, 0x18, 1); // wrapT
+    p8(out, 0x19, 1); // min filter
+    p8(out, 0x1A, 1); // mag filter
+
+    // mipCountMinus1 = 0. One mip only.
+    p16(out, 0x1C, 0);
+
+    out.set(texData, 0x60);
+    return out;
+}
+
+async function patchSfaTextureArchiveWithPngs(
+    texBinIn: ArrayBuffer | Uint8Array,
+    texTabIn: ArrayBuffer | Uint8Array,
+    entries: TextureInjectEntry[],
+): Promise<TextureInjectResult> {
+    let texBin = asU8(texBinIn);
+    let texTab = asU8(texTabIn);
+    const logs: string[] = [];
+
+    for (const entry of entries) {
+        const tabOff = entry.targetTexId * 4;
+
+        if (tabOff + 4 > texTab.byteLength) {
+            const grown = new Uint8Array(tabOff + 4);
+            grown.fill(0xFF);
+            grown.set(texTab);
+            texTab = grown;
+        }
+
+        const oldRaw = u32(texTab, tabOff);
+        const oldDesc = isValidTextureTabValue(oldRaw)
+            ? `oldRaw=0x${oldRaw.toString(16)}/arrayLen=${textureTabArrayLength(oldRaw)}/oldOff=0x${textureTabOffset(oldRaw).toString(16)}`
+            : `oldRaw=0x${oldRaw.toString(16)}/missing`;
+
+        const png = await decodePngToRgba(entry.png);
+        const rawTex = makeSfaTextureResourceRgba8(png.width, png.height, png.rgba);
+
+        // Use ZLB, because SFA resources already understand ZLB and it keeps BIN size down.
+        const zlbTex = await writeZlb(rawTex);
+
+        const appendOff = align(texBin.byteLength, 0x20);
+        const outBin = new Uint8Array(appendOff + zlbTex.byteLength);
+        outBin.set(texBin);
+        outBin.set(zlbTex, appendOff);
+        texBin = outBin;
+
+        p32(texTab, tabOff, textureTabValueForOffset(appendOff));
+
+        logs.push(
+            `texInject ${entry.name}` +
+            ` -> id=${entry.targetTexId}` +
+            ` ${oldDesc}` +
+            ` newOff=0x${appendOff.toString(16)}` +
+            ` size=${png.width}x${png.height}` +
+            ` raw=0x${rawTex.byteLength.toString(16)}` +
+            ` zlb=0x${zlbTex.byteLength.toString(16)}`,
+        );
+    }
+
+    return { texBin, texTab, logs };
+}
+
 
 function parseMaybeHexInt(text: string, fallback: number): number {
     const s = text.trim();
@@ -691,8 +968,8 @@ async function patchSfaMapsObjectsForMap(
     mapsTabIn: ArrayBuffer | Uint8Array,
     mapId: number,
     keepObjectTypes: number[],
-): Promise<{ mapsBin: Uint8Array; mapsTab: Uint8Array; log: string }> {
-    const mapsBin = asU8(mapsBinIn);
+): Promise<{ mapsBin: OwnedU8; mapsTab: OwnedU8; log: string }> {
+        const mapsBin = asU8(mapsBinIn);
     const mapsTab = asU8(mapsTabIn);
 
     const objectResourceId = mapId * 7 + 6;
@@ -792,6 +1069,391 @@ const log =
     ` far=(30000,-30000,30000)`;
 
     return { mapsBin: outBin, mapsTab, log };
+}
+
+type PatchedHitsArchive = {
+    hitsBin: OwnedU8;
+    hitsTab: OwnedU8;
+    log: string;
+};
+
+function hitsTabMissingValue(tab: Uint8Array): number {
+    let zeroCount = 0;
+    let ffCount = 0;
+
+    for (let i = 0; i + 4 <= tab.byteLength; i += 4) {
+        const raw = u32(tab, i);
+
+        if (raw === 0)
+            zeroCount++;
+        else if (raw === 0xFFFFFFFF)
+            ffCount++;
+    }
+
+    return ffCount > zeroCount ? 0xFFFFFFFF : 0;
+}
+
+function hitsTabOffsetOrNull(raw: number, binSize: number): number | null {
+    if (raw === 0 || raw === 0xFFFFFFFF)
+        return null;
+
+    const off = raw & 0x0FFFFFFF;
+
+    if (off <= 0 || off >= binSize)
+        return null;
+
+    return off;
+}
+
+function findNextHitsArchiveOffset(tab: Uint8Array, start: number, binSize: number): number {
+    let best = binSize;
+
+    for (let i = 0; i + 4 <= tab.byteLength; i += 4) {
+        const raw = u32(tab, i);
+        const off = hitsTabOffsetOrNull(raw, binSize);
+
+        if (off !== null && off > start && off < best)
+            best = off;
+    }
+
+    return best;
+}
+
+function patchSfaHitsDisableResourceIds(
+    hitsBinIn: ArrayBuffer | Uint8Array,
+    hitsTabIn: ArrayBuffer | Uint8Array,
+    resourceIds: number[],
+): PatchedHitsArchive {
+    const hitsBin = asU8(hitsBinIn);
+    const hitsTab = asU8(hitsTabIn);
+
+    const missingValue = hitsTabMissingValue(hitsTab);
+    const uniqueIds = [...new Set(resourceIds)]
+        .filter((rid) => Number.isFinite(rid) && rid >= 0)
+        .sort((a, b) => a - b);
+
+    let cleared = 0;
+    let alreadyMissing = 0;
+    let outsideTab = 0;
+    let invalidOffset = 0;
+    let totalBytes = 0;
+    let totalLines20 = 0;
+
+    const details: string[] = [];
+
+    for (const rid of uniqueIds) {
+        const tabOff = rid * 4;
+
+        if (tabOff + 4 > hitsTab.byteLength) {
+            outsideTab++;
+
+            if (details.length < 32)
+                details.push(`rid0x${rid.toString(16)}=outsideTab`);
+
+            continue;
+        }
+
+        const raw = u32(hitsTab, tabOff);
+        const start = hitsTabOffsetOrNull(raw, hitsBin.byteLength);
+
+        if (start === null) {
+            alreadyMissing++;
+
+            if (details.length < 32)
+                details.push(`rid0x${rid.toString(16)}=missing/raw0x${raw.toString(16)}`);
+
+            continue;
+        }
+
+        const end = findNextHitsArchiveOffset(hitsTab, start, hitsBin.byteLength);
+        const span = end - start;
+
+        if (span <= 0 || end > hitsBin.byteLength) {
+            invalidOffset++;
+
+            if (details.length < 32) {
+                details.push(
+                    `rid0x${rid.toString(16)}=badSpan` +
+                    `/start0x${start.toString(16)}` +
+                    `/end0x${end.toString(16)}`,
+                );
+            }
+
+            continue;
+        }
+
+        // Disable both ways:
+        // 1. Null the TAB entry so the game should not load this HITS resource.
+        // 2. Zero the old 20-byte-line span in-place so stale data is gone even if something
+        //    accidentally walks the old offset.
+        hitsBin.fill(0, start, end);
+        p32(hitsTab, tabOff, missingValue);
+
+        cleared++;
+        totalBytes += span;
+        totalLines20 += Math.floor(span / 0x14);
+
+        if (details.length < 32) {
+            details.push(
+                `rid0x${rid.toString(16)}` +
+                `/tab+0x${tabOff.toString(16)}` +
+                `/oldRaw0x${raw.toString(16)}` +
+                `/span0x${span.toString(16)}` +
+                `/lines20=${Math.floor(span / 0x14)}`,
+            );
+        }
+    }
+
+    return {
+        hitsBin,
+        hitsTab,
+        log:
+            `HITS special collision disabled` +
+            ` ids=${uniqueIds.length}` +
+            ` cleared=${cleared}` +
+            ` alreadyMissing=${alreadyMissing}` +
+            ` outsideTab=${outsideTab}` +
+            ` invalidOffset=${invalidOffset}` +
+            ` bytesZeroed=0x${totalBytes.toString(16)}` +
+            ` lines20=${totalLines20}` +
+            ` missingMarker=0x${missingValue.toString(16)}` +
+            ` details=[${details.join('; ')}]`,
+    };
+}
+
+const SFA_MAP_ID_WARLOCK = 0x0B;
+const SFA_MAP_GRID_WIDTH = 12;
+const SFA_MAP_GRID_HEIGHT = 16;
+const SFA_MAP_GRID_EMPTY = 0x7FFE007F;
+
+// Ancient Warlock layout anchored so Ancient 16.1 lands on final start position.
+// Destination top-left is row 3, col 0.
+// Ancient 16.1 = layout row 0, col 6 -> final MAPS row 3, col 6.
+const ANCIENT_WARLOCK_LAYOUT_TOP_ROW = 3;
+const ANCIENT_WARLOCK_LAYOUT_LEFT_COL = 0;
+
+const ANCIENT_WARLOCK_LAYOUT_SUBS: Array<Array<number | null>> = [
+    [null, null, null, null, null, 0, 1, 2, 61, 57],
+    [null, null, null, null, 3, 4, 5, 6, 11, 63],
+    [62, null, 32, 7, 8, 9, 10, 37, 36, null],
+    [60, null, 33, 12, 13, 14, 15, 16, 17, 34],
+    [57, 39, 40, 18, 19, 20, 21, 22, 23, 35],
+    [41, 42, 43, 38, 24, 25, 26, 27, null, null],
+    [57, 45, 59, 58, 28, 29, 30, 31, 55, null],
+    [56, 47, 48, 49, 50, 51, 52, 53, 54, null],
+];
+
+
+function sfaMapsResourceOffset(
+    mapsTab: Uint8Array,
+    mapsBinSize: number,
+    resourceId: number,
+): number {
+    const tabOff = resourceId * 4;
+
+    if (tabOff + 4 > mapsTab.byteLength)
+        throw new Error(`MAPS resource 0x${resourceId.toString(16)} is outside MAPS.tab`);
+
+    const raw = u32(mapsTab, tabOff);
+
+    if (raw === 0 || raw === 0xFFFFFFFF)
+        throw new Error(`MAPS resource 0x${resourceId.toString(16)} is missing in MAPS.tab`);
+
+    const off = raw & 0x0FFFFFFF;
+
+    if (off <= 0 || off >= mapsBinSize)
+        throw new Error(
+            `bad MAPS resource 0x${resourceId.toString(16)} offset 0x${off.toString(16)}`,
+        );
+
+    return off;
+}
+
+function finalMapGridValueForSub(firstFinalResourceId: number, finalSubIndex: number): number {
+    // Final MAPS grid cells encode final map resource ID in the upper bits.
+    // For your working Warlock case firstFinalResourceId was 0x3C0:
+    // sub0 -> 0x0780007F, sub1 -> 0x0782007F, etc.
+    return (((firstFinalResourceId + finalSubIndex) * 0x20000) + 0x007F) >>> 0;
+}
+
+function decodeFinalMapGridResourceId(cell: number): number | null {
+    if (cell === SFA_MAP_GRID_EMPTY)
+        return null;
+
+    if ((cell & 0xFFFF) !== 0x007F)
+        return null;
+
+    const rid = Math.floor(cell / 0x20000);
+
+    // 0x3FFF-ish values are empty/sentinel-like, not real map blocks.
+    if (rid <= 0 || rid >= 0x3F00)
+        return null;
+
+    return rid;
+}
+
+function inferWarlockFinalResourceBaseFromExistingMaps(
+    mapsBin: Uint8Array,
+    mapsTab: Uint8Array,
+): { firstFinalResourceId: number; minRid: number; maxRid: number; distinctCount: number; sample: number[] } | null {
+    const mapBaseResourceId = SFA_MAP_ID_WARLOCK * 7;
+    const gridResourceId = mapBaseResourceId + 1;
+    const gridOff = sfaMapsResourceOffset(mapsTab, mapsBin.byteLength, gridResourceId);
+
+    const rids: number[] = [];
+
+    for (let row = 0; row < SFA_MAP_GRID_HEIGHT; row++) {
+        for (let col = 0; col < SFA_MAP_GRID_WIDTH; col++) {
+            const cellOff = gridOff + (row * SFA_MAP_GRID_WIDTH + col) * 4;
+            const rid = decodeFinalMapGridResourceId(u32(mapsBin, cellOff));
+
+            if (rid !== null)
+                rids.push(rid);
+        }
+    }
+
+    if (rids.length === 0)
+        return null;
+
+    const distinct = [...new Set(rids)].sort((a, b) => a - b);
+
+    return {
+        firstFinalResourceId: distinct[0],
+        minRid: distinct[0],
+        maxRid: distinct[distinct.length - 1],
+        distinctCount: distinct.length,
+        sample: distinct.slice(0, 16),
+    };
+}
+
+function patchSfaMapsAncientWarlockLayoutAndVisibility(
+    mapsBinIn: ArrayBuffer | Uint8Array,
+    mapsTabIn: ArrayBuffer | Uint8Array,
+    mapsGridFirstResourceId: number,
+): { mapsBin: OwnedU8; mapsTab: OwnedU8; log: string } {
+    const mapsBin = asU8(mapsBinIn);
+    const mapsTab = asU8(mapsTabIn);
+
+    const mapBaseResourceId = SFA_MAP_ID_WARLOCK * 7;
+
+    // For MAP ID 0x0B:
+    // 0x4D = header
+    // 0x4E = grid
+    // 0x4F = visibility grid A
+    // 0x50 = visibility grid B
+    const headerResourceId = mapBaseResourceId + 0;
+    const gridResourceId = mapBaseResourceId + 1;
+    const visResourceIds = [mapBaseResourceId + 2, mapBaseResourceId + 3];
+
+    const headerOff = sfaMapsResourceOffset(mapsTab, mapsBin.byteLength, headerResourceId);
+
+    const oldStartCol = u16(mapsBin, headerOff + 0x04);
+    const oldStartRow = u16(mapsBin, headerOff + 0x06);
+
+    // IMPORTANT:
+    // Working XMAPS.bin keeps the Warlock header start cell as-is: 4,3.
+    // Do NOT patch header +0x04/+0x06 here.
+    // The fix is the grid layout, not the header start cell.
+
+    const gridOff = sfaMapsResourceOffset(mapsTab, mapsBin.byteLength, gridResourceId);
+    const gridLen = SFA_MAP_GRID_WIDTH * SFA_MAP_GRID_HEIGHT * 4;
+
+    if (gridOff + gridLen > mapsBin.byteLength) {
+        throw new Error(
+            `Warlock MAPS grid OOB:` +
+            ` resource=0x${gridResourceId.toString(16)}` +
+            ` off=0x${gridOff.toString(16)}` +
+            ` len=0x${gridLen.toString(16)}` +
+            ` bin=0x${mapsBin.byteLength.toString(16)}`,
+        );
+    }
+
+    for (let row = 0; row < SFA_MAP_GRID_HEIGHT; row++) {
+        for (let col = 0; col < SFA_MAP_GRID_WIDTH; col++) {
+            const cellOff = gridOff + (row * SFA_MAP_GRID_WIDTH + col) * 4;
+            p32(mapsBin, cellOff, SFA_MAP_GRID_EMPTY);
+        }
+    }
+
+    const occupiedCells: Array<{ row: number; col: number; sub: number; rid: number }> = [];
+
+    for (let srcRow = 0; srcRow < ANCIENT_WARLOCK_LAYOUT_SUBS.length; srcRow++) {
+        const row = ANCIENT_WARLOCK_LAYOUT_SUBS[srcRow];
+
+        for (let srcCol = 0; srcCol < row.length; srcCol++) {
+            const sub = row[srcCol];
+
+            if (sub === null)
+                continue;
+
+            const dstRow = ANCIENT_WARLOCK_LAYOUT_TOP_ROW + srcRow;
+            const dstCol = ANCIENT_WARLOCK_LAYOUT_LEFT_COL + srcCol;
+            const finalRid = mapsGridFirstResourceId + sub;
+
+            if (
+                dstRow < 0 || dstRow >= SFA_MAP_GRID_HEIGHT ||
+                dstCol < 0 || dstCol >= SFA_MAP_GRID_WIDTH
+            ) {
+                throw new Error(
+                    `Ancient Warlock layout cell outside MAPS grid:` +
+                    ` sub=${sub}` +
+                    ` row=${dstRow}` +
+                    ` col=${dstCol}`,
+                );
+            }
+
+            const cellOff = gridOff + (dstRow * SFA_MAP_GRID_WIDTH + dstCol) * 4;
+            p32(mapsBin, cellOff, finalMapGridValueForSub(mapsGridFirstResourceId, sub));
+
+            occupiedCells.push({ row: dstRow, col: dstCol, sub, rid: finalRid });
+        }
+    }
+
+    // IMPORTANT:
+    // Working XMAPS.bin does NOT clear visibility to zero.
+    // It preserves the existing visibility data and only overlays 44BB on occupied cells.
+    const visible44BB = new Uint8Array([
+        0x44, 0xBB, 0x44, 0xBB,
+        0x44, 0xBB, 0x44, 0xBB,
+    ]);
+
+    for (const visResourceId of visResourceIds) {
+        const visOff = sfaMapsResourceOffset(mapsTab, mapsBin.byteLength, visResourceId);
+        const visLen = SFA_MAP_GRID_WIDTH * SFA_MAP_GRID_HEIGHT * 8;
+
+        if (visOff + visLen > mapsBin.byteLength) {
+            throw new Error(
+                `Warlock MAPS visibility grid OOB:` +
+                ` resource=0x${visResourceId.toString(16)}` +
+                ` off=0x${visOff.toString(16)}` +
+                ` len=0x${visLen.toString(16)}` +
+                ` bin=0x${mapsBin.byteLength.toString(16)}`,
+            );
+        }
+
+        for (const cell of occupiedCells) {
+            const recOff = visOff + (cell.row * SFA_MAP_GRID_WIDTH + cell.col) * 8;
+            mapsBin.set(visible44BB, recOff);
+        }
+    }
+
+    return {
+        mapsBin,
+        mapsTab,
+        log:
+            `ancient Warlock MAPS layout applied` +
+            ` map=0x${SFA_MAP_ID_WARLOCK.toString(16)}` +
+            ` headerResource=0x${headerResourceId.toString(16)}` +
+            ` headerOff=0x${headerOff.toString(16)}` +
+            ` headerStartKept=${oldStartCol},${oldStartRow}` +
+            ` gridResource=0x${gridResourceId.toString(16)}` +
+            ` gridOff=0x${gridOff.toString(16)}` +
+            ` mapsGridFirstResource=0x${mapsGridFirstResourceId.toString(16)}` +
+            ` topLeft=row${ANCIENT_WARLOCK_LAYOUT_TOP_ROW},col${ANCIENT_WARLOCK_LAYOUT_LEFT_COL}` +
+            ` occupied=${occupiedCells.length}` +
+            ` visibility=preserved_then_44BB_on_occupied_cells_only` +
+            ` visResources=[${visResourceIds.map((v) => `0x${v.toString(16)}`).join(',')}]`,
+    };
 }
 
 type EarlyInfo = ReturnType<typeof earlyInfo>;
@@ -1793,6 +2455,45 @@ function buildBitstreamForDLOrder(
     return bw.bytes();
 }
 
+function finalPassForShaderFlags(flags: number): 0 | 1 | 2 {
+    // Final maps expect water / real translucent effects in the later bitstream pass.
+    // Keeping Ancient water/beams in bitstream0 makes them sort/draw like opaque geometry.
+    if ((flags & (FINAL_SHADER_WATER | FINAL_SHADER_TRANSLUCENT)) !== 0)
+        return 2;
+
+    return 0;
+}
+
+function buildFinalBitstreamsForDLOrderByPass(
+    dlOrder: number[],
+    shaderForDL: number[],
+    vcdBitsForDL: number[],
+    passForDL: number[],
+): BuiltLayerBitstreams {
+    const special = new Array<number>(shaderForDL.length).fill(0);
+    const layerForDL = new Array<number>(shaderForDL.length).fill(0);
+    const layerCalls: [number[], number[], number[]] = [[], [], []];
+
+    for (const listNum of dlOrder) {
+        const rawPass = passForDL[listNum] ?? 0;
+        const pass = (rawPass <= 0 ? 0 : rawPass >= 2 ? 2 : 1) as 0 | 1 | 2;
+
+        layerCalls[pass].push(listNum);
+        layerForDL[listNum] = pass;
+    }
+
+    return {
+        bitstreams: [
+            buildBitstreamForDLOrder(layerCalls[0], shaderForDL, vcdBitsForDL, special),
+            buildBitstreamForDLOrder(layerCalls[1], shaderForDL, vcdBitsForDL, special),
+            buildBitstreamForDLOrder(layerCalls[2], shaderForDL, vcdBitsForDL, special),
+        ],
+        special,
+        layerForDL,
+        layerCalls,
+    };
+}
+
 function decodeEarlyLayerCallOrder(
     root: Uint8Array,
     bitOff: number,
@@ -2005,20 +2706,34 @@ function chooseRetagVcdBits(dl: Uint8Array, decodedVcdBits: number): number {
     return bestBits;
 }
 
-function retagDisplayListToVat5(dlIn: Uint8Array, vcdBits: number): Uint8Array {
+function retagDisplayListToVat5(
+    dlIn: Uint8Array,
+    vcdBits: number,
+    trimAtStop = false,
+): Uint8Array {
     const out = copyU8(dlIn);
     const recSize = vcdRecordSize(vcdBits);
     let p = 0;
 
+    const finish = (trimEnd: number): Uint8Array => {
+        return trimAtStop
+            ? out.slice(0, Math.max(0, trimEnd))
+            : out;
+    };
+
     while (p + 3 <= out.byteLength) {
+        const cmdOff = p;
         const cmd = out[p];
 
+        // Early1 must preserve the original full DL span.
+        // Ancient/Early4 debug paths may optionally trim bad trailing bytes.
         if (cmd === 0)
-            break;
+            return finish(cmdOff + 1);
 
         const prim = cmd & 0xF8;
         if (prim < 0x80 || prim > 0xB8)
-            break;
+            return finish(cmdOff);
+
         out[p++] = prim | 5;
 
         const count = u16(out, p);
@@ -2026,12 +2741,12 @@ function retagDisplayListToVat5(dlIn: Uint8Array, vcdBits: number): Uint8Array {
 
         const next = p + count * recSize;
         if (next > out.byteLength)
-            break;
+            return finish(cmdOff);
 
         p = next;
     }
 
-    return out;
+    return finish(p);
 }
 
 type RepackedDLResult = {
@@ -2099,7 +2814,7 @@ function repackDisplayListToVat5(
         const prim = cmd & 0xF8;
         if (prim < 0x80 || prim > 0xB8) {
             return {
-                dl: retagDisplayListToVat5(dlIn, readVcdBits),
+dl: retagDisplayListToVat5(dlIn, readVcdBits, true),
                 ok: false,
                 log: `repackBAD/badPrim=0x${prim.toString(16)}@0x${p.toString(16)}/keptReadVcd/old=0x${dlIn.byteLength.toString(16)}`,
             };
@@ -2111,7 +2826,7 @@ function repackDisplayListToVat5(
         const next = p + count * readRecSize;
         if (next > dlIn.byteLength) {
             return {
-                dl: retagDisplayListToVat5(dlIn, readVcdBits),
+dl: retagDisplayListToVat5(dlIn, readVcdBits, true),
                 ok: false,
                 log: `repackBAD/oob@0x${p.toString(16)}/count=${count}/readRec=${readRecSize}/end=0x${next.toString(16)}/len=0x${dlIn.byteLength.toString(16)}/keptReadVcd`,
             };
@@ -2451,7 +3166,47 @@ const EARLY1_KNOWN_CUTOUT_TEXIDS = new Set<number>([
     630, 646, 672, 1094, 1098, 1103, 1107, 1110, 1111, 1112,
 ]);
 
+const ANCIENT_KNOWN_BLEND_TEXIDS = new Set<number>([
+    584,
+]);
 
+const ANCIENT_KNOWN_WATER_TEXIDS = new Set<number>([
+    918, 788,
+    2373, 2794, 24, 2871, 713, 2793,
+]);
+
+const ANCIENT_KNOWN_CUTOUT_TEXIDS = new Set<number>([
+    // Existing known Ancient cutouts.
+    630, 646, 672, 1094, 1098, 1103, 1107, 1110, 1111, 1112,
+    928, 791, 430, 573, 575, 576, 577, 2882,
+    44, 2046, 2228, 2467, 2538, 1798, 2791, 574,
+    684, 96, 740, 0, 595, 596, 593, 594, 592, 589,
+
+    // Ancient flower / plant cards.
+    // 1701 is the one you called out.
+    1701,
+    // Ancient mod13 SwapHol palm / flower / foliage card IDs seen in current logs.
+    // These need alpha compare and no backface cull, but they must stay in pass 0.
+    572, 578, 580, 582, 583, 708, 790,
+    // ThornTail / SwapHol flower-card and leafy-card raw/mapped IDs seen in Ancient mod13:
+    // raw 927/928 -> mapped 537/1701-ish foliage
+    // raw 430/431/432 -> mapped 1680/2060 flower cards
+    // raw 707 can be small vegetation/decal card depending on block.
+    927, 928,
+    430, 431, 432,
+    707,
+    1680, 2060,
+
+    // Low Ancient/final-remapped card textures seen in the current mod19 Ancient logs.
+    // These are the IDs causing visible rectangular flower cards when AlphaCompare is missing.
+    87, 88, 89, 90, 91, 92, 93, 94, 95, 96,
+    97, 98, 99, 100, 101, 102, 103,
+    106, 107, 108, 109,
+
+    // Raw Ancient plant-card source IDs that remap into the small final texture IDs above.
+    456, 457, 458, 459, 460,
+    1926, 1943,
+]);
 
 function texIdInSet(set: Set<number>, ...ids: Array<number | null>): boolean {
     for (const id of ids) {
@@ -2897,6 +3652,17 @@ function remapEarly4Texture(texId: number, modelId: number): number {
     return mapped !== null ? mapped : texId;
 }
 
+function remapAncientTexture(texId: number, modelId: number): number {
+    // Ancient mod13 SwapHol river.
+    // Auto map currently sends raw 918 -> final 544, which renders as rainbow/invalid.
+    // Force it to the known final water texture path first.
+    if (modelId === 13 && texId === 918)
+        return 788;
+
+    const mapped = debugResolveAncientTextureId(texId, modelId);
+    return mapped !== null ? mapped : texId;
+}
+
 type ShaderTextureSlotInfo = {
     slots: number[];
     rawSlots: number[];
@@ -3068,6 +3834,1057 @@ function readEarlyShaderTextureSlots(root: Uint8Array, ri: EarlyInfo, shaderCoun
     };
 }
 
+type AncientInfo = ReturnType<typeof ancientInfo>;
+
+function ancientInfo(b: Uint8Array) {
+    return {
+        triOff: u32(b, 0x4C),
+        batchOff: u32(b, 0x50),
+        collPosOff: u32(b, 0x54),
+
+        texOff: u32(b, 0x58),
+        posOff: u32(b, 0x5C),
+        clrOff: u32(b, 0x60),
+        texcoordOff: u32(b, 0x64),
+        shaderOff: u32(b, 0x68),
+        dlOffsetsOff: u32(b, 0x6C),
+        dlSizesOff: u32(b, 0x70),
+        bitsOff: u32(b, 0x7C),
+
+        // Ancient BLOCKS header layout:
+        // 0x80 = bitstream byte count
+        // 0x82 = source Y min
+        // 0x84 = source Y max
+        // 0x86 = position count
+        // 0x8A = color count
+        // 0x8C = texcoord count
+        // 0x98 = real texture count
+        // 0x99 = shader/material count
+        // 0x9A = display-list count
+        bitsCount: u16(b, 0x80),
+        posCount: u16(b, 0x86),
+        collPosCount: u16(b, 0x88),
+        clrCount: u16(b, 0x8A),
+        texcoordCount: u16(b, 0x8C),
+        texCount: u8(b, 0x98),
+        shaderCount: u8(b, 0x99),
+        dlCount: u8(b, 0x9A),
+    };
+}
+
+function ancientTextures(root: Uint8Array, ai: AncientInfo): number[] {
+    const out: number[] = [];
+
+    for (let i = 0; i < ai.texCount; i++) {
+        const o = ai.texOff + i * 4;
+
+        if (o + 4 <= root.byteLength)
+            out.push(u32(root, o));
+    }
+
+    return out;
+}
+
+function computeYFromPositionTable(root: Uint8Array, posOff: number, posCount: number): number {
+    let minY = Infinity;
+    let maxY = -Infinity;
+
+    for (let i = 0; i < posCount; i++) {
+        const o = posOff + i * 6;
+
+        if (o + 6 > root.byteLength)
+            continue;
+
+        const y = s16(root, o + 2);
+        minY = Math.min(minY, y);
+        maxY = Math.max(maxY, y);
+    }
+
+    return Number.isFinite(minY) ? ((minY + maxY) / 2) | 0 : 0;
+}
+
+function convertedPositionTable(root: Uint8Array, posOff: number, posCount: number, yTranslate: number): Uint8Array {
+    const out = new Uint8Array(posCount * 6);
+
+    for (let i = 0; i < posCount; i++) {
+        const src = posOff + i * 6;
+
+        ps16(out, i * 6 + 0, s16(root, src + 0) * 8);
+        ps16(out, i * 6 + 2, (s16(root, src + 2) - yTranslate) * 8);
+        ps16(out, i * 6 + 4, s16(root, src + 4) * 8);
+    }
+
+    return out;
+}
+
+function boundsForPositionTable(root: Uint8Array, posOff: number, posCount: number, yTranslate: number): [number, number, number, number, number, number] {
+    let minX = Infinity;
+    let minY = Infinity;
+    let minZ = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    let maxZ = -Infinity;
+
+    for (let i = 0; i < posCount; i++) {
+        const o = posOff + i * 6;
+
+        if (o + 6 > root.byteLength)
+            continue;
+
+        const x = s16(root, o + 0) * 8;
+        const y = (s16(root, o + 2) - yTranslate) * 8;
+        const z = s16(root, o + 4) * 8;
+
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        minZ = Math.min(minZ, z);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+        maxZ = Math.max(maxZ, z);
+    }
+
+    if (!Number.isFinite(minX))
+        return [-8, -8, -8, 8, 8, 8];
+
+    return [minX, minY, minZ, maxX, maxY, maxZ];
+}
+
+type AncientDecodedDLs = {
+    shaderForDL: number[];
+    vcdBitsForDL: number[];
+    callOrder: number[];
+    bitOff: number;
+    calls: number;
+};
+
+function decodeAncientShaderForDLs(root: Uint8Array, bitOff: number, byteCount: number, shaderCount: number): AncientDecodedDLs {
+    const shaderForDL = new Array<number>(64).fill(-1);
+    const vcdBitsForDL = new Array<number>(64).fill(0x05);
+    const callOrder: number[] = [];
+
+    if (bitOff <= 0 || byteCount <= 0 || bitOff >= root.byteLength)
+        return { shaderForDL, vcdBitsForDL, callOrder, bitOff: 0, calls: 0 };
+
+    if (bitOff + byteCount > root.byteLength)
+        byteCount = root.byteLength - bitOff;
+
+    const br = new LowBitStreamReader(root, bitOff, byteCount);
+
+    let currentShader = 0;
+    let currentVcdBits = 0x05;
+    let calls = 0;
+
+    for (let opCount = 0; opCount < 20000 && br.canRead(4); opCount++) {
+        const op = br.get(4);
+
+        if (op === OP_SET_SHADER) {
+            if (!br.canRead(6))
+                break;
+
+            currentShader = br.get(6) % Math.max(1, shaderCount);
+        } else if (op === OP_CALL_DL) {
+            if (!br.canRead(6))
+                break;
+
+            const listNum = br.get(6);
+
+            if (listNum >= 0 && listNum < 64) {
+                shaderForDL[listNum] = currentShader;
+                vcdBitsForDL[listNum] = currentVcdBits;
+                callOrder.push(listNum);
+                calls++;
+            }
+        } else if (op === OP_SET_VCD) {
+            if (!br.canRead(3))
+                break;
+
+            currentVcdBits = br.get(1) | (br.get(1) << 1) | (br.get(1) << 2);
+        } else if (op === OP_SET_MATRICES) {
+            if (!br.canRead(12))
+                break;
+
+            br.skip(12);
+        } else if (op === OP_END) {
+            break;
+        } else {
+            break;
+        }
+    }
+
+    return { shaderForDL, vcdBitsForDL, callOrder, bitOff, calls };
+}
+
+type AncientDisplayList = {
+    sourceIndex: number;
+    dl: Uint8Array;
+    oldOff: number;
+    oldSize: number;
+};
+
+type AncientDLVcdScore = {
+    vcdBits: number;
+    score: number;
+    prims: number;
+    verts: number;
+    ended: boolean;
+    stop: string;
+    badPos: number;
+    badColor: number;
+    badTex: number;
+    trailing: number;
+    posSize: 1 | 2;
+    maxPos: number;
+    distinctPos: number;
+};
+
+function scoreAncientDLVcdBits(dl: Uint8Array, vcdBits: number, ai: AncientInfo): AncientDLVcdScore {
+    const posSize: 1 | 2 = (vcdBits & 0x01) !== 0 ? 2 : 1;
+    const colorSize: 1 | 2 = (vcdBits & 0x02) !== 0 ? 2 : 1;
+    const texSize: 1 | 2 = (vcdBits & 0x04) !== 0 ? 2 : 1;
+    const recSize = posSize + colorSize + texSize;
+
+    let p = 0;
+    let prims = 0;
+    let verts = 0;
+    let ended = false;
+    let stop = 'eof';
+
+    let badPos = 0;
+    let badColor = 0;
+    let badTex = 0;
+    let maxPos = -1;
+
+    const usedPos = new Set<number>();
+
+    while (p + 3 <= dl.byteLength) {
+        const cmd = dl[p];
+
+        if (cmd === 0) {
+            ended = true;
+            stop = `end@0x${p.toString(16)}`;
+            break;
+        }
+
+        const prim = cmd & 0xF8;
+        if (prim < 0x80 || prim > 0xB8) {
+            stop = `badPrim0x${prim.toString(16)}@0x${p.toString(16)}`;
+            break;
+        }
+
+        const count = u16(dl, p + 1);
+        p += 3;
+
+        if (count <= 0 || count > 0x4000) {
+            stop = `badCount${count}@0x${(p - 3).toString(16)}`;
+            break;
+        }
+
+        const next = p + count * recSize;
+
+        if (next > dl.byteLength) {
+            stop =
+                `vertexOOB@0x${p.toString(16)}` +
+                `/count=${count}` +
+                `/rec=${recSize}` +
+                `/end=0x${next.toString(16)}` +
+                `/len=0x${dl.byteLength.toString(16)}`;
+            break;
+        }
+
+        for (let i = 0; i < count; i++) {
+            let q = p + i * recSize;
+
+            const pos = readDLIndex(dl, q, posSize);
+            q += posSize;
+
+            const color = readDLIndex(dl, q, colorSize);
+            q += colorSize;
+
+            const tex = readDLIndex(dl, q, texSize);
+
+            verts++;
+            maxPos = Math.max(maxPos, pos);
+
+            if (pos >= ai.posCount) {
+                badPos++;
+            } else {
+                usedPos.add(pos);
+            }
+
+            // Color is weak evidence. Some formats use wider color fields or odd palette refs.
+            if (color >= Math.max(1, ai.clrCount))
+                badColor++;
+
+            if (tex >= ai.texcoordCount)
+                badTex++;
+        }
+
+        p = next;
+        prims++;
+
+        if (prims > 0x1000) {
+            stop = 'tooManyPrims';
+            break;
+        }
+    }
+
+    const trailing = Math.max(0, dl.byteLength - p);
+    const largePositionTable = ai.posCount > 0xFF;
+
+    let score =
+        prims * 2000 +
+        verts +
+        usedPos.size * 20 +
+        (ended ? 8000 : 0) -
+        trailing * 2 -
+        badPos * 50000 -
+        badTex * 20000 -
+        badColor * 50 -
+        (prims === 0 ? 100000 : 0);
+
+    // Critical Ancient BLOCKS rule:
+    // If the block has more than 255 positions, p8 position indices cannot describe
+    // most terrain. The old scorer picked p8 because it naturally avoids OOB values,
+    // which causes holes and giant stretched triangles.
+    if (largePositionTable) {
+        if (posSize === 2 && badPos === 0 && prims > 0) {
+            score += 300000;
+            score += Math.min(usedPos.size, 512) * 200;
+        } else if (posSize === 1) {
+            score -= 300000;
+            score -= verts * 500;
+        }
+    }
+
+    // For small blocks, p8 is allowed and often correct. Do not punish it there.
+    if (!largePositionTable && posSize === 1 && badPos === 0 && prims > 0)
+        score += 10000;
+
+    return {
+        vcdBits,
+        score,
+        prims,
+        verts,
+        ended,
+        stop,
+        badPos,
+        badColor,
+        badTex,
+        trailing,
+        posSize,
+        maxPos,
+        distinctPos: usedPos.size,
+    };
+}
+
+function chooseAncientVcdBits(dl: Uint8Array, decodedVcdBits: number, ai: AncientInfo): AncientDLVcdScore {
+    const decoded = decodedVcdBits & 0x07;
+    const largePositionTable = ai.posCount > 0xFF;
+
+    const candidates = (
+        largePositionTable
+            ? [
+                // Big terrain blocks need 16-bit position indices or they can only use verts 0..255.
+                decoded | 0x01,
+                0x05, // p16 c8  t16
+                0x01, // p16 c8  t8
+                0x07, // p16 c16 t16
+                0x03, // p16 c16 t8
+
+                // Keep p8 as fallback only, not first-class, for large position tables.
+                decoded,
+                0x04, // p8 c8  t16
+                0x00, // p8 c8  t8
+                0x06, // p8 c16 t16
+                0x02, // p8 c16 t8
+            ]
+            : [
+                decoded,
+
+                // Small Ancient blocks commonly really are p8 position-indexed.
+                0x00, // p8  c8  t8
+                0x04, // p8  c8  t16
+                0x02, // p8  c16 t8
+                0x06, // p8  c16 t16
+
+                0x05, // p16 c8  t16
+                0x01, // p16 c8  t8
+                0x07, // p16 c16 t16
+                0x03, // p16 c16 t8
+            ]
+    ).filter((v, i, a) => a.indexOf(v) === i);
+
+    let best = scoreAncientDLVcdBits(dl, candidates[0] ?? 0x05, ai);
+
+    for (const bits of candidates.slice(1)) {
+        const s = scoreAncientDLVcdBits(dl, bits, ai);
+
+        if (s.score > best.score)
+            best = s;
+    }
+
+    return best;
+}
+
+function chooseAncientDLSize(
+    root: Uint8Array,
+    dlOff: number,
+    size16: number,
+    size32: number,
+    ai: AncientInfo,
+): { size: number; source: string; score: AncientDLVcdScore } | null {
+    const candidates: Array<{ size: number; source: string }> = [];
+
+    if (size16 > 0 && dlOff + size16 <= root.byteLength)
+        candidates.push({ size: size16, source: 'u16' });
+
+    if (size32 > 0 && size32 <= 0x20000 && dlOff + size32 <= root.byteLength)
+        candidates.push({ size: size32, source: 'u32' });
+
+    let best: { size: number; source: string; score: AncientDLVcdScore } | null = null;
+
+    for (const c of candidates) {
+        const dl = root.subarray(dlOff, dlOff + c.size);
+        const score = chooseAncientVcdBits(dl, 0x05, ai);
+
+        if (best === null || score.score > best.score.score)
+            best = { ...c, score };
+    }
+
+    return best;
+}
+
+function collectAncientDisplayLists(root: Uint8Array, ai: AncientInfo): AncientDisplayList[] {
+    const out: AncientDisplayList[] = [];
+
+    // Do not scan all 64 slots. Small Ancient blocks can have old table/data bytes
+    // after the real DL table, and scanning all 64 can pick up bogus display lists.
+    const dlCount = Math.max(0, Math.min(64, ai.dlCount || ai.shaderCount || 0));
+
+    for (let i = 0; i < dlCount; i++) {
+        const offOff = ai.dlOffsetsOff + i * 4;
+        const sizeOff16 = ai.dlSizesOff + i * 2;
+        const sizeOff32 = ai.dlSizesOff + i * 4;
+
+        if (offOff + 4 > root.byteLength)
+            break;
+
+        const dlOff = u32(root, offOff);
+
+        if (dlOff === 0 || dlOff >= root.byteLength)
+            continue;
+
+        const size16 = sizeOff16 + 2 <= root.byteLength ? u16(root, sizeOff16) : 0;
+        const size32 = sizeOff32 + 4 <= root.byteLength ? u32(root, sizeOff32) : 0;
+
+        const chosen = chooseAncientDLSize(root, dlOff, size16, size32, ai);
+
+        if (chosen === null)
+            continue;
+
+        out.push({
+            sourceIndex: i,
+            dl: root.slice(dlOff, dlOff + chosen.size),
+            oldOff: dlOff,
+            oldSize: chosen.size,
+        });
+    }
+
+    return out;
+}
+
+function ancientLooksWater(
+    flags8: number,
+    texId0Raw: number | null,
+    texId0Mapped: number | null,
+): boolean {
+    // Do NOT use Ancient low-nibble 0x0C/0x0D as generic water.
+    // It hits normal textured/cutout materials too, including foliage.
+    void flags8;
+
+    return texIdInSet(ANCIENT_KNOWN_WATER_TEXIDS, texId0Raw, texId0Mapped);
+}
+
+function ancientLooksCutout(
+    texId0Raw: number | null,
+    texId0Mapped: number | null,
+): boolean {
+    return texIdInSet(ANCIENT_KNOWN_CUTOUT_TEXIDS, texId0Raw, texId0Mapped);
+}
+
+type FinalShaderPrototype = {
+    resourceId: number;
+    shaderIndex: number;
+    shader: Uint8Array;
+    texIds: number[];
+    flags: number;
+};
+
+function findFinalWaterShaderPrototypeInResource(resourceId: number, final: Uint8Array): FinalShaderPrototype | null {
+    const fi = finalInfo(final);
+
+    if (fi.shaderOff <= 0 || fi.shaderCount <= 0)
+        return null;
+
+    const texIds = finalTextures(final);
+
+    for (let shader = 0; shader < fi.shaderCount; shader++) {
+        const off = fi.shaderOff + shader * SHADER_STRIDE;
+
+        if (off + SHADER_STRIDE > final.byteLength)
+            break;
+
+        const flags = u32(final, off + 0x3C);
+
+        if ((flags & FINAL_SHADER_WATER) === 0)
+            continue;
+
+        return {
+            resourceId,
+            shaderIndex: shader,
+            shader: final.slice(off, off + SHADER_STRIDE),
+            texIds,
+            flags,
+        };
+    }
+
+    return null;
+}
+
+function findFinalWaterShaderPrototypeInArchive(blocks: Map<number, Uint8Array>): FinalShaderPrototype | null {
+    const ids = [...blocks.keys()].sort((a, b) => a - b);
+
+    for (const rid of ids) {
+        const raw = blocks.get(rid);
+        if (!raw)
+            continue;
+
+        const proto = findFinalWaterShaderPrototypeInResource(rid, raw);
+        if (proto)
+            return proto;
+    }
+
+    return null;
+}
+
+function buildFinalShaderTableFromAncient(
+    root: Uint8Array,
+    ai: AncientInfo,
+    shaderCount: number,
+    texCount: number,
+    srcTex: number[],
+    mappedTex: number[],
+    finalWaterPrototype: FinalShaderPrototype | null = null,
+): Uint8Array {
+    const ANCIENT_SHADER_STRIDE = 0x3C;
+    const out = new Uint8Array(shaderCount * SHADER_STRIDE);
+
+    for (let i = 0; i < shaderCount; i++) {
+        const src = ai.shaderOff + i * ANCIENT_SHADER_STRIDE;
+        const dst = i * SHADER_STRIDE;
+
+        let attr = 0x01;
+        let ancientAttrRaw = 0;
+        let numLayersOut = 0;
+
+        let texId0: number | null = null;
+        let texId0Mapped: number | null = null;
+        let texId1: number | null = null;
+        let texId1Mapped: number | null = null;
+
+        let tev0 = 0;
+        let tev1 = 0;
+        let flags8 = 0;
+
+        if (src + ANCIENT_SHADER_STRIDE <= root.byteLength) {
+            flags8 = u8(root, src + 0x38);
+
+            // Ancient attr high bits 0x10 / 0x18 are Ancient-only material hints.
+            // Do NOT copy them into the final shader attr byte.
+            ancientAttrRaw = u8(root, src + 0x39);
+            attr = ancientAttrRaw & 0x03;
+
+            const numLayersIn = Math.max(0, Math.min(2, u8(root, src + 0x3A)));
+
+            for (let layer = 0; layer < 2; layer++) {
+                const srcLayer = src + 0x24 + layer * 8;
+                const dstLayer = dst + 0x24 + layer * 8;
+                const rawField = u32(root, srcLayer + 0x00);
+                const texInfo = normalizeEarly1LayerTex(rawField, srcTex, mappedTex);                const slot = texInfo.slot;
+
+                if (layer < numLayersIn && slot !== null && slot >= 0 && slot < texCount) {
+                    p32(out, dstLayer + 0x00, slot);
+                    p8(out, dstLayer + 0x04, u8(root, srcLayer + 0x04));
+                    p8(out, dstLayer + 0x05, u8(root, srcLayer + 0x05));
+                    p8(out, dstLayer + 0x06, u8(root, srcLayer + 0x06));
+                    p8(out, dstLayer + 0x07, u8(root, srcLayer + 0x07));
+
+                    if (layer === 0) {
+                        texId0 = texInfo.rawId;
+                        texId0Mapped = texInfo.mappedId;
+                        tev0 = u8(root, srcLayer + 0x04) & 0x7F;
+                    } else if (layer === 1) {
+                        texId1 = texInfo.rawId;
+                        texId1Mapped = texInfo.mappedId;
+                        tev1 = u8(root, srcLayer + 0x04) & 0x7F;
+                    }
+
+
+                    numLayersOut = layer + 1;
+                    attr |= layer === 0 ? 0x04 : 0x08;
+                } else {
+                    p32(out, dstLayer + 0x00, 0xFFFFFFFF);
+                    p8(out, dstLayer + 0x04, 0);
+                    p8(out, dstLayer + 0x05, 0);
+                    p8(out, dstLayer + 0x06, 0);
+                    p8(out, dstLayer + 0x07, 0);
+                }
+            }
+        } else {
+            const fallbackSlot = texCount > 0 ? i % texCount : -1;
+
+            p32(out, dst + 0x24, fallbackSlot >= 0 ? fallbackSlot : 0xFFFFFFFF);
+            numLayersOut = texCount > 0 ? 1 : 0;
+            attr = texCount > 0 ? 0x04 : 0x01;
+            texId0 = fallbackSlot >= 0 ? srcTex[fallbackSlot] ?? null : null;
+            texId0Mapped = fallbackSlot >= 0 ? mappedTex[fallbackSlot] ?? null : null;
+        }
+
+        if (numLayersOut === 0 && texCount > 0) {
+            const fallbackSlot = i % texCount;
+
+            p32(out, dst + 0x24, fallbackSlot);
+            p8(out, dst + 0x28, 0);
+            p8(out, dst + 0x29, 0);
+            p8(out, dst + 0x2A, 0);
+            p8(out, dst + 0x2B, 0);
+
+            texId0 = srcTex[fallbackSlot] ?? null;
+            texId0Mapped = mappedTex[fallbackSlot] ?? null;
+            texId1 = null;
+            texId1Mapped = null;
+            tev0 = 0;
+            tev1 = 0;
+            numLayersOut = 1;
+            attr |= 0x04;
+        }
+
+        p32(out, dst + 0x34, 0xFFFFFFFF);
+        p32(out, dst + 0x38, 0xFFFFFFFF);
+
+        // ANCIENT SAFE MATERIAL MODE:
+        // Restore water / alpha / double-sided foliage flags, but DO NOT move DLs
+        // to pass 2 or sort layer 11. Pass routing is handled in rebuildResourceAppendAncient()
+        // and must stay forced to opaque pass 0 for now.
+        let finalFlags = FINAL_SHADER_CULL_BACKFACE;
+
+        const water =
+            ancientLooksWater(flags8, texId0, texId0Mapped) ||
+            ancientLooksWater(flags8, texId1, texId1Mapped);
+
+        const hasTex =
+            texId0 !== null || texId0Mapped !== null ||
+            texId1 !== null || texId1Mapped !== null;
+
+const ancientAttrHi = ancientAttrRaw & 0x18;
+const wantsAncientCutout = ancientAttrHi === 0x10;
+
+// Ancient 0x18 is blend/effect-ish, but it is too broad to enable globally.
+// Only allow known beam/ribbon/translucent texture IDs through.
+const wantsAncientBlend =
+    ancientAttrHi === 0x18 &&
+    hasTex &&
+    texIdInSet(ANCIENT_KNOWN_BLEND_TEXIDS, texId0, texId0Mapped, texId1, texId1Mapped);
+        const cutout =
+            !water &&
+            hasTex &&
+            (
+                ancientLooksCutout(texId0, texId0Mapped) ||
+                ancientLooksCutout(texId1, texId1Mapped) ||
+                wantsAncientCutout
+            );
+
+        if (water) {
+            const ancientWaterSlot =
+                numLayersOut > 0 && u32(out, dst + 0x24) !== 0xFFFFFFFF
+                    ? u32(out, dst + 0x24)
+                    : texCount > 0
+                        ? 0
+                        : -1;
+
+            if (finalWaterPrototype !== null) {
+                // Use a real Final water shader as the material template.
+                // This gives the renderer the proper water flags / TEV / attr setup.
+                out.set(finalWaterPrototype.shader, dst);
+
+                attr = u8(out, dst + 0x40) & 0x0F;
+                numLayersOut = 0;
+
+                for (let layer = 0; layer < 2; layer++) {
+                    const layerOff = dst + 0x24 + layer * 8;
+                    const protoSlot = u32(out, layerOff + 0x00);
+
+                    if (protoSlot === 0xFFFFFFFF) {
+                        p32(out, layerOff + 0x00, 0xFFFFFFFF);
+                        p8(out, layerOff + 0x04, 0);
+                        p8(out, layerOff + 0x05, 0);
+                        p8(out, layerOff + 0x06, 0);
+                        p8(out, layerOff + 0x07, 0);
+                        continue;
+                    }
+
+                    const protoTexId =
+                        protoSlot >= 0 && protoSlot < finalWaterPrototype.texIds.length
+                            ? finalWaterPrototype.texIds[protoSlot]
+                            : null;
+
+                    const remappedSlot =
+                        protoTexId !== null
+                            ? mappedTex.indexOf(protoTexId)
+                            : -1;
+
+                    if (remappedSlot >= 0) {
+                        p32(out, layerOff + 0x00, remappedSlot);
+                        numLayersOut = layer + 1;
+                        attr |= layer === 0 ? 0x04 : 0x08;
+                    } else if (layer === 0 && ancientWaterSlot >= 0) {
+                        // If the Final prototype used a texture not present in this Ancient block,
+                        // keep the prototype TEV but feed it the Ancient water texture slot.
+                        p32(out, layerOff + 0x00, ancientWaterSlot);
+                        numLayersOut = 1;
+                        attr |= 0x04;
+                    } else {
+                        p32(out, layerOff + 0x00, 0xFFFFFFFF);
+                        p8(out, layerOff + 0x04, 0);
+                        p8(out, layerOff + 0x05, 0);
+                        p8(out, layerOff + 0x06, 0);
+                        p8(out, layerOff + 0x07, 0);
+                    }
+                }
+
+                if (numLayersOut <= 0 && ancientWaterSlot >= 0) {
+                    p32(out, dst + 0x24, ancientWaterSlot);
+                    p8(out, dst + 0x28, 0);
+                    p8(out, dst + 0x29, 0);
+                    p8(out, dst + 0x2A, 0);
+                    p8(out, dst + 0x2B, 0);
+                    numLayersOut = 1;
+                    attr |= 0x04;
+                }
+
+                finalFlags = u32(out, dst + 0x3C);
+                finalFlags |= FINAL_SHADER_WATER | FINAL_SHADER_TRUE_TRANS | FINAL_SHADER_WATER_EXTRA;
+                finalFlags &= ~FINAL_SHADER_ALPHA_COMPARE;
+                finalFlags &= ~FINAL_SHADER_CULL_BACKFACE;
+            } else {
+                // Fallback only if no real Final water shader was found.
+                finalFlags |= FINAL_SHADER_TRANSLUCENT;
+                finalFlags &= ~FINAL_SHADER_ALPHA_COMPARE;
+                finalFlags &= ~FINAL_SHADER_WATER;
+                finalFlags &= ~FINAL_SHADER_WATER_EXTRA;
+            }
+        } else if (wantsAncientBlend) {
+            finalFlags |= FINAL_SHADER_TRANSLUCENT;
+            finalFlags &= ~FINAL_SHADER_ALPHA_COMPARE;
+        } else if (cutout) {
+            finalFlags |= FINAL_SHADER_ALPHA_COMPARE;
+        }
+
+        // Water / translucent / alpha-tested cards must be double-sided.
+        // This fixes palm leaves disappearing from underneath.
+        if ((finalFlags & (FINAL_SHADER_WATER | FINAL_SHADER_TRANSLUCENT | FINAL_SHADER_ALPHA_COMPARE)) !== 0) {
+            finalFlags &= ~FINAL_SHADER_CULL_BACKFACE;
+        }
+
+        // Alpha cards usually need a simple final TEV setup so texture alpha reaches alpha compare.
+        // Do this for cutout/blend only; leave water TEV alone.
+        if (
+            numLayersOut > 0 &&
+            !water &&
+            (finalFlags & (FINAL_SHADER_ALPHA_COMPARE | FINAL_SHADER_TRANSLUCENT)) !== 0
+        ) {
+            p8(out, dst + 0x28, 0);
+            p8(out, dst + 0x29, 0);
+            p8(out, dst + 0x2A, 0);
+            p8(out, dst + 0x2B, 0);
+        }
+
+        void tev0;
+        void tev1;
+
+        attr &= 0x0F;
+
+        if ((attr & 0x0D) === 0)
+            attr |= 0x01;
+
+        p32(out, dst + 0x3C, finalFlags >>> 0);
+        p8(out, dst + 0x40, attr);
+        p8(out, dst + 0x41, numLayersOut);
+        p8(out, dst + 0x42, 0);
+        p8(out, dst + 0x43, 0);
+    }
+
+    return out;
+}
+
+function rebuildResourceAppendAncient(
+    root: Uint8Array,
+    final: Uint8Array,
+    opts: Required<Pick<Early1FinalMapConvertOptions, 'modelId' | 'outBaseName' | 'textureMode' | 'flatTextureId' | 'flatTexS' | 'flatTexT'>>,
+    finalWaterPrototype: FinalShaderPrototype | null = null,
+): { raw: Uint8Array; log: string } {
+    const ai = ancientInfo(root);
+    const textureless = isTexturelessMode(opts.textureMode);
+
+    const srcTex = ancientTextures(root, ai);
+    const mappedFromAncient = srcTex.map((texId) => remapAncientTexture(texId, opts.modelId));
+
+    let mapped = textureless ? [opts.flatTextureId] : mappedFromAncient.slice();
+
+    if (mapped.length === 0)
+        mapped = [opts.flatTextureId];
+
+    const texCount = Math.max(1, Math.min(255, mapped.length));
+    mapped = mapped.slice(0, texCount);
+
+    const shaderCount = textureless
+        ? 1
+        : Math.max(1, Math.min(64, ai.shaderCount || 1));
+
+    const decoded = decodeAncientShaderForDLs(root, ai.bitsOff, ai.bitsCount, shaderCount);
+    const ancientDLs = collectAncientDisplayLists(root, ai);
+
+    if (ancientDLs.length === 0)
+        throw new Error(`no Ancient display lists found`);
+
+    if (ancientDLs.length > 255)
+        throw new Error(`too many Ancient display lists: ${ancientDLs.length}`);
+
+    const sourceIndexToOutputIndex = new Map<number, number>();
+    const copiedDLs: Uint8Array[] = [];
+    const shaderFor: number[] = [];
+    const vcdFor: number[] = [];
+    const sourceIndexes: number[] = [];
+    const ancientVcdDiag: string[] = [];
+
+    for (let outIndex = 0; outIndex < ancientDLs.length; outIndex++) {
+        const srcDL = ancientDLs[outIndex];
+        const sourceIndex = srcDL.sourceIndex;
+        const decodedVcd = decoded.vcdBitsForDL[sourceIndex] ?? 0x05;
+        const chosenVcd = chooseAncientVcdBits(srcDL.dl, decodedVcd, ai);
+        const shader = decoded.shaderForDL[sourceIndex] >= 0
+            ? decoded.shaderForDL[sourceIndex]
+            : sourceIndex;
+
+        sourceIndexToOutputIndex.set(sourceIndex, outIndex);
+copiedDLs.push(retagDisplayListToVat5(srcDL.dl, chosenVcd.vcdBits, true));
+        shaderFor.push(textureless ? 0 : shader % shaderCount);
+        vcdFor.push(chosenVcd.vcdBits);
+        sourceIndexes.push(sourceIndex);
+
+        ancientVcdDiag.push(
+            `src${sourceIndex}` +
+            `/decoded=${debugVcdName(decodedVcd)}` +
+            `/chosen=${debugVcdName(chosenVcd.vcdBits)}` +
+            `/score=${chosenVcd.score}` +
+            `/prim=${chosenVcd.prims}` +
+            `/verts=${chosenVcd.verts}` +
+            `/badPCT=${chosenVcd.badPos}/${chosenVcd.badColor}/${chosenVcd.badTex}` +
+            `/posMax=${chosenVcd.maxPos}` +
+            `/posN=${chosenVcd.distinctPos}` +
+            `/trail=0x${chosenVcd.trailing.toString(16)}` +
+            `/stop=${chosenVcd.stop}` +
+            `/oldSize=0x${srcDL.oldSize.toString(16)}`,
+        );
+    }
+
+    let dlOrder: number[] = [];
+
+    for (const sourceIndex of decoded.callOrder) {
+        const outIndex = sourceIndexToOutputIndex.get(sourceIndex);
+
+        if (outIndex !== undefined && dlOrder.indexOf(outIndex) < 0)
+            dlOrder.push(outIndex);
+    }
+
+    if (dlOrder.length === 0)
+        dlOrder = copiedDLs.map((_dl, i) => i);
+
+    for (let i = 0; i < copiedDLs.length; i++) {
+        if (dlOrder.indexOf(i) < 0)
+            dlOrder.push(i);
+    }
+
+    let out = copyU8(final);
+    const start = align(out.byteLength, 0x20);
+    out = growTo(out, start);
+
+    const dlinfoOff = start;
+    let cursor = align(dlinfoOff + copiedDLs.length * FINAL_DLINFO_SIZE, 0x20);
+
+    const dlOffsets: number[] = [];
+    const dlSizes: number[] = [];
+
+    for (const dl of copiedDLs) {
+        const dlOff = cursor;
+        const dlSizeAligned = align(dl.byteLength, 0x20);
+
+        dlOffsets.push(dlOff);
+        dlSizes.push(dlSizeAligned);
+
+        out = setBytes(out, dlOff, dl);
+        cursor += dlSizeAligned;
+    }
+
+    const yTranslate = computeYFromPositionTable(root, ai.posOff, ai.posCount);
+
+    const colorData = root.slice(ai.clrOff, ai.clrOff + ai.clrCount * 2);
+    const texcoordData = root.slice(ai.texcoordOff, ai.texcoordOff + ai.texcoordCount * 4);
+
+    const posOff = align(cursor, 0x20);
+    const clrOff = align(posOff + ai.posCount * 6, 0x20);
+    const texcoordOff = align(clrOff + colorData.byteLength, 0x20);
+    const texOff = align(texcoordOff + texcoordData.byteLength, 0x20);
+    const shaderOff = align(texOff + texCount * 4, 0x20);
+    const bitsOff = align(shaderOff + shaderCount * SHADER_STRIDE, 0x20);
+
+    const shaderTable = textureless
+        ? buildShaderTable(final, finalInfo(final), shaderCount, texCount)
+        : buildFinalShaderTableFromAncient(root, ai, shaderCount, texCount, srcTex, mapped, finalWaterPrototype);
+    // Route only confirmed real Final-water shaders to pass 2.
+    // Do not route generic Ancient translucent/cutout materials here.
+    const passForDL = shaderFor.map((shader) => {
+        const shaderOff = shader * SHADER_STRIDE;
+
+        if (shaderOff + SHADER_STRIDE > shaderTable.byteLength)
+            return 0;
+
+        const flags = u32(shaderTable, shaderOff + 0x3C);
+
+        return (flags & FINAL_SHADER_WATER) !== 0 ? 2 : 0;
+    });
+
+    const layerBits = buildFinalBitstreamsForDLOrderByPass(
+        dlOrder,
+        shaderFor,
+        vcdFor,
+        passForDL,
+    );
+
+    const bitstream0 = layerBits.bitstreams[0];
+    const bitstream1 = layerBits.bitstreams[1];
+    const bitstream2 = layerBits.bitstreams[2];
+
+    const bitsOff0 = bitstream0.byteLength > 0 ? bitsOff : 0;
+    const bitsOff1 = bitstream1.byteLength > 0 ? bitsOff + bitstream0.byteLength : 0;
+    const bitsOff2 = bitstream2.byteLength > 0 ? bitsOff + bitstream0.byteLength + bitstream1.byteLength : 0;
+
+    const totalBitsLen = bitstream0.byteLength + bitstream1.byteLength + bitstream2.byteLength;
+
+    const end = align(bitsOff + totalBitsLen, 0x20);
+    out = growTo(out, end);
+
+    out = setBytes(out, posOff, convertedPositionTable(root, ai.posOff, ai.posCount, yTranslate));
+    out = setBytes(out, clrOff, colorData);
+    out = setBytes(out, texcoordOff, texcoordData);
+
+    for (let i = 0; i < texCount; i++)
+        p32(out, texOff + i * 4, mapped[i]);
+
+    out = setBytes(out, shaderOff, shaderTable);
+
+    let bitsCursor = bitsOff;
+
+    if (bitstream0.byteLength > 0) {
+        out = setBytes(out, bitsCursor, bitstream0);
+        bitsCursor += bitstream0.byteLength;
+    }
+
+    if (bitstream1.byteLength > 0) {
+        out = setBytes(out, bitsCursor, bitstream1);
+        bitsCursor += bitstream1.byteLength;
+    }
+
+    if (bitstream2.byteLength > 0) {
+        out = setBytes(out, bitsCursor, bitstream2);
+        bitsCursor += bitstream2.byteLength;
+    }
+
+    const broadBounds = boundsForPositionTable(root, ai.posOff, ai.posCount, yTranslate);
+
+    for (let i = 0; i < copiedDLs.length; i++) {
+        const ro = dlinfoOff + i * FINAL_DLINFO_SIZE;
+        const shader = shaderFor[i];
+
+        const shaderFlags = u32(shaderTable, shader * SHADER_STRIDE + 0x3C);
+        const sortLayer = (shaderFlags & FINAL_SHADER_WATER) !== 0 ? 11 : 7;
+
+        p32(out, ro + 0x00, dlOffsets[i]);
+        p16(out, ro + 0x04, dlSizes[i]);
+
+        ps16(out, ro + 0x06, broadBounds[0]);
+        ps16(out, ro + 0x08, broadBounds[1]);
+        ps16(out, ro + 0x0A, broadBounds[2]);
+        ps16(out, ro + 0x0C, broadBounds[3]);
+        ps16(out, ro + 0x0E, broadBounds[4]);
+        ps16(out, ro + 0x10, broadBounds[5]);
+
+        p16(out, ro + 0x12, shader);
+        p16(out, ro + 0x14, layerBits.special[i] ?? 0);
+                p8(out, ro + 0x18, sortLayer);
+        p8(out, ro + 0x19, 0);
+        p16(out, ro + 0x1A, 0);
+    }
+
+    p32(out, 0x08, out.byteLength);
+
+    p32(out, 0x54, texOff);
+    p32(out, 0x58, posOff);
+    p32(out, 0x5C, clrOff);
+    p32(out, 0x60, texcoordOff);
+    p32(out, 0x64, shaderOff);
+    p32(out, 0x68, dlinfoOff);
+
+    p32(out, 0x78, bitsOff0);
+    p32(out, 0x7C, bitsOff1);
+    p32(out, 0x80, bitsOff2);
+
+    p16(out, 0x84, bitstream0.byteLength);
+    p16(out, 0x86, bitstream1.byteLength);
+    p16(out, 0x88, bitstream2.byteLength);
+
+    ps16(out, 0x8E, yTranslate);
+
+    p16(out, 0x90, ai.posCount);
+    p16(out, 0x94, ai.clrCount);
+    p16(out, 0x96, ai.texcoordCount);
+
+    p8(out, 0xA0, texCount);
+    p8(out, 0xA1, copiedDLs.length);
+    p8(out, 0xA2, shaderCount);
+
+    return {
+        raw: out,
+        log:
+            `visual copy source=ancient_blocks` +
+            ` AncientDLs=${copiedDLs.length}` +
+            ` sourceIndexes=[${sourceIndexes.join(',')}]` +
+            ` shaders=${shaderCount}` +
+            ` textureMode=${opts.textureMode}` +
+            ` ancientStablePass=opaque_pass0_safeFauxWater_textureOnly` +                                    ` bitsLen=[${bitstream0.byteLength},${bitstream1.byteLength},${bitstream2.byteLength}]` +
+            ` layerCalls=[${layerBits.layerCalls.map((xs) => xs.join('/')).join('|')}]` +
+                        ` y=${yTranslate}` +
+            ` oldLen=0x${final.byteLength.toString(16)}` +
+            ` newLen=0x${out.byteLength.toString(16)}` +
+            ` ancientTex=[${srcTex.join(',')}]` +
+            ` mappedFromAncient=[${mappedFromAncient.join(',')}]` +
+            ` usedTex=[${mapped.join(',')}]` +
+            ` decodedBitOff=0x${decoded.bitOff.toString(16)}` +
+            ` decodedCalls=${decoded.calls}` +
+            ` ancientVcd=[${ancientVcdDiag.join(' ; ')}]`,
+    };
+}
+
 function rebuildResourceAppend(root: Uint8Array, final: Uint8Array, opts: Required<Pick<Early1FinalMapConvertOptions, 'modelId' | 'outBaseName' | 'earlyMapFormat' | 'groupMode' | 'colorMode' | 'textureMode' | 'flatTextureId' | 'flatTexS' | 'flatTexT' | 'maxTrisPerDL'>>): { raw: Uint8Array; log: string } {
     const sourceInfo = earlyMapSourceInfo(opts.earlyMapFormat);
     const ri = earlyInfo(root);
@@ -3185,7 +5002,7 @@ const copiedDLs: Uint8Array[] = [];
                 `/${repacked.log}`,
             );
         } else {
-            dl = retagDisplayListToVat5(rawDL, vcdBits);
+dl = retagDisplayListToVat5(rawDL, vcdBits, opts.earlyMapFormat !== 'early1_raw');
         }
 const decodedShader = decoded.shaderForDL[i];
 const infoShader = infoShaderForDL[i];
@@ -3440,35 +5257,755 @@ const early4CullDebugLog = !textureless && sourceInfo.shaderMode === 'early4_fin
 log: `visual copy source=${opts.earlyMapFormat}; EarlyDLs=${copiedDLs.length}/${earlyDLCount}; shaders=${shaderCount}/${earlyShaderCount}; bounds=earlyDLInfo; vcdDecoded=[${vcdDecodedFor.map((v) => `0x${v.toString(16)}`).join(',')}]; vcdRead=[${vcdReadFor.map((v) => `0x${v.toString(16)}`).join(',')}]; vcdUsed=[${vcdFor.map((v) => `0x${v.toString(16)}`).join(',')}];shaderFor=[${shaderFor.join(',')}]; infoShaderForDL=[${infoShaderForDL.join(',')}]; useInfoShader=${canUseInfoShader}; textureMode=${opts.textureMode}; ${early4CullDebugLog}; ${layer2WaterLog}; layerCalls=[${layerBits.layerCalls.map((xs) => xs.join('/')).join('|')}]; bitsLen=[${bitstream0.byteLength},${bitstream1.byteLength},${bitstream2.byteLength}]; tris=${triangles(root).length}/${ri.triCount}; y=${yTranslate}; oldLen=0x${final.byteLength.toString(16)} newLen=0x${out.byteLength.toString(16)}; earlyTex=[${srcTex.join(',')}]; mappedFromEarly=[${mappedFromEarly.join(',')}]; usedTex=[${mapped.join(',')}]; decodedBitOff=0x${decoded.bitOff.toString(16)} decodedCalls=${decoded.calls}${early4DiagLog}`,        };
 }
 
-function patchCollisionTriWinding(tris: Uint8Array, mode: CollisionWinding): Uint8Array {
-    if (mode === 'keep')
+function patchCollisionTriWinding(
+    tris: Uint8Array,
+    mode: CollisionWinding,
+    vertexBase = 0,
+): Uint8Array {
+    
+    if (mode === 'keep' && vertexBase === 0)
         return tris;
+
     const out = copyU8(tris);
+
+    const addBase = (v: number): number => {
+        const n = v + vertexBase;
+
+        if (n < 0 || n > 0xFFFF)
+            throw new Error(`collision vertex index overflow: ${v}+${vertexBase}=${n}`);
+
+        return n;
+    };
+
     for (let o = 0; o + 8 <= out.byteLength; o += 8) {
-        const v0 = u16(out, o + 0), v1 = u16(out, o + 2), v2 = u16(out, o + 4), fl = u16(out, o + 6);
-        if (mode === 'swap12') { p16(out, o + 0, v0); p16(out, o + 2, v2); p16(out, o + 4, v1); }
-        else if (mode === 'swap01') { p16(out, o + 0, v1); p16(out, o + 2, v0); p16(out, o + 4, v2); }
-        else if (mode === 'swap02') { p16(out, o + 0, v2); p16(out, o + 2, v1); p16(out, o + 4, v0); }
+        const v0 = addBase(u16(out, o + 0));
+        const v1 = addBase(u16(out, o + 2));
+        const v2 = addBase(u16(out, o + 4));
+        const fl = u16(out, o + 6);
+
+        if (mode === 'swap12') {
+            p16(out, o + 0, v0);
+            p16(out, o + 2, v2);
+            p16(out, o + 4, v1);
+        } else if (mode === 'swap01') {
+            p16(out, o + 0, v1);
+            p16(out, o + 2, v0);
+            p16(out, o + 4, v2);
+        } else if (mode === 'swap02') {
+            p16(out, o + 0, v2);
+            p16(out, o + 2, v1);
+            p16(out, o + 4, v0);
+        } else {
+            p16(out, o + 0, v0);
+            p16(out, o + 2, v1);
+            p16(out, o + 4, v2);
+        }
+
         p16(out, o + 6, fl);
     }
+
     return out;
 }
 
+type AncientTriIndexPatchResult = {
+    tris: Uint8Array;
+    log: string;
+};
+
+type AncientTriIndexMode = 'keep' | 'div3' | 'div6';
+
+function patchAncientCollisionTris(
+    tris: Uint8Array,
+    winding: CollisionWinding,
+    vertexBase: number,
+    positionLimit: number,
+): AncientTriIndexPatchResult {
+    const modes: AncientTriIndexMode[] = ['keep', 'div3', 'div6'];
+
+    const convertIndex = (v: number, mode: AncientTriIndexMode): number => {
+        if (mode === 'div3')
+            return Math.floor(v / 3);
+        if (mode === 'div6')
+            return Math.floor(v / 6);
+        return v;
+    };
+
+    type Candidate = {
+        mode: AncientTriIndexMode;
+        score: number;
+        invalid: number;
+        degenerate: number;
+        aligned: number;
+        rawMax: number;
+        outMax: number;
+        outMin: number;
+    };
+
+    const scoreMode = (mode: AncientTriIndexMode): Candidate => {
+        let score = 0;
+        let invalid = 0;
+        let degenerate = 0;
+        let aligned = 0;
+        let rawMax = 0;
+        let outMax = 0;
+        let outMin = 0x7FFFFFFF;
+
+        const divisor = mode === 'div3' ? 3 : mode === 'div6' ? 6 : 1;
+
+        for (let o = 0; o + 8 <= tris.byteLength; o += 8) {
+            const raw0 = u16(tris, o + 0);
+            const raw1 = u16(tris, o + 2);
+            const raw2 = u16(tris, o + 4);
+
+            rawMax = Math.max(rawMax, raw0, raw1, raw2);
+
+            const v0 = convertIndex(raw0, mode) + vertexBase;
+            const v1 = convertIndex(raw1, mode) + vertexBase;
+            const v2 = convertIndex(raw2, mode) + vertexBase;
+
+            outMin = Math.min(outMin, v0, v1, v2);
+            outMax = Math.max(outMax, v0, v1, v2);
+
+            if ((raw0 % divisor) === 0) aligned++;
+            if ((raw1 % divisor) === 0) aligned++;
+            if ((raw2 % divisor) === 0) aligned++;
+
+            const bad =
+                v0 < 0 || v0 >= positionLimit ||
+                v1 < 0 || v1 >= positionLimit ||
+                v2 < 0 || v2 >= positionLimit;
+
+            if (bad) {
+                invalid++;
+                score -= 100000;
+                continue;
+            }
+
+            score += 1000;
+
+            if (v0 === v1 || v1 === v2 || v2 === v0) {
+                degenerate++;
+                score -= 5000;
+            }
+
+            if (mode !== 'keep')
+                score += aligned;
+        }
+
+        if (outMin === 0x7FFFFFFF)
+            outMin = 0;
+
+        // Prefer doing nothing only when it is actually valid.
+        // If keep has any invalid indices, heavily prefer a decoded mode.
+        if (mode === 'keep' && invalid > 0)
+            score -= 1000000;
+
+        return { mode, score, invalid, degenerate, aligned, rawMax, outMax, outMin };
+    };
+
+    const candidates = modes.map(scoreMode).sort((a, b) => b.score - a.score);
+    const best = candidates[0];
+
+    if (best === undefined)
+        return { tris, log: 'ancientTriIndex=noCandidates' };
+
+    const out = new Uint8Array(tris.byteLength);
+
+    const writeTri = (o: number, a: number, b: number, c: number, fl: number): void => {
+        if (winding === 'swap12') {
+            p16(out, o + 0, a);
+            p16(out, o + 2, c);
+            p16(out, o + 4, b);
+        } else if (winding === 'swap01') {
+            p16(out, o + 0, b);
+            p16(out, o + 2, a);
+            p16(out, o + 4, c);
+        } else if (winding === 'swap02') {
+            p16(out, o + 0, c);
+            p16(out, o + 2, b);
+            p16(out, o + 4, a);
+        } else {
+            p16(out, o + 0, a);
+            p16(out, o + 2, b);
+            p16(out, o + 4, c);
+        }
+
+        p16(out, o + 6, fl);
+    };
+
+    for (let o = 0; o + 8 <= tris.byteLength; o += 8) {
+        const raw0 = u16(tris, o + 0);
+        const raw1 = u16(tris, o + 2);
+        const raw2 = u16(tris, o + 4);
+        const fl = u16(tris, o + 6);
+
+        const v0 = convertIndex(raw0, best.mode) + vertexBase;
+        const v1 = convertIndex(raw1, best.mode) + vertexBase;
+        const v2 = convertIndex(raw2, best.mode) + vertexBase;
+
+        if (
+            v0 < 0 || v0 > 0xFFFF ||
+            v1 < 0 || v1 > 0xFFFF ||
+            v2 < 0 || v2 > 0xFFFF
+        ) {
+            throw new Error(
+                `Ancient collision index overflow mode=${best.mode}` +
+                ` raw=[${raw0},${raw1},${raw2}]` +
+                ` converted=[${v0},${v1},${v2}]` +
+                ` vertexBase=${vertexBase}`,
+            );
+        }
+
+        writeTri(o, v0, v1, v2, fl);
+    }
+
+    return {
+        tris: out,
+        log:
+            `ancientTriIndex=${best.mode}` +
+            `/rawMax=${best.rawMax}` +
+            `/out=${best.outMin}-${best.outMax}` +
+            `/limit=${positionLimit}` +
+            `/invalid=${best.invalid}` +
+            `/degenerate=${best.degenerate}` +
+            `/scores=[${candidates.map((c) =>
+                `${c.mode}:score${c.score}/bad${c.invalid}/deg${c.degenerate}/rawMax${c.rawMax}/outMax${c.outMax}`,
+            ).join(',')}]`,
+    };
+}
+
 function transformBatchY(batch: Uint8Array, yTranslate: number, mode: CollisionYMode): Uint8Array {
-    if (mode === 'none' || mode === 'raw')
+    if (mode === 'none' || mode === 'raw' || mode === 'raw_scale8')
         return batch;
+
     const out = copyU8(batch);
+
+    const pad =
+        mode === 'subtract_expand8' ? 8 :
+        mode === 'subtract_expand32' ? 32 :
+        mode === 'subtract_scale8_expand64' ? 64 :
+        mode === 'subtract_scale8_expand256' ? 256 :
+        0;
+
     for (let o = 0; o + 0x14 <= out.byteLength; o += 0x14) {
         const y0 = s16(out, o + 0x06);
         const y1 = s16(out, o + 0x08);
-        let a = y0 - yTranslate;
-        let b = y1 - yTranslate;
-        if (mode === 'subtract_expand8') { a -= 8; b += 8; }
-        else if (mode === 'subtract_expand32') { a -= 32; b += 32; }
-        ps16(out, o + 0x06, a);
-        ps16(out, o + 0x08, b);
+
+        const a = y0 - yTranslate;
+        const b = y1 - yTranslate;
+
+        ps16(out, o + 0x06, Math.min(a, b) - pad);
+        ps16(out, o + 0x08, Math.max(a, b) + pad);
     }
+
     return out;
+}
+
+function collisionPadForMode(mode: CollisionYMode): number {
+    return mode === 'subtract_expand8' ? 8 :
+        mode === 'subtract_expand32' ? 32 :
+        mode === 'subtract_scale8_expand64' ? 64 :
+        mode === 'subtract_scale8_expand256' ? 256 :
+        0;
+}
+
+function transformAncientBatchAABB(
+    batch: Uint8Array,
+    yTranslate: number,
+    mode: CollisionYMode,
+): { batch: Uint8Array; log: string } {
+    if (mode === 'none')
+        return { batch, log: 'ancientAABB=disabled' };
+
+    if (mode === 'raw')
+        return { batch, log: 'ancientAABB=raw_unmodified' };
+
+    const out = copyU8(batch);
+    const pad = collisionPadForMode(mode);
+
+    // Ancient BLOCKS collision batches use the same six s16 bound fields as final DL info:
+    // 0x06 x0, 0x08 y0, 0x0A z0, 0x0C x1, 0x0E y1, 0x10 z1.
+    //
+    // The visual position table is converted to final coordinates as:
+    // x*8, (y-yTranslate)*8, z*8.
+    //
+    // So the collision batch broadphase bounds must be converted the same way.
+    const subtractY = mode !== 'raw_scale8';
+
+    let firstLog = 'none';
+
+    for (let o = 0; o + 0x14 <= out.byteLength; o += 0x14) {
+        const sx0 = s16(batch, o + 0x06);
+        const sy0 = s16(batch, o + 0x08);
+        const sz0 = s16(batch, o + 0x0A);
+        const sx1 = s16(batch, o + 0x0C);
+        const sy1 = s16(batch, o + 0x0E);
+        const sz1 = s16(batch, o + 0x10);
+
+        const ax = sx0 * 8;
+        const ay = (subtractY ? sy0 - yTranslate : sy0) * 8;
+        const az = sz0 * 8;
+
+        const bx = sx1 * 8;
+        const by = (subtractY ? sy1 - yTranslate : sy1) * 8;
+        const bz = sz1 * 8;
+
+        const nx0 = Math.min(ax, bx) - pad;
+        const ny0 = Math.min(ay, by) - pad;
+        const nz0 = Math.min(az, bz) - pad;
+        const nx1 = Math.max(ax, bx) + pad;
+        const ny1 = Math.max(ay, by) + pad;
+        const nz1 = Math.max(az, bz) + pad;
+
+        ps16(out, o + 0x06, nx0);
+        ps16(out, o + 0x08, ny0);
+        ps16(out, o + 0x0A, nz0);
+        ps16(out, o + 0x0C, nx1);
+        ps16(out, o + 0x0E, ny1);
+        ps16(out, o + 0x10, nz1);
+
+        if (o === 0) {
+            firstLog =
+                `old=[${sx0},${sy0},${sz0},${sx1},${sy1},${sz1}]` +
+                `->new=[${nx0},${ny0},${nz0},${nx1},${ny1},${nz1}]`;
+        }
+    }
+
+    return {
+        batch: out,
+        log:
+            `ancientAABB=fullXYZ` +
+            `/mode=${mode}` +
+            `/subtractY=${subtractY ? 1 : 0}` +
+            `/pad=${pad}` +
+            `/first=${firstLog}`,
+    };
+}
+
+function patchAncientBatchAbsolutePointers(
+    batch: Uint8Array,
+    oldBatchOff: number,
+    oldBatchLen: number,
+    newBatchOff: number,
+    oldTriOff: number,
+    oldTriLen: number,
+    newTriOff: number,
+): { batch: Uint8Array; log: string } {
+    const out = copyU8(batch);
+
+    const oldBatchEnd = oldBatchOff + oldBatchLen;
+    const oldTriEnd = oldTriOff + oldTriLen;
+
+    let batchPatches = 0;
+    let triPatches = 0;
+    const examples: string[] = [];
+
+    const patchU32 = (p: number, oldValue: number, newValue: number, kind: string): void => {
+        p32(out, p, newValue >>> 0);
+
+        if (examples.length < 8) {
+            examples.push(
+                `${kind}@+0x${p.toString(16)}` +
+                `:0x${oldValue.toString(16)}->0x${newValue.toString(16)}`,
+            );
+        }
+    };
+
+    // Ancient may store absolute resource offsets inside batch records.
+    // If so, copying the batch to the end of the final resource leaves those pointers stale.
+    // Scan aligned u32 fields inside each 0x14-byte batch record and rebase only values that
+    // exactly point inside the old Ancient batch or tri tables.
+    for (let o = 0; o + 0x14 <= out.byteLength; o += 0x14) {
+        for (const field of [0x00, 0x04, 0x08, 0x0C, 0x10]) {
+            const p = o + field;
+
+            if (p + 4 > o + 0x14)
+                continue;
+
+            const v = u32(out, p);
+
+            if (v >= oldTriOff && v < oldTriEnd && ((v - oldTriOff) % 8) === 0) {
+                const nv = newTriOff + (v - oldTriOff);
+                patchU32(p, v, nv, 'triPtr');
+                triPatches++;
+            } else if (v >= oldBatchOff && v < oldBatchEnd && ((v - oldBatchOff) % 0x14) === 0) {
+                const nv = newBatchOff + (v - oldBatchOff);
+                patchU32(p, v, nv, 'batchPtr');
+                batchPatches++;
+            }
+        }
+    }
+
+    return {
+        batch: triPatches > 0 || batchPatches > 0 ? out : batch,
+        log:
+            `batchPtrPatch=tri${triPatches}/batch${batchPatches}` +
+            `${examples.length > 0 ? `/examples=[${examples.join(',')}]` : ''}`,
+    };
+}
+
+type AncientCollisionInfo = {
+    triOff: number;
+    triLen: number;
+    triCount: number;
+    batchOff: number;
+    batchLen: number;
+    batchCount: number;
+};
+
+function ancientNextSectionOffset(root: Uint8Array, start: number): number {
+    let best = root.byteLength;
+
+    for (let o = 0x4C; o <= 0x80; o += 4) {
+        if (o + 4 > root.byteLength)
+            continue;
+
+        const off = u32(root, o);
+
+        if (off > start && off <= root.byteLength && off < best)
+            best = off;
+    }
+
+    return best;
+}
+
+function ancientCollisionInfo(root: Uint8Array): AncientCollisionInfo | null {
+    const triOff = u32(root, 0x4C);
+    const batchOff = u32(root, 0x50);
+
+    if (triOff <= 0 || batchOff <= 0)
+        return null;
+
+    if (triOff >= root.byteLength || batchOff >= root.byteLength)
+        return null;
+
+    const triEnd = ancientNextSectionOffset(root, triOff);
+    const batchEnd = ancientNextSectionOffset(root, batchOff);
+
+    let triLen = triEnd - triOff;
+    let batchLen = batchEnd - batchOff;
+
+    triLen -= triLen % 8;
+    batchLen -= batchLen % 0x14;
+
+    const triCount = (triLen / 8) | 0;
+    const batchCount = (batchLen / 0x14) | 0;
+
+    if (triCount <= 0 || batchCount <= 0)
+        return null;
+
+    return {
+        triOff,
+        triLen,
+        triCount,
+        batchOff,
+        batchLen,
+        batchCount,
+    };
+}
+
+function writeCollisionTriRecord(
+    out: Uint8Array,
+    o: number,
+    a: number,
+    b: number,
+    c: number,
+    fl: number,
+    winding: CollisionWinding,
+): void {
+    if (winding === 'swap12') {
+        p16(out, o + 0, a);
+        p16(out, o + 2, c);
+        p16(out, o + 4, b);
+    } else if (winding === 'swap01') {
+        p16(out, o + 0, b);
+        p16(out, o + 2, a);
+        p16(out, o + 4, c);
+    } else if (winding === 'swap02') {
+        p16(out, o + 0, c);
+        p16(out, o + 2, b);
+        p16(out, o + 4, a);
+    } else {
+        p16(out, o + 0, a);
+        p16(out, o + 2, b);
+        p16(out, o + 4, c);
+    }
+
+    p16(out, o + 6, fl);
+}
+
+function buildAncientVisualCollision(
+    ancient: Uint8Array,
+    ancientCollisionFlagsRaw: Uint8Array,
+    winding: CollisionWinding,
+): { batch: Uint8Array; tris: Uint8Array; log: string } {
+    const ai = ancientInfo(ancient);
+    const shaderCount = Math.max(1, Math.min(64, ai.shaderCount || 1));
+    const decoded = decodeAncientShaderForDLs(ancient, ai.bitsOff, ai.bitsCount, shaderCount);
+    const ancientDLs = collectAncientDisplayLists(ancient, ai);
+
+    const triRecords: number[] = [];
+    let emitted = 0;
+    let skippedInvalid = 0;
+    let skippedDegenerate = 0;
+
+    const flagCount = Math.max(0, (ancientCollisionFlagsRaw.byteLength / 8) | 0);
+
+    const flagForTri = (triIndex: number): number => {
+        if (flagCount <= 0)
+            return 0;
+
+        const fo = (triIndex % flagCount) * 8 + 6;
+        return u16(ancientCollisionFlagsRaw, fo);
+    };
+
+    for (const srcDL of ancientDLs) {
+        const vcdBits = decoded.vcdBitsForDL[srcDL.sourceIndex] ?? 0x05;
+        const fmt = earlyDLVertexFormatFromVcdBits(vcdBits);
+
+        scanEarlyDLTriangles(srcDL.dl, fmt, (corners) => {
+            const a = corners[0].pos;
+            const b = corners[1].pos;
+            const c = corners[2].pos;
+
+            if (a >= ai.posCount || b >= ai.posCount || c >= ai.posCount) {
+                skippedInvalid++;
+                return;
+            }
+
+            if (a === b || b === c || c === a) {
+                skippedDegenerate++;
+                return;
+            }
+
+            if (emitted >= 0xFFFF)
+                return;
+
+            const fl = flagForTri(emitted);
+            const o = triRecords.length;
+
+            triRecords.length += 8;
+
+            const temp = new Uint8Array(8);
+            writeCollisionTriRecord(temp, 0, a, b, c, fl, winding);
+
+            for (let i = 0; i < 8; i++)
+                triRecords[o + i] = temp[i];
+
+            emitted++;
+        });
+    }
+
+    if (emitted <= 0)
+        throw new Error(`Ancient visual collision generated zero triangles`);
+
+    const tris = new Uint8Array(triRecords);
+
+    // Synthetic broad collision batch in Early1/Final collision-batch style.
+    //
+    // The working Early1 collision path only transforms +0x06/+0x08 as Y min/max,
+    // which means +0x00/+0x02/+0x04 are not XYZ bounds. They are batch metadata.
+    // The previous fullXYZ test wrote -32768 into those metadata fields, likely
+    // making the batch unreachable or empty.
+    const batch = new Uint8Array(0x14);
+
+    // Probable batch metadata: first tri / tri count / reserved-or-link.
+    p16(batch, 0x00, 0);
+    p16(batch, 0x02, Math.min(0xFFFF, emitted));
+    p16(batch, 0x04, 0);
+
+    // Known from the working Early1 copier: these are Y bounds.
+    ps16(batch, 0x06, -32768);
+    ps16(batch, 0x08, 32767);
+
+    // Leave remaining fields neutral.
+    p16(batch, 0x0A, 0);
+    p16(batch, 0x0C, 0);
+    p16(batch, 0x0E, 0);
+    p16(batch, 0x10, 0);
+    p16(batch, 0x12, 0);
+
+    return {
+        batch,
+        tris,
+        log:
+            `ancientVisualCollision=ON` +
+            `/DLs=${ancientDLs.length}` +
+            `/tris=${emitted}` +
+            `/skippedInvalid=${skippedInvalid}` +
+            `/skippedDegenerate=${skippedDegenerate}` +
+            `/flagsFromAncient=${flagCount}` +
+            `/batchAABB=earlyStyle_00first_02count_06ymin_08ymax` +
+                        `/batchTriRange=0-${emitted}`,
+    };
+}
+
+function patchResourceCollisionFromAncient(
+    base: Uint8Array,
+    ancient: Uint8Array,
+    yMode: CollisionYMode,
+    winding: CollisionWinding,
+): { raw: Uint8Array; log: string } {
+    if (yMode === 'none')
+        return { raw: base, log: 'ancient collision disabled' };
+
+    const info = ancientCollisionInfo(ancient);
+
+    if (info === null)
+        return { raw: base, log: 'ancient collision not found; kept final collision' };
+
+    const ai = ancientInfo(ancient);
+
+    let out = copyU8(base);
+    const yTranslate = s16(out, 0x8E);
+
+    const finalPosOff = u32(out, 0x58);
+    const finalPosCount = u16(out, 0x90);
+    const finalPosLen = finalPosCount * 6;
+
+    if (finalPosOff <= 0 || finalPosOff + finalPosLen > out.byteLength) {
+        throw new Error(
+            `bad final position table before Ancient collision copy:` +
+            ` posOff=0x${finalPosOff.toString(16)}` +
+            ` posCount=${finalPosCount}` +
+            ` len=0x${out.byteLength.toString(16)}`,
+        );
+    }
+
+    // Ancient BLOCKS collision triangles are 0x10 bytes each:
+    //
+    // +0x00 v0
+    // +0x02 v1
+    // +0x04 v2
+    // +0x06 ancient plane/index 0
+    // +0x08 ancient plane/index 1
+    // +0x0A ancient plane/index 2
+    // +0x0C ancient plane/index 3
+    // +0x0E collision flags/material
+    //
+    // Final collision tris are 0x08 bytes:
+    //
+    // +0x00 v0
+    // +0x02 v1
+    // +0x04 v2
+    // +0x06 collision flags/material
+    //
+    // The previous build used +0x06 as the final flags. That was wrong;
+    // +0x06 is an Ancient plane/index field. The usable final flags are at +0x0E.
+    const ancientTriStride = 0x10;
+    const ancientTriCountFromHeader = u16(ancient, 0x8E);
+    const ancientTriCount =
+        ancientTriCountFromHeader > 0 &&
+        info.triOff + ancientTriCountFromHeader * ancientTriStride <= ancient.byteLength
+            ? ancientTriCountFromHeader
+            : Math.floor(info.triLen / ancientTriStride);
+
+    if (ancientTriCount <= 0) {
+        throw new Error(
+            `Ancient collision has no 0x10 triangle records:` +
+            ` triOff=0x${info.triOff.toString(16)}` +
+            ` triLen=0x${info.triLen.toString(16)}` +
+            ` headerCount=${ancientTriCountFromHeader}`,
+        );
+    }
+
+    const compactTris = new Uint8Array(ancientTriCount * 8);
+
+    let maxVertex = 0;
+    let degenerate = 0;
+    let planeMax = 0;
+    let flagMin = 0xFFFF;
+    let flagMax = 0;
+
+    for (let i = 0; i < ancientTriCount; i++) {
+        const src = info.triOff + i * ancientTriStride;
+        const dst = i * 8;
+
+        const v0 = u16(ancient, src + 0x00);
+        const v1 = u16(ancient, src + 0x02);
+        const v2 = u16(ancient, src + 0x04);
+
+        const plane0 = u16(ancient, src + 0x06);
+        const plane1 = u16(ancient, src + 0x08);
+        const plane2 = u16(ancient, src + 0x0A);
+        const plane3 = u16(ancient, src + 0x0C);
+
+        const fl = u16(ancient, src + 0x0E);
+
+        maxVertex = Math.max(maxVertex, v0, v1, v2);
+        planeMax = Math.max(planeMax, plane0, plane1, plane2, plane3);
+        flagMin = Math.min(flagMin, fl);
+        flagMax = Math.max(flagMax, fl);
+
+        if (v0 >= finalPosCount || v1 >= finalPosCount || v2 >= finalPosCount) {
+            throw new Error(
+                `Ancient collision tri vertex OOB:` +
+                ` tri=${i}` +
+                ` verts=[${v0},${v1},${v2}]` +
+                ` finalPosCount=${finalPosCount}` +
+                ` ancientPosCount=${ai.posCount}` +
+                ` triOff=0x${info.triOff.toString(16)}`,
+            );
+        }
+
+        if (v0 === v1 || v1 === v2 || v2 === v0)
+            degenerate++;
+
+        writeCollisionTriRecord(compactTris, dst, v0, v1, v2, fl, winding);
+    }
+
+    if (flagMin === 0xFFFF)
+        flagMin = 0;
+
+    const ancientBatchRaw = ancient.slice(info.batchOff, info.batchOff + info.batchLen);
+
+    // Keep the real Ancient batch table. It already points at triangle ranges by index,
+    // so compacting 0x10 tris to 0x08 tris does not change those range indices.
+    const patchedBatch = transformBatchY(ancientBatchRaw, yTranslate, yMode);
+
+    const appendOff = align(out.byteLength, 0x20);
+    out = growTo(out, appendOff);
+
+    const newBatchOff = appendOff;
+    const newTriOff = newBatchOff + patchedBatch.byteLength;
+
+    out = setBytes(out, newBatchOff, patchedBatch);
+    out = setBytes(out, newTriOff, compactTris);
+    out = growTo(out, align(out.byteLength, 0x20));
+
+    p32(out, 0x4C, newTriOff);
+    p32(out, 0x50, newBatchOff);
+
+    p16(out, 0x98, ancientTriCount);
+    p16(out, 0x9A, Math.max(0, info.batchCount - 1));
+
+    p32(out, 0x08, out.byteLength);
+
+    return {
+        raw: out,
+        log:
+            `ancient collision copied REAL_0x10_TRI_TABLE_FIXED_FLAGS` +
+            ` yMode=${yMode}` +
+            ` yTranslate=${yTranslate}` +
+            ` winding=${winding}` +
+            ` triStride=0x10->0x08` +
+            ` ancientFlagSource=word0x0E` +
+            ` ignoredAncientPlaneWords=0x06/0x08/0x0A/0x0C` +
+            ` headerTriCount=${ancientTriCountFromHeader}` +
+            ` finalTriCount=${ancientTriCount}` +
+            ` maxVertex=${maxVertex}` +
+            ` planeMax=${planeMax}` +
+            ` flagRange=0x${flagMin.toString(16)}-0x${flagMax.toString(16)}` +
+            ` degenerate=${degenerate}` +
+            ` finalPosCount=${finalPosCount}` +
+            ` ancientPosCount=${ai.posCount}` +
+            ` batch=0x${info.batchOff.toString(16)}->0x${newBatchOff.toString(16)}` +
+            ` batchLen=0x${info.batchLen.toString(16)}` +
+            ` batchCount=${info.batchCount}` +
+            ` tri=0x${info.triOff.toString(16)}->0x${newTriOff.toString(16)}` +
+            ` oldTriLen=0x${info.triLen.toString(16)}` +
+            ` newTriLen=0x${compactTris.byteLength.toString(16)}`,
+    };
 }
 
 function patchResourceCollision(base: Uint8Array, early: Uint8Array, yMode: CollisionYMode, winding: CollisionWinding): { raw: Uint8Array; log: string } {
@@ -3537,6 +6074,10 @@ collisionYMode: options.collisionYMode ?? 'subtract',
         keepObjectTypes: options.keepObjectTypes ?? [0x000D, 0x004C],
         mapsBin: options.mapsBin,
         mapsTab: options.mapsTab,
+
+        hitsEnabled: options.hitsEnabled ?? true,
+        hitsBin: options.hitsBin,
+        hitsTab: options.hitsTab,
     };
 
     const earlyBin = asU8(earlyBinIn);
@@ -3547,45 +6088,175 @@ collisionYMode: options.collisionYMode ?? 'subtract',
     const finalArc = await readZlbArchive(finalZlbBin, finalTab);
     const rootArc = readEarlyMapSourceArchive(earlyBin, earlyTab, opts.earlyMapFormat);
     const outDataParts: Uint8Array[] = [];
-    const outTab = copyU8(finalArc.tab);
     const logs: string[] = [];
-    const processed: number[] = [];
+      const processed: number[] = [];
+    const hitResourceIdsToDisable: number[] = [];
     let cursor = 0;
+
+    const ancientSource = opts.earlyMapFormat === 'ancient_blocks';
+    const firstFinalResourceId = finalArc.ids.length > 0 ? finalArc.ids[0] : 0;
+
+    const prePatchMapsBin: OwnedU8 | undefined = opts.mapsBin !== undefined ? asU8(opts.mapsBin) : undefined;
+    const prePatchMapsTab: OwnedU8 | undefined = opts.mapsTab !== undefined ? asU8(opts.mapsTab) : undefined;
+
+    // Keep generated visual resources at the selected Final archive IDs.
+    // This matches the working X mod16.zlb.bin / Xmod16..tab behavior.
+    const outTab = copyU8(finalArc.tab);
+
+    // MAPS grid IDs are separate from output archive IDs.
+    // The working XMAPS.bin uses the existing Warlock MAPS grid base, normally 0x3C0.
+    let mapsGridFirstResourceId = firstFinalResourceId;
+
+    if (ancientSource && opts.modelId === 16) {
+        const inferredWarlockBase =
+            prePatchMapsBin !== undefined && prePatchMapsTab !== undefined
+                ? inferWarlockFinalResourceBaseFromExistingMaps(prePatchMapsBin, prePatchMapsTab)
+                : null;
+
+        mapsGridFirstResourceId =
+            inferredWarlockBase !== null
+                ? inferredWarlockBase.firstFinalResourceId
+                : 0x3C0;
+
+        logs.push(
+            `ancient Warlock MAPS grid base:` +
+            ` mapsGridBase=0x${mapsGridFirstResourceId.toString(16)}` +
+            ` selectedFinalRange=0x${firstFinalResourceId.toString(16)}..0x${(finalArc.ids[finalArc.ids.length - 1] ?? firstFinalResourceId).toString(16)}` +
+            (
+                inferredWarlockBase !== null
+                    ? ` mapsGridRange=0x${inferredWarlockBase.minRid.toString(16)}..0x${inferredWarlockBase.maxRid.toString(16)}` +
+                      ` mapsGridCount=${inferredWarlockBase.distinctCount}`
+                    : ` mapsGridBaseFallback=0x3c0`
+            ) +
+            ` output TAB IDs are not rebased`,
+        );
+    }
+    const finalWaterPrototype = ancientSource
+        ? findFinalWaterShaderPrototypeInArchive(finalArc.blocks)
+        : null;
+
+    if (ancientSource && opts.modelId === 16) {
+        logs.push(
+            `ancient Warlock validation skipped: using selected Final archive range ` +
+            `0x${firstFinalResourceId.toString(16)}..0x${(finalArc.ids[finalArc.ids.length - 1] ?? firstFinalResourceId).toString(16)}`
+        );
+    }
+
+    if (ancientSource) {
+        logs.push(
+            `ancient resource mapping: finalFirstRid=${firstFinalResourceId}` +
+            ` / 0x${firstFinalResourceId.toString(16)}` +
+            ` modelBase=0x${(ANCIENT_TRKBLK[opts.modelId] ?? -1).toString(16)}` +
+            ` modelId=${opts.modelId}`,
+        );
+
+        logs.push(
+            finalWaterPrototype !== null
+                ? `final water shader prototype: resource=${finalWaterPrototype.resourceId}` +
+                    ` / 0x${finalWaterPrototype.resourceId.toString(16)}` +
+                    ` shader=${finalWaterPrototype.shaderIndex}` +
+                    ` flags=0x${finalWaterPrototype.flags.toString(16)}` +
+                    ` texIds=[${finalWaterPrototype.texIds.join(',')}]`
+                : `final water shader prototype: none found`,
+        );
+    }
 
     for (const rid of finalArc.ids) {
         let raw = finalArc.blocks.get(rid)!;
-        const early = rootArc.blocks.get(rid);
+
+        const finalSubIndex = ancientSource
+            ? ancientSubIndexForFinalResource(rid, firstFinalResourceId)
+            : rid;
+
+        const sourceRid = ancientSource
+            ? ancientBlockResourceIdForFinalSub(opts.modelId, finalSubIndex)
+            : rid;
+
+        const outputRid = rid;
+
+        // HITS.bin/tab is keyed by the final BLOCK resource ID used by MAPS grid cells.
+        // Disable it for every BLOCK in the selected final map archive, not just resources
+        // where visual conversion succeeded.
+        hitResourceIdsToDisable.push(outputRid);
+
+        // Warlock Ancient layout may be anchored to the existing MAPS grid base.
+        // If that base differs from the selected output TAB IDs, patch both IDs.
+        if (ancientSource && opts.modelId === 16)
+            hitResourceIdsToDisable.push(mapsGridFirstResourceId + finalSubIndex);
+
+        const early = rootArc.blocks.get(sourceRid);
 
         if (early) {
-            const vis = rebuildResourceAppend(early, raw,                
-                 {
-                    modelId: opts.modelId,
-                    outBaseName: opts.outBaseName,
-                    earlyMapFormat: opts.earlyMapFormat,
-                    groupMode: opts.groupMode,
-                colorMode: opts.colorMode,
-                textureMode: opts.textureMode,
-flatTextureId: opts.flatTextureId,
-flatTexS: opts.flatTexS,
-flatTexT: opts.flatTexT,
-maxTrisPerDL: opts.maxTrisPerDL ?? 128,
-            });
-            raw = vis.raw;
-            logs.push(`id ${rid}: ${vis.log}`);
+            const vis = ancientSource
+                ? rebuildResourceAppendAncient(
+                    early,
+                    raw,
+                    {
+                        modelId: opts.modelId,
+                        outBaseName: opts.outBaseName,
+                        textureMode: opts.textureMode,
+                        flatTextureId: opts.flatTextureId,
+                        flatTexS: opts.flatTexS,
+                        flatTexT: opts.flatTexT,
+                    },
+                    finalWaterPrototype,
+                )
+                : rebuildResourceAppend(
+                    early,
+                    raw,
+                    {
+                        modelId: opts.modelId,
+                        outBaseName: opts.outBaseName,
+                        earlyMapFormat: opts.earlyMapFormat,
+                        groupMode: opts.groupMode,
+                        colorMode: opts.colorMode,
+                        textureMode: opts.textureMode,
+                        flatTextureId: opts.flatTextureId,
+                        flatTexS: opts.flatTexS,
+                        flatTexT: opts.flatTexT,
+                        maxTrisPerDL: opts.maxTrisPerDL ?? 128,
+                    },
+                );
 
-            if (opts.collisionYMode !== 'none') {
+            raw = vis.raw;
+
+            logs.push(
+                ancientSource
+                    ? `id ${outputRid}: inputFinalId=${rid} finalSub=${finalSubIndex} -> Ancient BLOCKS resource ${sourceRid} / 0x${sourceRid.toString(16)}: ${vis.log}`
+                                        : `id ${rid}: ${vis.log}`,
+            );
+
+            if (ancientSource) {
+                const col = patchResourceCollisionFromAncient(
+                    raw,
+                    early,
+                    opts.collisionYMode,
+                    opts.collisionWinding,
+                );
+
+                raw = col.raw;
+                logs.push(`id ${rid}: ${col.log}`);
+            } else if (opts.collisionYMode !== 'none') {
                 const col = patchResourceCollision(raw, early, opts.collisionYMode, opts.collisionWinding);
                 raw = col.raw;
                 logs.push(`id ${rid}: ${col.log}`);
             }
 
-            processed.push(rid);
-        } else {
-            logs.push(`id ${rid}: no matching Early1 block, kept final`);
+            processed.push(outputRid);
+                } else {
+            logs.push(
+                ancientSource
+                    ? `id ${outputRid}: inputFinalId=${rid} finalSub=${finalSubIndex} -> no Ancient BLOCKS resource ${sourceRid} / 0x${sourceRid.toString(16)}, kept final`
+                                        : `id ${rid}: no matching Early block, kept final`,
+            );
         }
 
         const z = await writeZlb(raw);
-        p32(outTab, rid * 4, TAB_FLAG | cursor);
+
+        if (outputRid * 4 + 4 > outTab.byteLength)
+            throw new Error(`output resource 0x${outputRid.toString(16)} outside generated TAB`);
+
+        p32(outTab, outputRid * 4, TAB_FLAG | cursor);
         outDataParts.push(z);
         cursor += z.byteLength;
     }
@@ -3603,26 +6274,91 @@ maxTrisPerDL: opts.maxTrisPerDL ?? 128,
     logs.push(`processed=[${processed.join(',')}]`);
     logs.push(`output ${opts.outBaseName}.zlb.bin bytes=${outData.byteLength}, ${opts.outBaseName}.tab bytes=${outTab.byteLength}`);
 
-    let patchedMapsBin: Uint8Array | undefined = undefined;
-    let patchedMapsTab: Uint8Array | undefined = undefined;
+let patchedMapsBin: OwnedU8 | undefined = undefined;
+let patchedMapsTab: OwnedU8 | undefined = undefined;
 
-    if (opts.objectsEnabled === false) {
-        if (!opts.mapsBin || !opts.mapsTab)
-            throw new Error('objects disabled, but SFA MAPS.bin / MAPS.tab were not provided');
+let workingMapsBin: OwnedU8 | undefined = prePatchMapsBin;
+let workingMapsTab: OwnedU8 | undefined = prePatchMapsTab;
+let mapsTouched = false;
 
-        const patched = await patchSfaMapsObjectsForMap(
-            opts.mapsBin,
-            opts.mapsTab,
-            opts.objectMapId ?? opts.modelId,
-            opts.keepObjectTypes ?? [0x000D, 0x004C],
+const wantsAncientWarlockMapsPatch =
+    ancientSource &&
+    opts.modelId === 16;
+
+if (wantsAncientWarlockMapsPatch) {
+    if (workingMapsBin !== undefined && workingMapsTab !== undefined) {
+        const patched = patchSfaMapsAncientWarlockLayoutAndVisibility(
+            workingMapsBin,
+            workingMapsTab,
+            mapsGridFirstResourceId,
         );
 
-        patchedMapsBin = patched.mapsBin;
-        patchedMapsTab = patched.mapsTab;
+        workingMapsBin = patched.mapsBin;
+        workingMapsTab = patched.mapsTab;
+        mapsTouched = true;
         logs.push(patched.log);
     } else {
-        logs.push('objects enabled: SFA MAPS.bin/MAPS.tab not modified');
+        logs.push(
+            `ancient Warlock MAPS layout skipped: ` +
+            `select SFA MAPS.bin and SFA MAPS.tab to auto-patch the working layout`,
+        );
     }
+}
+
+if (opts.objectsEnabled === false) {
+    if (workingMapsBin === undefined || workingMapsTab === undefined)
+        throw new Error('objects disabled, but SFA MAPS.bin / MAPS.tab were not provided');
+
+    const objectMapIdForPatch = wantsAncientWarlockMapsPatch
+        ? SFA_MAP_ID_WARLOCK
+        : opts.objectMapId ?? opts.modelId;
+
+    const patched = await patchSfaMapsObjectsForMap(
+        workingMapsBin,
+        workingMapsTab,
+        objectMapIdForPatch,
+        opts.keepObjectTypes ?? [0x000D, 0x004C],
+    );
+
+    workingMapsBin = patched.mapsBin;
+    workingMapsTab = patched.mapsTab;
+    mapsTouched = true;
+    logs.push(patched.log);
+} else {
+    logs.push(
+        mapsTouched
+            ? 'objects enabled: MAPS layout/visibility patched; object list not modified'
+            : 'objects enabled: SFA MAPS.bin/MAPS.tab not modified',
+    );
+}
+
+if (mapsTouched) {
+    if (workingMapsBin === undefined || workingMapsTab === undefined)
+        throw new Error('internal MAPS patch state lost MAPS.bin / MAPS.tab');
+
+    patchedMapsBin = workingMapsBin;
+    patchedMapsTab = workingMapsTab;
+}
+
+let patchedHitsBin: OwnedU8 | undefined = undefined;
+let patchedHitsTab: OwnedU8 | undefined = undefined;
+
+if (opts.hitsEnabled === false) {
+    if (opts.hitsBin === undefined || opts.hitsTab === undefined)
+        throw new Error('HITS disabled, but SFA HITS.bin / HITS.tab were not provided');
+
+    const patchedHits = patchSfaHitsDisableResourceIds(
+        opts.hitsBin,
+        opts.hitsTab,
+        hitResourceIdsToDisable,
+    );
+
+    patchedHitsBin = patchedHits.hitsBin;
+    patchedHitsTab = patchedHits.hitsTab;
+    logs.push(patchedHits.log);
+} else {
+    logs.push('HITS enabled: SFA HITS.bin/HITS.tab not modified');
+}
 
     return {
         zlbBin: outData,
@@ -3631,7 +6367,28 @@ maxTrisPerDL: opts.maxTrisPerDL ?? 128,
         processedResourceIds: processed,
         mapsBin: patchedMapsBin,
         mapsTab: patchedMapsTab,
+        hitsBin: patchedHitsBin,
+        hitsTab: patchedHitsTab,
     };
+}
+
+export async function convertAncientBlocksArchiveToFinalMapZlb(
+    blocksBinIn: ArrayBuffer | Uint8Array,
+    blocksTabIn: ArrayBuffer | Uint8Array,
+    finalZlbBinIn: ArrayBuffer | Uint8Array,
+    finalTabIn: ArrayBuffer | Uint8Array,
+    options: Partial<Early1FinalMapConvertOptions> = {},
+): Promise<Early1FinalMapConvertResult> {
+    return convertEarly1ArchiveToFinalMapZlb(
+        blocksBinIn,
+        blocksTabIn,
+        finalZlbBinIn,
+        finalTabIn,
+        {
+            ...options,
+            earlyMapFormat: 'ancient_blocks',
+        },
+    );
 }
 
 export async function convertEarly4ArchiveToFinalMapZlb(
@@ -3677,6 +6434,79 @@ function readOptionalFile(file: File | null): Promise<ArrayBuffer | undefined> {
     return file.arrayBuffer();
 }
 
+function normalizeTexturePngKey(name: string): string {
+    const leaf = name.split(/[\\/]/g).pop() ?? name;
+    return leaf.replace(/\.png$/i, '').trim().toLowerCase();
+}
+
+function parseTextureInjectMappingText(text: string): Map<string, number> {
+    const out = new Map<string, number>();
+
+    for (const rawLine of text.split(/\r?\n/g)) {
+        const line = rawLine
+            .replace(/\/\/.*$/g, '')
+            .replace(/#.*$/g, '')
+            .trim();
+
+        if (line.length === 0)
+            continue;
+
+        const m = /^(.+?)(?:->|=|:)(.+)$/.exec(line);
+
+        if (!m)
+            throw new Error(`bad texture mapping line "${rawLine}". Use PNG_ID=TARGET_ID, e.g. 618=612`);
+
+        const srcKey = normalizeTexturePngKey(m[1]);
+        const targetTexId = parseMaybeHexInt(m[2], -1);
+
+        if (srcKey.length === 0)
+            throw new Error(`bad empty PNG name in texture mapping line "${rawLine}"`);
+
+        if (targetTexId < 0)
+            throw new Error(`bad target texture ID in texture mapping line "${rawLine}"`);
+
+        out.set(srcKey, targetTexId);
+    }
+
+    return out;
+}
+
+async function buildTextureInjectEntriesFromFiles(
+    files: FileList | null,
+    mappingText: string,
+): Promise<TextureInjectEntry[]> {
+    const fileArray = Array.prototype.slice.call(files ?? []) as File[];
+    const mapping = parseTextureInjectMappingText(mappingText);
+    const entries: TextureInjectEntry[] = [];
+    const seenKeys = new Set<string>();
+
+    for (const file of fileArray) {
+        const key = normalizeTexturePngKey(file.name);
+        const targetTexId = mapping.get(key) ?? parseMaybeHexInt(key, -1);
+
+        if (targetTexId < 0) {
+            throw new Error(
+                `no texture target for PNG "${file.name}". ` +
+                `Either name it like 612.png or add a mapping line like ${key}=612`,
+            );
+        }
+
+        seenKeys.add(key);
+
+        entries.push({
+            targetTexId,
+            png: new Uint8Array(await file.arrayBuffer()),
+            name: file.name,
+        });
+    }
+
+    // Allow the map box to contain a full texture list while only injecting
+    // the PNG files selected in this run.
+    void seenKeys;
+
+    return entries;
+}
+
 function fileInput(label: string, accept: string): { wrap: HTMLElement; input: HTMLInputElement } {
     const wrap = document.createElement('label');
     wrap.style.display = 'grid';
@@ -3687,6 +6517,23 @@ function fileInput(label: string, accept: string): { wrap: HTMLElement; input: H
     input.type = 'file';
     input.accept = accept;
     input.style.fontSize = '11px';
+    wrap.appendChild(input);
+    return { wrap, input };
+}
+
+function multiFileInput(label: string, accept: string): { wrap: HTMLElement; input: HTMLInputElement } {
+    const wrap = document.createElement('label');
+    wrap.style.display = 'grid';
+    wrap.style.gap = '2px';
+    wrap.style.fontSize = '11px';
+    wrap.textContent = label;
+
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = accept;
+    input.multiple = true;
+    input.style.fontSize = '11px';
+
     wrap.appendChild(input);
     return { wrap, input };
 }
@@ -3744,12 +6591,18 @@ panel.style.userSelect = 'auto';
     title.style.marginBottom = '6px';
     panel.appendChild(title);
 
-    const earlyBin = fileInput('Early source root_modXX.bin', '.bin');
-    const earlyTab = fileInput('Early source root_modXX.tab', '.tab');
+    const earlyBin = fileInput('Early source root_modXX.bin OR Ancient BLOCKS.bin', '.bin');
+    const earlyTab = fileInput('Early source root_modXX.tab OR Ancient BLOCKS.tab', '.tab');
     const finalBin = fileInput('Final modXX.zlb.bin', '.bin');
     const finalTab = fileInput('Final modXX.tab', '.tab');
     const mapsBin = fileInput('SFA MAPS.bin optional', '.bin');
     const mapsTab = fileInput('SFA MAPS.tab optional', '.tab');
+    const hitsBin = fileInput('SFA HITS.bin optional', '.bin');
+    const hitsTab = fileInput('SFA HITS.tab optional', '.tab');
+
+    const texBin = fileInput('SFA TEX archive .bin optional', '.bin');
+    const texTab = fileInput('SFA TEX archive .tab optional', '.tab');
+    const texPngs = multiFileInput('PNG textures to inject optional', '.png');
 
     panel.appendChild(earlyBin.wrap);
     panel.appendChild(earlyTab.wrap);
@@ -3757,9 +6610,74 @@ panel.style.userSelect = 'auto';
     panel.appendChild(finalTab.wrap);
     panel.appendChild(mapsBin.wrap);
     panel.appendChild(mapsTab.wrap);
+    panel.appendChild(hitsBin.wrap);
+    panel.appendChild(hitsTab.wrap);
 
-    const earlyFormat = selectInput<EarlyMapFormat>('early source format', ['early1_raw', 'early4_lzo'], 'early1_raw');
-    panel.appendChild(earlyFormat.wrap);
+    panel.appendChild(texBin.wrap);
+    panel.appendChild(texTab.wrap);
+    panel.appendChild(texPngs.wrap);
+
+    const texMapLabel = document.createElement('label');
+    texMapLabel.style.display = 'grid';
+    texMapLabel.style.gap = '2px';
+    texMapLabel.style.fontSize = '11px';
+    texMapLabel.textContent = 'PNG -> final texture ID map';
+
+    const texMapInput = document.createElement('textarea');
+    texMapInput.style.fontSize = '11px';
+    texMapInput.style.height = '78px';
+    texMapInput.style.background = 'rgba(255,255,255,0.08)';
+    texMapInput.style.color = 'white';
+    texMapInput.style.boxSizing = 'border-box';
+    texMapInput.value =
+
+
+        `ribbon=619
+
+walls=618
+floor1=617
+pillar=616
+transwall=615
+support=614
+chain=613
+head=612
+krazfloor=611
+decor1=610
+floor2=609
+ceiling1=608
+walls2=607
+pillar2=606
+wood=605
+button=604
+sash=603
+floor3=602
+vines=601
+walls3=600
+block=599
+innerdoor=598
+stained=597
+spire=596
+crates=595
+
+sabrestart=591
+walls4=590
+floor4=589
+floor5=588
+walls5=587
+kraz=586
+black=585
+transring=584
+spire2=583
+kraz2=582
+kraz3=581
+port=580
+floor6=579`;
+
+    texMapLabel.appendChild(texMapInput);
+    panel.appendChild(texMapLabel);
+
+    const earlyFormat = selectInput<EarlyMapFormat>('source format', ['early1_raw', 'early4_lzo', 'ancient_blocks'], 'early1_raw');
+        panel.appendChild(earlyFormat.wrap);
 
     const row = document.createElement('div');
     row.style.display = 'grid';
@@ -3833,12 +6751,31 @@ flatTLabel.appendChild(flatTInput);
 
 flatUVRow.appendChild(flatSLabel);
 flatUVRow.appendChild(flatTLabel);
-    const cy = selectInput<CollisionYMode>('collision Y', ['none', 'raw', 'subtract', 'subtract_expand8', 'subtract_expand32'], 'subtract');
+const cy = selectInput<CollisionYMode>(
+    'collision Y',
+    [
+        'none',
+        'raw',
+        'raw_scale8',
+        'subtract',
+        'subtract_scale8',
+        'subtract_expand8',
+        'subtract_expand32',
+        'subtract_scale8_expand64',
+        'subtract_scale8_expand256',
+    ],
+    'subtract',
+);
     const cw = selectInput<CollisionWinding>('collision winding', ['keep', 'swap12', 'swap01', 'swap02'], 'keep');
-
     const objectMode = selectInput<'enabled' | 'disabled_keep_list'>(
         'SFA MAPS objects',
         ['enabled', 'disabled_keep_list'],
+        'enabled',
+    );
+
+    const hitsMode = selectInput<'enabled' | 'disabled_for_selected_map_blocks'>(
+        'SFA HITS special collision',
+        ['enabled', 'disabled_for_selected_map_blocks'],
         'enabled',
     );
 
@@ -3873,6 +6810,7 @@ keepObjInput.placeholder = 'extra keeps only, e.g. 0012,00AB';
     panel.appendChild(cy.wrap);
     panel.appendChild(cw.wrap);
     panel.appendChild(objectMode.wrap);
+    panel.appendChild(hitsMode.wrap);
     panel.appendChild(objectMapLabel);
     panel.appendChild(keepObjLabel);
 
@@ -3922,6 +6860,21 @@ if (objectPatchDisabled && objectMapText.length === 0) {
 const sfaObjectMapId = objectPatchDisabled
     ? parseSfaMapId(objectMapText, 0)
     : 0;
+
+const hitsPatchDisabled = hitsMode.input.value !== 'enabled';
+
+if (
+    hitsPatchDisabled &&
+    (
+        (hitsBin.input.files?.length ?? 0) === 0 ||
+        (hitsTab.input.files?.length ?? 0) === 0
+    )
+) {
+    throw new Error(
+        'SFA HITS special collision is disabled, but no SFA HITS.bin / HITS.tab was selected.',
+    );
+}
+
             const result = await convertEarly1ArchiveToFinalMapZlb(
                 await readFile(earlyBin.input.files?.[0] ?? null),
                 await readFile(earlyTab.input.files?.[0] ?? null),
@@ -3946,21 +6899,74 @@ objectMapId: sfaObjectMapId,
                     keepObjectTypes: parseHexObjectKeepList(keepObjInput.value),
                     mapsBin: await readOptionalFile(mapsBin.input.files?.[0] ?? null),
                     mapsTab: await readOptionalFile(mapsTab.input.files?.[0] ?? null),
+
+                    hitsEnabled: !hitsPatchDisabled,
+                    hitsBin: await readOptionalFile(hitsBin.input.files?.[0] ?? null),
+                    hitsTab: await readOptionalFile(hitsTab.input.files?.[0] ?? null),
                 },
             );
 
             const base = nameInput.value || 'mod';
+            const finalLogs = result.logs.slice();
 
             downloadBytes(`${base}.zlb.bin`, result.zlbBin);
             downloadBytes(`${base}.tab`, result.tab);
 
             if (result.mapsBin && result.mapsTab) {
-                downloadBytes(`${base}_MAPS_noobjects.bin`, result.mapsBin);
-                downloadBytes(`${base}_MAPS_noobjects.tab`, result.mapsTab);
+                downloadBytes(`${base}_MAPS_patched.bin`, result.mapsBin);
+                downloadBytes(`${base}_MAPS_patched.tab`, result.mapsTab);
             }
 
-            log.value = result.logs.join('\n');
-            console.warn('[EARLY1 FINALMAP CONVERT]', result.logs.join('\n'));
+            if (result.hitsBin && result.hitsTab) {
+                downloadBytes(`${base}_HITS_patched.bin`, result.hitsBin);
+                downloadBytes(`${base}_HITS_patched.tab`, result.hitsTab);
+            }
+
+            const wantsTextureInject =
+                (texBin.input.files?.length ?? 0) > 0 ||
+                (texTab.input.files?.length ?? 0) > 0 ||
+                (texPngs.input.files?.length ?? 0) > 0;
+
+            if (wantsTextureInject) {
+                const texBinFile = texBin.input.files?.[0] ?? null;
+                const texTabFile = texTab.input.files?.[0] ?? null;
+
+                if (!texBinFile)
+                    throw new Error('PNG texture injection requested, but no SFA TEX archive .bin was selected');
+
+                if (!texTabFile)
+                    throw new Error('PNG texture injection requested, but no SFA TEX archive .tab was selected');
+
+                const texEntries = await buildTextureInjectEntriesFromFiles(
+                    texPngs.input.files,
+                    texMapInput.value,
+                );
+
+                if (texEntries.length === 0)
+                    throw new Error('PNG texture injection requested, but no PNG files were selected');
+
+                const texResult = await patchSfaTextureArchiveWithPngs(
+                    await readFile(texBinFile),
+                    await readFile(texTabFile),
+                    texEntries,
+                );
+
+                const texBase = texBinFile.name.replace(/\.bin$/i, '');
+
+                downloadBytes(`${texBase}_patched.bin`, texResult.texBin);
+                downloadBytes(`${texBase}_patched.tab`, texResult.texTab);
+
+                finalLogs.push(
+                    `texture archive patched: ${texBinFile.name} / ${texTabFile.name}`,
+                    `downloaded ${texBase}_patched.bin / ${texBase}_patched.tab`,
+                    ...texResult.logs,
+                );
+            } else {
+                finalLogs.push('texture archive injection skipped: no TEX bin/tab/PNGs selected');
+            }
+
+            log.value = finalLogs.join('\n');
+            console.warn('[EARLY1 FINALMAP CONVERT]', finalLogs.join('\n'));
         } catch (e) {
             console.error(e);
             log.value = String((e as Error)?.stack ?? (e as Error)?.message ?? e);

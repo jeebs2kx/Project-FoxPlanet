@@ -8,11 +8,20 @@ import { Shape } from './shapes.js';
 import { TextureFetcher } from './textures.js';
 import * as GX_Texture from '../gx/gx_texture.js';
 
+type GLTFAlphaMode = 'OPAQUE' | 'MASK' | 'BLEND';
+
 type ExportMaterialInfo = {
     key: string;
     name: string;
     baseColorTextureBytes?: Uint8Array;
     baseColorTextureTexCoord?: number;
+
+    baseColorFactor?: [number, number, number, number];
+    metallicFactor?: number;
+    roughnessFactor?: number;
+    alphaMode?: GLTFAlphaMode;
+    alphaCutoff?: number;
+    doubleSided?: boolean;
 };
 
 type ExtractedPrimitive = {
@@ -30,6 +39,9 @@ type PlacedModelInstance = {
     name: string;
     modelInst: ModelInstance;
     placementMatrix?: ReadonlyMat4;
+
+    // Useful when exporting ancient block maps, so the GLB keeps row/col/mod/sub info.
+    extras?: any;
 };
 
 type TextureLayerMode = 'auto' | 'tex0' | 'tex1' | 'last';
@@ -37,6 +49,8 @@ type TextureLayerMode = 'auto' | 'tex0' | 'tex1' | 'last';
 type GLTFExportOptions = {
     includeTextures?: boolean;
     textureLayerMode?: TextureLayerMode;
+    includeWaters?: boolean;
+    bakeSkinning?: boolean;
 };
 
 type TextureResolveHint = {
@@ -147,6 +161,87 @@ function getInputLayout(shape: Shape, attrInput: VertexAttributeInput): SingleVe
     return entries.find((v) => v.attrInput === attrInput) ?? null;
 }
 
+function getSkinBakeMatrixForVertex(
+    shape: Shape,
+    pos: number[],
+    matrixPalette: ReadonlyMat4[] | undefined,
+): ReadonlyMat4 | null {
+    if (!matrixPalette || matrixPalette.length === 0)
+        return null;
+
+    const geom = shape.geom;
+
+    if (!geom.hasSkinning && !geom.hasFineSkinning)
+        return null;
+    const slot = Math.trunc(pos[3] ?? 0);
+
+    if (slot < 0 || slot >= 10)
+        return null;
+    if (geom.hasFineSkinning && slot === 9)
+        return null;
+
+    if (!geom.hasSkinning)
+        return null;
+
+    const paletteIndex = geom.pnMatrixMap[slot] ?? slot;
+
+    if (paletteIndex < 0 || paletteIndex >= matrixPalette.length)
+        return null;
+
+    return matrixPalette[paletteIndex];
+}
+
+function writeMatrixTransformedPosition(
+    dst: Float32Array,
+    dstOffs: number,
+    x: number,
+    y: number,
+    z: number,
+    m: ReadonlyMat4 | null,
+): void {
+    if (m === null) {
+        dst[dstOffs + 0] = x;
+        dst[dstOffs + 1] = y;
+        dst[dstOffs + 2] = z;
+        return;
+    }
+
+    dst[dstOffs + 0] = m[0] * x + m[4] * y + m[8]  * z + m[12];
+    dst[dstOffs + 1] = m[1] * x + m[5] * y + m[9]  * z + m[13];
+    dst[dstOffs + 2] = m[2] * x + m[6] * y + m[10] * z + m[14];
+}
+
+function writeMatrixTransformedNormal(
+    dst: Float32Array,
+    dstOffs: number,
+    x: number,
+    y: number,
+    z: number,
+    m: ReadonlyMat4 | null,
+): void {
+    if (m === null) {
+        dst[dstOffs + 0] = x;
+        dst[dstOffs + 1] = y;
+        dst[dstOffs + 2] = z;
+        return;
+    }
+
+    let nx = m[0] * x + m[4] * y + m[8]  * z;
+    let ny = m[1] * x + m[5] * y + m[9]  * z;
+    let nz = m[2] * x + m[6] * y + m[10] * z;
+
+    const len = Math.hypot(nx, ny, nz);
+    if (len > 0.000001) {
+        nx /= len;
+        ny /= len;
+        nz /= len;
+    }
+
+    dst[dstOffs + 0] = nx;
+    dst[dstOffs + 1] = ny;
+    dst[dstOffs + 2] = nz;
+}
+
 function extractIndices(shape: Shape): Uint16Array | Uint32Array {
     const data = shape.geom.loadedVertexData;
     const layout = shape.geom.getLoadedVertexLayout() as any;
@@ -170,8 +265,8 @@ function extractIndices(shape: Shape): Uint16Array | Uint32Array {
     throw new Error(`Unsupported index format type ${typeFlags}`);
 }
 
-function extractShapeStreams(shape: Shape): Omit<ExtractedPrimitive, 'material' | 'name'> {
-    const geom = shape.geom;
+function extractShapeStreams(shape: Shape, matrixPalette?: ReadonlyMat4[]): Omit<ExtractedPrimitive, 'material' | 'name'> {
+        const geom = shape.geom;
     const data = geom.loadedVertexData;
     const vertexCount = data.totalVertexCount;
 
@@ -208,15 +303,27 @@ function extractShapeStreams(shape: Shape): Omit<ExtractedPrimitive, 'material' 
 
     for (let i = 0; i < vertexCount; i++) {
         const pos = readFormatComponents(posBuffer, posInput.bufferOffset + i * posStride, posInput.format);
-        positions[i * 3 + 0] = pos[0] ?? 0;
-        positions[i * 3 + 1] = pos[1] ?? 0;
-        positions[i * 3 + 2] = pos[2] ?? 0;
+        const skinMtx = getSkinBakeMatrixForVertex(shape, pos, matrixPalette);
+        writeMatrixTransformedPosition(
+            positions,
+            i * 3,
+            pos[0] ?? 0,
+            pos[1] ?? 0,
+            pos[2] ?? 0,
+            skinMtx,
+        );
 
         if (normals && nrmInput && nrmBuffer) {
             const nrm = readFormatComponents(nrmBuffer, nrmInput.bufferOffset + i * nrmStride, nrmInput.format);
-            normals[i * 3 + 0] = nrm[0] ?? 0;
-            normals[i * 3 + 1] = nrm[1] ?? 0;
-            normals[i * 3 + 2] = nrm[2] ?? 0;
+
+            writeMatrixTransformedNormal(
+                normals,
+                i * 3,
+                nrm[0] ?? 0,
+                nrm[1] ?? 0,
+                nrm[2] ?? 0,
+                skinMtx,
+            );
         }
 
         if (texcoords && texInput && texBuffer) {
@@ -249,12 +356,19 @@ function extractShapeStreams(shape: Shape): Omit<ExtractedPrimitive, 'material' 
     };
 }
 
-function flattenModelShapes(modelShapes: ModelShapes): Shape[] {
+function flattenModelShapes(modelShapes: ModelShapes, options: GLTFExportOptions = {}): Shape[] {
     const out: Shape[] = [];
 
     for (const bucket of modelShapes.shapes) {
-        if (!bucket) continue;
+        if (!bucket)
+            continue;
+
         for (const shape of bucket)
+            out.push(shape);
+    }
+
+    if (options.includeWaters !== false) {
+        for (const shape of modelShapes.waters)
             out.push(shape);
     }
 
@@ -789,12 +903,9 @@ const decodeGroup = async (
             for (let attempt = 0; attempt < 8; attempt++) {
                 await sleep(50);
 
-                // First try the same object again in case it updated in-place.
                 pngBytes = await textureObjectToPNGBytes(tex);
                 if (pngBytes)
                     break;
-
-                // Then re-fetch in case the fetcher now returns the real texture.
                 const refreshed = safeTryGetTexture(
                     texFetcher,
                     `${candidate.label} retry ${attempt}`,
@@ -831,12 +942,10 @@ const resolvedNonFallback = await decodeGroup(nonFallback);
 if (resolvedNonFallback.length > 0)
     return resolvedNonFallback;
 
-// Try fallback candidates too, because some of them are only temporary placeholders
-// while the real DP/SFA texture finishes loading asynchronously.
+
 const resolvedFallback = await decodeGroup(fallback);
 
-// For SFA, only accept fallback results if they turned into a real texture.
-// Keep rejecting tiny 2x2 placeholders.
+
 if (hint.gameFamily === 'sfa') {
     const usableFallback = resolvedFallback.filter((c) => !(c.width <= 2 && c.height <= 2));
     if (usableFallback.length > 0)
@@ -915,9 +1024,22 @@ async function getShapeMaterialInfo(
     fallbackTexFetcher: TextureFetcher,
     options: GLTFExportOptions = {},
     uvSetCount: number = 1,
+    isWater: boolean = false,
 ): Promise<ExportMaterialInfo> {
     const includeTextures = options.includeTextures ?? true;
     const textureLayerMode = options.textureLayerMode ?? 'auto';
+
+    if (isWater) {
+        return {
+            key: 'water:transparent-blue',
+            name: 'water_transparent',
+            baseColorFactor: [0.45, 0.85, 1.0, 0.45],
+            metallicFactor: 0,
+            roughnessFactor: 0.08,
+            alphaMode: 'BLEND',
+            doubleSided: true,
+        };
+    }
 
     if (!includeTextures)
         return { key: 'vcol-only', name: 'vertex_color' };
@@ -948,9 +1070,7 @@ for (const i of orderedLayerIndices) {
         const resolvedCandidates = await resolveTextureCandidates(texFetcher, materialFactory, hint);
 
         if (resolvedCandidates.length === 0) {
-            // Important SFA rule:
-            // if the first plausible/base layer fails, stop there instead of
-            // falling into later effect/detail layers that export incorrectly.
+
             if (gameFamily === 'sfa')
                 break;
 
@@ -980,10 +1100,13 @@ async function extractPrimitive(
     fallbackTexFetcher: TextureFetcher,
     name: string,
     options: GLTFExportOptions = {},
+    matrixPalette?: ReadonlyMat4[],
+    isWater: boolean = false,
 ): Promise<ExtractedPrimitive> {
-    const streams = extractShapeStreams(shape);
+        const streams = extractShapeStreams(shape, options.bakeSkinning ? matrixPalette : undefined);
+
     const uvSetCount = streams.texcoords1 ? 2 : (streams.texcoords ? 1 : 0);
-    const material = await getShapeMaterialInfo(shape, materialFactory, fallbackTexFetcher, options, uvSetCount);
+    const material = await getShapeMaterialInfo(shape, materialFactory, fallbackTexFetcher, options, uvSetCount, isWater);
 
     return {
         name,
@@ -1196,7 +1319,8 @@ export async function exportPlacedModelInstancesToGLB(
     for (const entry of entries) {
         entry.modelInst.prepareForExport();
         const modelShapes = entry.modelInst.getModelShapes();
-        const shapes = flattenModelShapes(modelShapes);
+        const waterShapes = new Set<Shape>(modelShapes.waters);
+        const shapes = flattenModelShapes(modelShapes, options);
         const primitives: any[] = [];
 
 for (let i = 0; i < shapes.length; i++) {
@@ -1205,17 +1329,19 @@ if ((i & 63) === 63)
 
     let primitive: ExtractedPrimitive;
     try {
-primitive = await extractPrimitive(
-    shapes[i],
-    materialFactory,
-    fallbackTexFetcher,
-    `${entry.name}_shape_${i}`,
-    options,
-);
+                primitive = await extractPrimitive(
+                    shapes[i],
+                    materialFactory,
+                    fallbackTexFetcher,
+                    `${entry.name}_shape_${i}`,
+                    options,
+                    entry.modelInst.matrixPalette,
+                    waterShapes.has(shapes[i]),
+                );
 } catch (e) {
     console.warn(`[GLTF export] Skipping texture resolution failure on ${entry.name}_shape_${i}`, e);
 
-    const streams = extractShapeStreams(shapes[i]);
+                    const streams = extractShapeStreams(shapes[i], options.bakeSkinning ? entry.modelInst.matrixPalette : undefined);
     primitive = {
         name: `${entry.name}_shape_${i}`,
         ...streams,
@@ -1331,14 +1457,23 @@ if (primitive.texcoords1) {
                     baseColorTexture = gltf.textures.push({ sampler: 0, source: imageIndex, name: primitive.material.name }) - 1;
                 }
 
-const alphaInfo = await analyzeTextureAlpha(primitive.material.baseColorTextureBytes);
+const analyzedAlphaInfo = await analyzeTextureAlpha(primitive.material.baseColorTextureBytes);
 
-materialIndex = gltf.materials.push({
+const baseColorFactor: [number, number, number, number] =
+    primitive.material.baseColorFactor ?? [1, 1, 1, 1];
+
+let alphaMode: GLTFAlphaMode =
+    primitive.material.alphaMode ?? analyzedAlphaInfo.alphaMode ?? 'OPAQUE';
+
+if (baseColorFactor[3] < 0.999 && alphaMode === 'OPAQUE')
+    alphaMode = 'BLEND';
+
+const materialDef: any = {
     name: primitive.material.name,
     pbrMetallicRoughness: {
-        baseColorFactor: [1, 1, 1, 1],
-        metallicFactor: 0,
-        roughnessFactor: 1,
+        baseColorFactor,
+        metallicFactor: primitive.material.metallicFactor ?? 0,
+        roughnessFactor: primitive.material.roughnessFactor ?? 1,
         ...(baseColorTexture !== undefined ? {
             baseColorTexture: {
                 index: baseColorTexture,
@@ -1346,10 +1481,17 @@ materialIndex = gltf.materials.push({
             },
         } : {}),
     },
-    ...(alphaInfo.alphaMode && alphaInfo.alphaMode !== 'OPAQUE' ? { alphaMode: alphaInfo.alphaMode } : {}),
-    ...(alphaInfo.alphaMode === 'MASK' ? { alphaCutoff: alphaInfo.alphaCutoff ?? 0.5 } : {}),
-    doubleSided: alphaInfo.doubleSided ?? false,
-}) - 1;
+
+    doubleSided: primitive.material.doubleSided ?? true,
+};
+
+if (alphaMode !== 'OPAQUE')
+    materialDef.alphaMode = alphaMode;
+
+if (alphaMode === 'MASK')
+    materialDef.alphaCutoff = primitive.material.alphaCutoff ?? analyzedAlphaInfo.alphaCutoff ?? 0.5;
+
+materialIndex = gltf.materials.push(materialDef) - 1;
                 materialCache.set(primitive.material.key, materialIndex);
             }
 
@@ -1363,7 +1505,16 @@ materialIndex = gltf.materials.push({
 
         const meshIndex = gltf.meshes.push({ name: entry.name, primitives }) - 1;
         const nodeMatrix = buildNodeMatrix(entry.placementMatrix, entry.modelInst);
-        const nodeIndex = gltf.nodes.push({ name: entry.name, mesh: meshIndex, matrix: mat4ToArray(nodeMatrix) }) - 1;
+const nodeDef: any = {
+    name: entry.name,
+    mesh: meshIndex,
+    matrix: mat4ToArray(nodeMatrix),
+};
+
+if (entry.extras !== undefined)
+    nodeDef.extras = entry.extras;
+
+const nodeIndex = gltf.nodes.push(nodeDef) - 1;
         gltf.scenes[0].nodes.push(nodeIndex);
     }
 

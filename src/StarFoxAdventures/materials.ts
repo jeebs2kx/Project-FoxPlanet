@@ -84,12 +84,12 @@ export enum ShaderFlags {
     Water = 0x80000000,
 }
 
-const FORCE_MASKED_DP_TEXIDS = new Set<number>([
-    430,
-    575,
-    551,
-    655,
-    579,
+const FORCE_MASKED_DP_TEXIDS = new Set([
+    430, 575, 551, 655, 579,
+    1701,
+    87, 88, 89, 90, 91, 92, 93, 94, 95, 96,
+    97, 98, 99, 100, 101, 102, 103,
+    106, 107, 108, 109,
 ]);
 
 export function makeMaterialTexture(texture: SFATexture | null): TexFunc<any> {

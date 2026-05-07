@@ -17,7 +17,9 @@ import { ModelVersion, loadModel } from "./modelloader.js";import { SFARenderer,
 import { BlockFetcher, SFABlockFetcher, SwapcircleBlockFetcher, AncientBlockFetcher, EARLYDFPT, EARLYFEAR, EARLYDUPBLOCKFETCHER, EARLY1BLOCKFETCHER, EARLY2BLOCKFETCHER, EARLY3BLOCKFETCHER, EARLY4BLOCKFETCHER, DPBlockFetcher  } from './blocks.js';
 import { SFA_GAME_INFO, SFADEMO_GAME_INFO, DP_GAME_INFO, GameInfo } from './scenes.js';
 import { MaterialFactory } from './materials.js';
-import { SFAAnimationController, ModanimCollection, AmapCollection, AnimCollection } from './animation.js';import { SFATextureFetcher, FakeTextureFetcher, TextureFetcher } from './textures.js';import { Model, ModelRenderContext, ModelInstance, ModelFetcher, ModelShapes } from './models.js';import { World } from './world.js';
+import { SFAAnimationController, ModanimCollection, AmapCollection, AnimCollection, applyAnimationToModel } from './animation.js';
+import { SFATextureFetcher, FakeTextureFetcher, TextureFetcher } from './textures.js';import { Model, ModelRenderContext, ModelInstance, ModelFetcher, ModelShapes } from './models.js';
+import { World } from './world.js';
 import { EnvfxManager } from './envfx.js';
 import { drawDPMinimap } from './dp_minimap.js';
 import { AABB } from '../Geometry.js';
@@ -5665,11 +5667,17 @@ private async scanSFAUnusedBlocks(): Promise<void> {
 public async exportCurrentMapGLB(
     includeTextures: boolean = true,
     textureLayerMode: 'auto' | 'tex0' | 'tex1' | 'last' = 'auto',
+    includeObjects: boolean = false,
 ): Promise<void> {
     if (!this.currentTexFetcher)
         return;
 
-    const entries: Array<{ name: string; modelInst: ModelInstance; placementMatrix: mat4 }> = [];
+const entries: Array<{
+    name: string;
+    modelInst: ModelInstance;
+    placementMatrix: mat4;
+    extras?: any;
+}> = [];
     const mapMatrix = this.map.getMapMatrix();
 
     for (const b of this.map.iterateBlocks()) {
@@ -5703,30 +5711,160 @@ public async exportCurrentMapGLB(
 
         mat4.mul(placement, mapMatrix, placement);
 
-        entries.push({
-            name: `block_${b.z}_${b.x}`,
-            modelInst: b.block,
-            placementMatrix: placement,
-        });
+const blockInfo = this.map.info.getBlockInfoAt(b.x, b.z);
+const isAncientMap = String(this.mapNum).startsWith('ancient_');
+
+entries.push({
+    name: blockInfo
+        ? `block_${b.z}_${b.x}_m${blockInfo.mod}_${blockInfo.sub}`
+        : `block_${b.z}_${b.x}`,
+    modelInst: b.block,
+    placementMatrix: placement,
+
+    extras: blockInfo ? {
+        foxplanet: {
+            mapKind: isAncientMap ? 'ancient' : 'map',
+            modelVersion: isAncientMap ? 'AncientMap' : undefined,
+            mapNum: this.mapNum,
+            row: b.z,
+            col: b.x,
+            mod: blockInfo.mod,
+            sub: blockInfo.sub,
+            blockSize: 640,
+        },
+    } : undefined,
+});
+    }
+
+    if (includeObjects && this.isDPMapScene) {
+        let exportedObjects = 0;
+        let skippedDevObjects = 0;
+        let bakedAnimatedObjects = 0;
+
+        for (let i = 0; i < this.map.objects.length; i++) {
+            const obj = this.map.objects[i] as any;
+            const typeNum = (((obj._dpTypeNum ?? -1) as number) & 0xFFFF);
+
+            let objType: any = null;
+            try {
+                objType = this.map.mapOpts?.objectManager?.getObjectType?.(typeNum, false) ?? null;
+            } catch {
+                objType = null;
+            }
+
+            const labelNameRaw = String(
+                obj._dpLabelName ??
+                objType?.name ??
+                objType?.objName ??
+                `type_${dpHex(typeNum)}`
+            );
+
+            const labelNameLower = labelNameRaw.toLowerCase();
+
+            const isDevObject =
+                !!obj._isDevDP ||
+                !!objType?.isDevObject ||
+                DP_DEV_TYPE_NUMS.has(typeNum) ||
+                DP_DEV_NAME_KEYWORDS.some((k) => labelNameLower.includes(k));
+
+            if (isDevObject) {
+                skippedDevObjects++;
+                continue;
+            }
+
+            const modelInst = obj.modelInst as ModelInstance | null | undefined;
+            if (!modelInst)
+                continue;
+
+            const model: any = modelInst.model;
+
+            const hasJoints =
+                Array.isArray(model.joints) &&
+                model.joints.length > 0;
+
+            const hasCoarseBlends =
+                Array.isArray(model.coarseBlends) &&
+                model.coarseBlends.length > 0;
+
+            const hasFineSkinning =
+                !!model.hasFineSkinning ||
+                !!model.hasBetaFineSkinning;
+
+            if (hasJoints || hasCoarseBlends || hasFineSkinning)
+                bakedAnimatedObjects++;
+
+            const anim = obj.anim ?? null;
+            const modelAnimNum = obj.modelAnimNum ?? null;
+
+            if (
+                anim !== null &&
+                modelAnimNum !== null &&
+                (!modelInst.model.hasFineSkinning || this.animController.enableFineSkinAnims)
+            ) {
+                applyAnimationToModel(
+                    this.animController.animController.getTimeInFrames() * obj.animSpeed,
+                    modelInst,
+                    anim,
+                    modelAnimNum,
+                );
+            }
+
+            if (typeof (modelInst as any).prepareForExport === 'function')
+                (modelInst as any).prepareForExport();
+
+            const placement = mat4.create();
+
+            mat4.fromTranslation(placement, obj.position);
+            mat4.rotateY(placement, placement, obj.yaw);
+
+            if (typeNum === 0x01D3)
+                mat4.rotateX(placement, placement, Math.PI * 0.5);
+
+            const scale = Number(obj._dpScale ?? 1.0);
+            if (Number.isFinite(scale) && scale !== 1.0)
+                mat4.scale(placement, placement, [scale, scale, scale]);
+
+            mat4.mul(placement, mapMatrix, placement);
+
+            const safeObjectName = labelNameRaw
+                .replace(/[^A-Za-z0-9._-]+/g, '_')
+                .replace(/^_+|_+$/g, '') || `type_${dpHex(typeNum)}`;
+
+            entries.push({
+                name: `object_${i}_0x${dpHex(typeNum)}_${safeObjectName}`,
+                modelInst,
+                placementMatrix: placement,
+            });
+
+            exportedObjects++;
+        }
+
+        console.log(
+            `[DP GLB Export] Exported ${exportedObjects} object(s), skipped ${skippedDevObjects} dev object(s), baked ${bakedAnimatedObjects} animated/skinned object(s).`,
+        );
     }
 
     if (entries.length === 0)
         return;
 
     const safeMapName = String(this.mapNum ?? 'map').replace(/[^A-Za-z0-9._-]+/g, '_');
-    const suffix = includeTextures ? `_textured_${textureLayerMode}` : '_fast';
+    const suffix = `${includeObjects ? '_objects' : ''}${includeTextures ? `_textured_${textureLayerMode}` : '_fast'}`;
 
     await exportPlacedModelInstancesToGLB(
         `map_${safeMapName}${suffix}.glb`,
         entries,
         this.materialFactory,
         this.currentTexFetcher,
-        { includeTextures, textureLayerMode },
+                { includeTextures, textureLayerMode, includeWaters: true, bakeSkinning: includeObjects },
+
     );
 }
 
 protected override update(viewerInput: Viewer.ViewerRenderInput) {
     super.update(viewerInput);
+
+    syncTextureToggleUIVisibility();
+
     this.materialFactory.update(this.animController);
 
     if (this.envfxMan) {
@@ -6010,6 +6148,18 @@ function cleanupTextureToggleUI(): void {
 
     state?.wrap?.remove();
     (window as any).__sfaTextureToggle = undefined;
+}
+
+function syncTextureToggleUIVisibility(): void {
+    const state = (window as any).__sfaTextureToggle as {
+        wrap?: HTMLDivElement;
+    } | undefined;
+
+    if (!state?.wrap)
+        return;
+
+    const uiVisible = (((window as any).main?.ui?.isVisible) ?? true) !== false;
+    state.wrap.style.display = uiVisible ? '' : 'none';
 }
 
 function getDPTopToggleBar(): HTMLDivElement {
@@ -6371,9 +6521,10 @@ function ensureDPFbfxUI(
 }
 
 function ensureDPExportUI(
-  onExport: (includeTextures: boolean, textureLayerMode: 'auto' | 'tex0' | 'tex1' | 'last') => void | Promise<void>,
+  onExport: (includeTextures: boolean, textureLayerMode: 'auto' | 'tex0' | 'tex1' | 'last', includeObjects: boolean) => void | Promise<void>,
   initialOpen: boolean = false
 ): void {
+
   type ExportUIState = {
     toggleWrap: HTMLDivElement;
     panel: HTMLDivElement;
@@ -6381,9 +6532,13 @@ function ensureDPExportUI(
     layerModeSelect: HTMLSelectElement;
     exportFastButton: HTMLButtonElement;
     exportTexturedButton: HTMLButtonElement;
+    exportObjectsFastButton: HTMLButtonElement;
+    exportObjectsTexturedButton: HTMLButtonElement;
     handlerToggle: ((e: Event) => void) | null;
     handlerFast: ((e: Event) => void) | null;
     handlerTextured: ((e: Event) => void) | null;
+    handlerObjectsFast: ((e: Event) => void) | null;
+    handlerObjectsTextured: ((e: Event) => void) | null;
     open: boolean;
   };
 
@@ -6479,8 +6634,22 @@ function ensureDPExportUI(
     exportTexturedButton.style.marginBottom = '6px';
     panel.appendChild(exportTexturedButton);
 
+    const exportObjectsFastButton = document.createElement('button');
+    exportObjectsFastButton.textContent = 'Export Current DP Map + Objects as GLB';
+    exportObjectsFastButton.style.display = 'block';
+    exportObjectsFastButton.style.width = '100%';
+    exportObjectsFastButton.style.marginBottom = '6px';
+    panel.appendChild(exportObjectsFastButton);
+
+    const exportObjectsTexturedButton = document.createElement('button');
+    exportObjectsTexturedButton.textContent = 'Export Current DP Map + Objects as GLB (With Textures)';
+    exportObjectsTexturedButton.style.display = 'block';
+    exportObjectsTexturedButton.style.width = '100%';
+    exportObjectsTexturedButton.style.marginBottom = '6px';
+    panel.appendChild(exportObjectsTexturedButton);
+
     const exportNote = document.createElement('div');
-    exportNote.textContent = 'Auto usually prefers TEX1/UV1 when present.';
+    exportNote.textContent = 'Object export skips dev objects and bakes animated/skinned objects into their current pose.';
     exportNote.style.fontSize = '12px';
     exportNote.style.opacity = '0.8';
     panel.appendChild(exportNote);
@@ -6494,9 +6663,13 @@ function ensureDPExportUI(
       layerModeSelect,
       exportFastButton,
       exportTexturedButton,
+      exportObjectsFastButton,
+      exportObjectsTexturedButton,
       handlerToggle: null,
       handlerFast: null,
       handlerTextured: null,
+      handlerObjectsFast: null,
+      handlerObjectsTextured: null,
       open: false,
     };
 
@@ -6509,11 +6682,17 @@ function ensureDPExportUI(
     state.exportFastButton.removeEventListener('click', state.handlerFast);
   if (state.handlerTextured)
     state.exportTexturedButton.removeEventListener('click', state.handlerTextured);
+  if (state.handlerObjectsFast)
+    state.exportObjectsFastButton.removeEventListener('click', state.handlerObjectsFast);
+  if (state.handlerObjectsTextured)
+    state.exportObjectsTexturedButton.removeEventListener('click', state.handlerObjectsTextured);
 
   const setDisabled = (disabled: boolean) => {
     state!.layerModeSelect.disabled = disabled;
     state!.exportFastButton.disabled = disabled;
     state!.exportTexturedButton.disabled = disabled;
+    state!.exportObjectsFastButton.disabled = disabled;
+    state!.exportObjectsTexturedButton.disabled = disabled;
   };
 
   state.open = initialOpen;
@@ -6528,7 +6707,7 @@ function ensureDPExportUI(
   state.handlerFast = async () => {
     setDisabled(true);
     try {
-      await onExport(false, state!.layerModeSelect.value as 'auto' | 'tex0' | 'tex1' | 'last');
+      await onExport(false, state!.layerModeSelect.value as 'auto' | 'tex0' | 'tex1' | 'last', false);
     } finally {
       setDisabled(false);
     }
@@ -6537,7 +6716,25 @@ function ensureDPExportUI(
   state.handlerTextured = async () => {
     setDisabled(true);
     try {
-      await onExport(true, state!.layerModeSelect.value as 'auto' | 'tex0' | 'tex1' | 'last');
+      await onExport(true, state!.layerModeSelect.value as 'auto' | 'tex0' | 'tex1' | 'last', false);
+    } finally {
+      setDisabled(false);
+    }
+  };
+
+  state.handlerObjectsFast = async () => {
+    setDisabled(true);
+    try {
+      await onExport(false, state!.layerModeSelect.value as 'auto' | 'tex0' | 'tex1' | 'last', true);
+    } finally {
+      setDisabled(false);
+    }
+  };
+
+  state.handlerObjectsTextured = async () => {
+    setDisabled(true);
+    try {
+      await onExport(true, state!.layerModeSelect.value as 'auto' | 'tex0' | 'tex1' | 'last', true);
     } finally {
       setDisabled(false);
     }
@@ -6546,6 +6743,8 @@ function ensureDPExportUI(
   state.cb.addEventListener('change', state.handlerToggle);
   state.exportFastButton.addEventListener('click', state.handlerFast);
   state.exportTexturedButton.addEventListener('click', state.handlerTextured);
+  state.exportObjectsFastButton.addEventListener('click', state.handlerObjectsFast);
+  state.exportObjectsTexturedButton.addEventListener('click', state.handlerObjectsTextured);
 }
 
 function ensureDPObjectsUI(
@@ -6922,14 +7121,16 @@ function ensureTextureToggleUI(
     cb.type = 'checkbox';
     cb.style.marginRight = '2px';
 
-    label.appendChild(cb);
-    label.appendChild(document.createTextNode('Textures'));
-    wrap.appendChild(label);
-    document.body.appendChild(wrap);
+        label.appendChild(cb);
+        label.appendChild(document.createTextNode('Textures'));
+        wrap.appendChild(label);
+        document.body.appendChild(wrap);
 
-    state = { wrap, cb, handler: null, last: true };
-    (window as any).__sfaTextureToggle = state;
-  }
+        state = { wrap, cb, handler: null, last: true };
+        (window as any).__sfaTextureToggle = state;
+    }
+
+    syncTextureToggleUIVisibility();
 
   if (state.handler) state.cb.removeEventListener('change', state.handler);
 
@@ -7042,6 +7243,51 @@ getBlockInfoAt(col: number, row: number): BlockInfo | null {
   }
 }
 
+function setWarlockPngOverrides(
+    texFetcher: { setPngOverride: (id: number, path: string) => void },
+): void {
+    texFetcher.setPngOverride(619, 'textures/ribbon.png');
+
+    texFetcher.setPngOverride(618, 'textures/walls.png');
+    texFetcher.setPngOverride(617, 'textures/floor1.png');
+    texFetcher.setPngOverride(616, 'textures/pillar.png');
+    texFetcher.setPngOverride(615, 'textures/transwall.png');
+    texFetcher.setPngOverride(614, 'textures/support.png');
+    texFetcher.setPngOverride(613, 'textures/chain.png');
+    texFetcher.setPngOverride(612, 'textures/head.png');
+    texFetcher.setPngOverride(611, 'textures/krazfloor.png');
+    texFetcher.setPngOverride(610, 'textures/decor1.png');
+    texFetcher.setPngOverride(609, 'textures/floor2.png');
+    texFetcher.setPngOverride(608, 'textures/ceiling1.png');
+    texFetcher.setPngOverride(607, 'textures/walls2.png');
+    texFetcher.setPngOverride(606, 'textures/pillar2.png');
+    texFetcher.setPngOverride(605, 'textures/wood.png');
+    texFetcher.setPngOverride(604, 'textures/button.png');
+    texFetcher.setPngOverride(603, 'textures/sash.png');
+    texFetcher.setPngOverride(602, 'textures/floor3.png');
+    texFetcher.setPngOverride(601, 'textures/vines.png');
+    texFetcher.setPngOverride(600, 'textures/walls3.png');
+    texFetcher.setPngOverride(599, 'textures/block.png');
+    texFetcher.setPngOverride(598, 'textures/innerdoor.png');
+    texFetcher.setPngOverride(597, 'textures/stained.png');
+    texFetcher.setPngOverride(596, 'textures/spire.png');
+    texFetcher.setPngOverride(595, 'textures/crates.png');
+
+    texFetcher.setPngOverride(591, 'textures/sabrestart.png');
+    texFetcher.setPngOverride(590, 'textures/walls4.png');
+    texFetcher.setPngOverride(589, 'textures/floor4.png');
+    texFetcher.setPngOverride(588, 'textures/floor5.png');
+    texFetcher.setPngOverride(587, 'textures/walls5.png');
+    texFetcher.setPngOverride(586, 'textures/kraz.png');
+    texFetcher.setPngOverride(585, 'textures/black.png');
+    texFetcher.setPngOverride(584, 'textures/transring.png');
+    texFetcher.setPngOverride(583, 'textures/spire2.png');
+    texFetcher.setPngOverride(582, 'textures/kraz2.png');
+    texFetcher.setPngOverride(581, 'textures/kraz3.png');
+    texFetcher.setPngOverride(580, 'textures/port.png');
+    texFetcher.setPngOverride(579, 'textures/floor6.png');
+}
+
 const ANCIENT_TEXTURE_FOLDERS: Record<string, string[]> = {
   "0": ["willow"],
   "2": ["icemountain"],
@@ -7134,44 +7380,7 @@ if (Number(this.mapKey) !== 0) {
     await texFetcher.loadSubdirs(folders, dataFetcher);
 }
 if (Number(this.mapKey) === 5) {
- texFetcher.setPngOverride(4100, 'textures/ribbon.png');
-texFetcher.setPngOverride(618, 'textures/walls.png');
-texFetcher.setPngOverride(617, 'textures/floor1.png');
-texFetcher.setPngOverride(616, 'textures/pillar.png');
-texFetcher.setPngOverride(615, 'textures/transwall.png');
-texFetcher.setPngOverride(614, 'textures/support.png');
-texFetcher.setPngOverride(613, 'textures/chain.png');
-texFetcher.setPngOverride(612, 'textures/head.png');
-texFetcher.setPngOverride(611, 'textures/krazfloor.png');
-texFetcher.setPngOverride(610, 'textures/decor1.png');
-texFetcher.setPngOverride(609, 'textures/floor2.png');
-texFetcher.setPngOverride(608, 'textures/ceiling1.png');
-texFetcher.setPngOverride(607, 'textures/walls2.png');
-texFetcher.setPngOverride(606, 'textures/pillar2.png');
-texFetcher.setPngOverride(605, 'textures/wood.png');
-texFetcher.setPngOverride(604, 'textures/button.png');
-texFetcher.setPngOverride(603, 'textures/sash.png');
-texFetcher.setPngOverride(602, 'textures/floor3.png');
-texFetcher.setPngOverride(601, 'textures/vines.png');
-texFetcher.setPngOverride(600, 'textures/walls3.png');
-texFetcher.setPngOverride(599, 'textures/block.png');
-texFetcher.setPngOverride(598, 'textures/innerdoor.png');
-texFetcher.setPngOverride(597, 'textures/stained.png');
-texFetcher.setPngOverride(596, 'textures/spire.png');
-texFetcher.setPngOverride(595, 'textures/crates.png');
-texFetcher.setPngOverride(591, 'textures/sabrestart.png');
-texFetcher.setPngOverride(590, 'textures/walls4.png');
-texFetcher.setPngOverride(589, 'textures/floor4.png');
-texFetcher.setPngOverride(588, 'textures/floor5.png');
-texFetcher.setPngOverride(587, 'textures/walls5.png');
-texFetcher.setPngOverride(586, 'textures/kraz.png');
-texFetcher.setPngOverride(585, 'textures/black.png');
-texFetcher.setPngOverride(584, 'textures/transring.png');
-texFetcher.setPngOverride(583, 'textures/spire2.png');
-texFetcher.setPngOverride(582, 'textures/kraz2.png');
-texFetcher.setPngOverride(581, 'textures/kraz3.png');
-texFetcher.setPngOverride(580, 'textures/port.png');
-texFetcher.setPngOverride(579, 'textures/floor6.png');
+    setWarlockPngOverrides(texFetcher);
 }
 if (Number(this.mapKey) === 6) {
 texFetcher.setPngOverride(3001, 'textures/shoppurple.png'); 
@@ -9843,8 +10052,8 @@ public async createScene(device: GfxDevice, context: SceneContext): Promise<View
         const mapRenderer = new MapSceneRenderer(context, animController, materialFactory);  
         (mapRenderer as any).mapNum = `dp_${this.mapNum}`;   
         mapRenderer.dpMinimapMapId = this.mapNum;   
-        const texFetcher = await SFATextureFetcher.create(gInfo, context.dataFetcher, false);
-        texFetcher.setModelVersion(ModelVersion.DinosaurPlanet);
+const texFetcher = await SFATextureFetcher.create(gInfo, context.dataFetcher, false);
+texFetcher.setModelVersion(ModelVersion.DinosaurPlanet);
 
         const dpModelFetcher = new PreloadingDPModelFetcher(gInfo, context.dataFetcher, texFetcher, materialFactory);
         await dpModelFetcher.init();
@@ -10090,8 +10299,8 @@ ensureDPCullUI(async (enabled: boolean) => {
     await mapRenderer.reloadForTextureToggle();
 }, false);
 
-ensureDPExportUI(async (includeTextures, textureLayerMode) => {
-    await mapRenderer.exportCurrentMapGLB(includeTextures, textureLayerMode);
+ensureDPExportUI(async (includeTextures, textureLayerMode, includeObjects) => {
+    await mapRenderer.exportCurrentMapGLB(includeTextures, textureLayerMode, includeObjects);
 }, false);
 
 ensureDPFbfxUI(async (effectId: number) => {

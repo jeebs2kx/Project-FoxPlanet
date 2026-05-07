@@ -21,7 +21,7 @@ import { MapInstance, loadMap, cleanupDPBlockGalleryUI } from './maps.js';
 import { dataSubarray, mat4SetTranslation, readVec3 } from './util.js';
 import { Model, ModelInstance, ModelRenderContext } from './models.js';
 import { MaterialFactory } from './materials.js';
-import { SFAAnimationController } from './animation.js';
+import { SFAAnimationController, applyAnimationToModel } from './animation.js';
 import { Sky } from './Sky.js';
 import { LightType, WorldLights } from './WorldLights.js';
 import { SFATextureFetcher } from './textures.js';
@@ -149,6 +149,18 @@ function cleanupSFAHitsToggleUI(): void {
     (window as any).__sfaHitsToggle = undefined;
 }
 
+function syncSFAHitsToggleUIVisibility(): void {
+    const state = (window as any).__sfaHitsToggle as {
+        wrap?: HTMLDivElement;
+    } | undefined;
+
+    if (!state?.wrap)
+        return;
+
+    const uiVisible = (((window as any).main?.ui?.isVisible) ?? true) !== false;
+    state.wrap.style.display = uiVisible ? '' : 'none';
+}
+
 function ensureSFAHitsToggleUI(
     onChange: (enabled: boolean) => void | Promise<void>,
     initial?: boolean
@@ -189,6 +201,8 @@ function ensureSFAHitsToggleUI(
         state = { wrap, cb, handler: null, last: false };
         (window as any).__sfaHitsToggle = state;
     }
+
+    syncSFAHitsToggleUIVisibility();
 
     if (state.handler)
         state.cb.removeEventListener('change', state.handler);
@@ -722,14 +736,26 @@ exportTexturedButton.textContent = 'Export Current World Map as GLB (With Textur
 exportTexturedButton.style.display = 'block';
 exportTexturedButton.style.marginBottom = '6px';
 
+const exportObjectsFastButton = document.createElement('button');
+exportObjectsFastButton.textContent = 'Export Current World Map + Objects as GLB (Fast)';
+exportObjectsFastButton.style.display = 'block';
+exportObjectsFastButton.style.marginBottom = '6px';
+
+const exportObjectsTexturedButton = document.createElement('button');
+exportObjectsTexturedButton.textContent = 'Export Current World Map + Objects as GLB (With Textures)';
+exportObjectsTexturedButton.style.display = 'block';
+exportObjectsTexturedButton.style.marginBottom = '6px';
+
 const exportNote = document.createElement('div');
-exportNote.textContent = 'Textured export may take a couple of minutes. Auto usually prefers TEX1/UV1 when present.';
+exportNote.textContent = 'Textured export may take a couple of minutes. Object export skips dev objects and bakes animated/skinned objects into their current pose.';
 exportNote.style.fontSize = '12px';
 exportNote.style.opacity = '0.8';
 
 const setExportButtonsDisabled = (disabled: boolean) => {
     exportFastButton.disabled = disabled;
     exportTexturedButton.disabled = disabled;
+    exportObjectsFastButton.disabled = disabled;
+    exportObjectsTexturedButton.disabled = disabled;
     layerModeSelect.disabled = disabled;
 };
 
@@ -745,7 +771,25 @@ exportFastButton.onclick = async () => {
 exportTexturedButton.onclick = async () => {
     setExportButtonsDisabled(true);
     try {
-        await this.exportCurrentWorldMapGLB(true, layerModeSelect.value as 'auto' | 'tex0' | 'tex1' | 'last');
+        await this.exportCurrentWorldMapGLB(true, layerModeSelect.value as 'auto' | 'tex0' | 'tex1' | 'last', false);
+    } finally {
+        setExportButtonsDisabled(false);
+    }
+};
+
+exportObjectsFastButton.onclick = async () => {
+    setExportButtonsDisabled(true);
+    try {
+        await this.exportCurrentWorldMapGLB(false, layerModeSelect.value as 'auto' | 'tex0' | 'tex1' | 'last', true);
+    } finally {
+        setExportButtonsDisabled(false);
+    }
+};
+
+exportObjectsTexturedButton.onclick = async () => {
+    setExportButtonsDisabled(true);
+    try {
+        await this.exportCurrentWorldMapGLB(true, layerModeSelect.value as 'auto' | 'tex0' | 'tex1' | 'last', true);
     } finally {
         setExportButtonsDisabled(false);
     }
@@ -755,6 +799,8 @@ exportPanel.contents.append(layerModeLabel);
 exportPanel.contents.append(layerModeSelect);
 exportPanel.contents.append(exportFastButton);
 exportPanel.contents.append(exportTexturedButton);
+exportPanel.contents.append(exportObjectsFastButton);
+exportPanel.contents.append(exportObjectsTexturedButton);
 exportPanel.contents.append(exportNote);
 
 return [timePanel, layerPanel, objectPanel, exportPanel];
@@ -1021,6 +1067,7 @@ private focusCameraOnInspectableObject(obj: ObjectInstance): void {
 public async exportCurrentWorldMapGLB(
     includeTextures: boolean = true,
     textureLayerMode: 'auto' | 'tex0' | 'tex1' | 'last' = 'auto',
+    includeObjects: boolean = false,
 ): Promise<void> {
     const map = this.world.mapInstance;
     if (!map)
@@ -1041,18 +1088,98 @@ public async exportCurrentWorldMapGLB(
         });
     }
 
+    if (includeObjects) {
+        let exportedObjects = 0;
+        let skippedDevObjects = 0;
+        let bakedAnimatedObjects = 0;
+        const currentLayer = this.layerSelect.getValue();
+
+        for (let i = 0; i < this.world.objectInstances.length; i++) {
+            const obj = this.world.objectInstances[i];
+            const objType = obj.getType();
+
+            // Do not export map editor/dev markers, trigger arrows, curve helpers, etc.
+            if (objType.isDevObject) {
+                skippedDevObjects++;
+                continue;
+            }
+
+            // Match what the viewer is showing for the selected layer.
+            if (!obj.isInLayer(currentLayer))
+                continue;
+
+            if (obj.modelInst === null)
+                continue;
+
+            const model: any = obj.modelInst.model;
+
+            const hasJoints =
+                Array.isArray(model.joints) &&
+                model.joints.length > 0;
+
+            const hasCoarseBlends =
+                Array.isArray(model.coarseBlends) &&
+                model.coarseBlends.length > 0;
+
+            const hasFineSkinning =
+                !!model.hasFineSkinning ||
+                !!model.hasBetaFineSkinning;
+
+            if (hasJoints || hasCoarseBlends || hasFineSkinning)
+                bakedAnimatedObjects++;
+
+            const objAny = obj as any;
+            const anim = objAny.anim ?? null;
+            const modelAnimNum = objAny.modelAnimNum ?? null;
+
+            if (
+                anim !== null &&
+                modelAnimNum !== null &&
+                obj.modelInst !== null &&
+                (!obj.modelInst.model.hasFineSkinning || this.world.animController.enableFineSkinAnims)
+            ) {
+                applyAnimationToModel(
+                    this.world.animController.animController.getTimeInFrames() * obj.animSpeed,
+                    obj.modelInst,
+                    anim,
+                    modelAnimNum,
+                );
+            }
+
+            if (typeof (obj.modelInst as any).prepareForExport === 'function')
+                (obj.modelInst as any).prepareForExport();
+
+            const placement = mat4.create();
+            obj.getWorldSRT(placement);
+
+            const safeName = obj.getName().replace(/[^A-Za-z0-9._-]+/g, '_');
+
+            entries.push({
+                name: `object_${i}_${safeName}`,
+                modelInst: obj.modelInst,
+                placementMatrix: placement,
+            });
+
+            exportedObjects++;
+        }
+
+        console.log(
+            `[GLB Export] Exported ${exportedObjects} object(s), skipped ${skippedDevObjects} dev object(s), baked ${bakedAnimatedObjects} animated/skinned object(s).`,
+        );
+    }
+
     if (entries.length === 0)
         return;
 
     const safeWorldName = (this.world.subdirs.join('_') || 'world').replace(/[^A-Za-z0-9._-]+/g, '_');
-    const suffix = includeTextures ? `_textured_${textureLayerMode}` : '_fast';
+    const suffix = `${includeObjects ? '_objects' : ''}${includeTextures ? `_textured_${textureLayerMode}` : '_fast'}`;
 
     await exportPlacedModelInstancesToGLB(
         `world_${safeWorldName}${suffix}.glb`,
         entries,
         this.materialFactory,
         this.world.resColl.texFetcher,
-        { includeTextures, textureLayerMode },
+                        { includeTextures, textureLayerMode, includeWaters: true, bakeSkinning: includeObjects },
     );
 }
 
@@ -1242,6 +1369,8 @@ private drawHitOverlay(viewerInput: Viewer.ViewerRenderInput): void {
 
     protected override update(viewerInput: Viewer.ViewerRenderInput) {
         super.update(viewerInput);
+
+        syncSFAHitsToggleUIVisibility();
 
         this.materialFactory.update(this.animController);
 
