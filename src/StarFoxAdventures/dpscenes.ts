@@ -237,8 +237,8 @@ makeLazyDPBlockGallerySceneDesc('dp_block_gallery', 'DP: Block Gallery', DP_GAME
 makeLazyDPTriggerBrowserSceneDesc('dp_trigger_browser', 'DP: Trigger Browser', DP_GAME_INFO),
 makeLazyDPWarpSetupBrowserSceneDesc('dp_warp_setup_browser', 'DP: Warp + Setup Browser', DP_GAME_INFO),
 makeLazyDPGlobalWorldExplorerSceneDesc('dp_global_world_explorer', 'DP: Global World Explorer', DP_GAME_INFO),
-'Cutscenes & Sequences',    // NOT FINISHED
-  makeLazyDPSequenceSceneDesc(65, 'dp_seq_0', 'DP Sequence: 0 (Test/Intro)', DP_GAME_INFO),
+//'Cutscenes & Sequences',    // NOT FINISHED
+  // makeLazyDPSequenceSceneDesc(65, 'dp_seq_0', 'DP Sequence: 0 (Test/Intro)', DP_GAME_INFO),
 
 ];
 

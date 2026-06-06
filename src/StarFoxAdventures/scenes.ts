@@ -2,7 +2,9 @@ import * as Viewer from '../viewer.js';
 
 import { SFAMapSceneDesc, SFABlockGallerySceneDesc,SFAUnusedHitsCompareSceneDesc, SFADPHitsCompareSceneDesc, SwapcircleSceneDesc, AncientMapSceneDesc, EarlydupMapSceneDesc, EarlyfearMapSceneDesc, EarlyDFPMapSceneDesc, Early1MapSceneDesc, Early2MapSceneDesc, Early3MapSceneDesc, Early4MapSceneDesc, Mod49SceneDesc } from './maps.js';
 import { SFAWorldSceneDesc, SFAFullFinalWorldSceneDesc } from './world.js';
-import { SFAModelExhibitSceneDesc, SFATextureExhibitSceneDesc } from './modelexhibit.js';import { ModelVersion } from './modelloader.js';
+import { SFAModelExhibitSceneDesc, SFATextureExhibitSceneDesc } from './modelexhibit.js';
+import { ModelVersion } from './modelloader.js';
+import { DKRTrackNativeSceneDesc } from './dkrtracks_native.js';
 import { EARLYFEAR } from './blocks.js';
 import { Early1FinalMapConverterSceneDesc } from './early1_finalmap_converter_ui.js';
 export interface GameInfo {
@@ -194,6 +196,7 @@ const KIOSK_TEXTURE_EXHIBIT_SUBDIRS = [...new Set(
     )
 )].sort((a, b) => a.localeCompare(b));
 
+
 const ANCIENT_DP_GAME_INFO: GameInfo = {
     pathBase: 'StarFoxAdventuresDemo',
     subdirs: [], // N/A
@@ -240,7 +243,7 @@ new EarlyfearMapSceneDesc(33, 'demo33', 'Very Early 2001: Test of Fear (T)', SFA
     new AncientMapSceneDesc('ancient15', "Ancient Boss T-rex", ANCIENT_DP_GAME_INFO, 15),
 
     'Early/Mid 2001 Maps',
-    new Early1MapSceneDesc(35, 'demo26', 'Mid 2001: Animtest', SFADEMO_GAME_INFO),
+    new Early1MapSceneDesc(26, 'demo26', 'Mid 2001: Animtest', SFADEMO_GAME_INFO),
     new Early1MapSceneDesc(18, 'demo18', 'Mid 2001: Moon Mountain Pass (T)', SFADEMO_GAME_INFO),
     new Early1MapSceneDesc(7, 'demo7', 'Mid 2001: ThornTail Hollow (T)', SFADEMO_GAME_INFO),
     new EarlydupMapSceneDesc(7, 'demo7', 'Mid 2001: ThornTail Hollow (Copy of Swaphol map) (T)', SFADEMO_GAME_INFO),
@@ -336,6 +339,7 @@ new EarlyfearMapSceneDesc(33, 'demo33', 'Very Early 2001: Test of Fear (T)', SFA
     new Early4MapSceneDesc(12, 'demo12', 'Early 2002: CloudRunner Fortress (T)', SFADEMO_GAME_INFO),
     new Early4MapSceneDesc(63, 'demo63', 'Early 2002: Title Screen (T)', SFADEMO_GAME_INFO),
     new Early4MapSceneDesc(59, 'demo59', 'Early 2002: Arwing to Darkice', SFADEMO_GAME_INFO),
+    new Early4MapSceneDesc(26, 'demo59', 'Early 2002: Animtest', SFADEMO_GAME_INFO),
 
 
     'Kiosk Maps',
@@ -450,6 +454,13 @@ new SFAWorldSceneDesc('dragbot', 'dragrockbot', 52, 'Kiosk: Dragon Rock Bot', SF
     new SFAWorldSceneDesc('animtest', 'animtest', 26, 'Test Map (animtest)'),
     new SFAWorldSceneDesc('animtest', 'bossgaldon', 28, 'Boss Galdon'),
     new SFAWorldSceneDesc('arwingdragon', 'arwingdragon', 62, 'Arwing to Dragon Rock', ),
+
+'BONUS MAPS - from Kiosk TRACKS.bin',
+new DKRTrackNativeSceneDesc('dkr_track_00_native', 'DKR Track 00 - Dragon Forest Lobby', 'dkr_tracks_native/dkr_track_00.dkrmesh.json'),
+new DKRTrackNativeSceneDesc('dkr_track_01_native', 'DKR Track 01 - Unknown 01', 'dkr_tracks_native/dkr_track_01.dkrmesh.json'),
+new DKRTrackNativeSceneDesc('dkr_track_02_native', 'DKR Track 02 - Icicle Island/snow track', 'dkr_tracks_native/dkr_track_02.dkrmesh.json'),
+new DKRTrackNativeSceneDesc('dkr_track_03_native', 'DKR Track 03 - Unknown 03', 'dkr_tracks_native/dkr_track_03.dkrmesh.json'),
+
 
     'Tools - EXPERIMENTAL AND VERY EARLY',
     new Early1FinalMapConverterSceneDesc(

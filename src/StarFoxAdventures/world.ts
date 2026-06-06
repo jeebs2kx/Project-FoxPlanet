@@ -554,11 +554,8 @@ showDevGeometry.onchanged = () => {
 };
 layerPanel.contents.append(showDevGeometry.elem);
 
-const showMapWireframe = new UI.Checkbox("Show map wireframe", false);
-showMapWireframe.onchanged = () => {
-    this.showMapWireframe = showMapWireframe.checked;
-};
-layerPanel.contents.append(showMapWireframe.elem);
+        // Wireframe hidden in desktop build: Electron/WebGL2 has no WEBGL_polygon_mode extension.
+        this.showMapWireframe = false;
 
 const disableLights = new UI.Checkbox("Disable lights", false);
 disableLights.onchanged = () => {

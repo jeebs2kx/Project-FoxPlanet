@@ -1,7 +1,7 @@
 import * as Viewer from '../viewer.js';
 import { GfxDevice } from '../gfx/platform/GfxPlatform.js';
 import { SceneContext } from '../SceneBase.js';
-import { SFAAnimationController, AmapCollection, ModanimCollection, AnimCollection, applyAnimationToModel } from './animation.js';
+import { SFAAnimationController, AmapCollection, ModanimCollection, AnimFile, AnimCollection, applyAnimationToModel } from './animation.js';
 import { MaterialFactory } from './materials.js';
 import { SFARenderer, SceneRenderContext, SFARenderLists } from './render.js';
 import { GameInfo } from './scenes.js';
@@ -11,53 +11,21 @@ import { White } from '../Color.js';
 import * as UI from '../ui.js';
 import { DataFetcher } from '../DataFetcher.js';
 import { ModelInstance, ModelRenderContext } from './models.js';
-import { mat4 } from 'gl-matrix';
+import { mat4, vec3 } from 'gl-matrix';
 import { SFATextureFetcher } from './textures.js';
 import { loadModel, ModelVersion } from './modelloader.js';
 import { computeModelMatrixSRT } from '../MathHelpers.js';
 
-declare const DecompressionStream: any;
-
 const BIN_TO_RAD = Math.PI / 32768.0;
-const ANIMCURVES_IS_OBJSEQ2CURVE_INDEX = 0x8000;
-const ANIMCURVES_ACTORS_MAX = 16;
-const ANIMCURVES_KEYFRAME_CHANNELS = 19;
-const CH_SCALE = 0x05;
-const CH_ROTATE_Z = 0x06;
-const CH_ROTATE_Y = 0x07;
-const CH_ROTATE_X = 0x08;
-const CH_ANIM_SPEED = 0x09;
-const CH_TRANSLATE_Z = 0x0B;
-const CH_TRANSLATE_Y = 0x0C;
-const CH_TRANSLATE_X = 0x0D;
-const EV_SET_DURATION = -1;
 const EV_PLAY_ANIM = 0x02;
 const EV_SETOBJ = 0x03; 
 const EV_TIMING_SYNC = 0x00; 
 const EV_SUBEVENT = 0x0B; 
-const EV_SOUND_OTHER = 0x0F;
 
 interface Keyframe {
     time: number;
     value: number;
     interp: number;
-}
-
-interface SequenceEvent {
-    type: number;
-    time: number;
-    delay: number;
-    params: number;
-    rawParams: number;
-}
-
-interface SequenceCurve {
-    channels: Map<number, Keyframe[]>;
-    animEvents: SequenceEvent[];
-    duration: number;
-    eventCount: number;
-    keyframeCount: number;
-    curveIndex: number;
 }
 
 interface SequenceActorModel {
@@ -70,99 +38,9 @@ interface SequenceActorModel {
 interface Actor {
     insts: SequenceActorModel[];
     matrix: mat4;
-    curve: SequenceCurve;
+    curve: { channels: Map<number, Keyframe[]>, animEvents: any[] };
     objScale: number;
     isCamera: boolean;
-}
-
-function makeEmptyCurve(curveIndex: number = -1): SequenceCurve {
-    return { channels: new Map(), animEvents: [], duration: 0, eventCount: 0, keyframeCount: 0, curveIndex };
-}
-
-function resolveAnimCurveIndex(sequenceIdBitfield: number, objSeq2CurveTab: DataView): number | null {
-    if ((sequenceIdBitfield & ANIMCURVES_IS_OBJSEQ2CURVE_INDEX) !== 0) {
-        const objSeqIndex = (sequenceIdBitfield & 0x7FF0) >>> 4;
-        const actorIndex = sequenceIdBitfield & 0x0F;
-        const objSeq2CurveOffs = objSeqIndex * 2;
-        if (objSeq2CurveOffs + 2 > objSeq2CurveTab.byteLength)
-            return null;
-
-        return objSeq2CurveTab.getInt16(objSeq2CurveOffs) + actorIndex;
-    }
-
-    return sequenceIdBitfield + 1;
-}
-
-function parseAnimCurve(cTabView: DataView, cBinView: DataView, curveIndex: number): SequenceCurve {
-    const curve = makeEmptyCurve(curveIndex);
-    const cTabOffs = curveIndex * 8;
-    if (curveIndex < 0 || cTabOffs + 8 > cTabView.byteLength)
-        return curve;
-
-    const packedSizeAndEvents = cTabView.getUint32(cTabOffs + 0x0);
-    const cSize = (packedSizeAndEvents >>> 16) & 0xFFFF;
-    const cEvCount = packedSizeAndEvents & 0xFFFF;
-    const cBinOffs = cTabView.getUint32(cTabOffs + 0x4);
-    if (cSize === 0 || cBinOffs + cSize > cBinView.byteLength || cEvCount * 4 > cSize)
-        return curve;
-
-    curve.eventCount = cEvCount;
-    curve.keyframeCount = (((cSize >>> 2) - cEvCount) >>> 1);
-
-    let runningTime = -1;
-    for (let e = 0; e < cEvCount; e++) {
-        const evOffs = cBinOffs + (e * 4);
-        const type = cBinView.getInt8(evOffs + 0x0);
-        const delay = cBinView.getUint8(evOffs + 0x1);
-        const params = cBinView.getInt16(evOffs + 0x2);
-        const rawParams = cBinView.getUint16(evOffs + 0x2);
-
-        if (type === EV_SET_DURATION) {
-            if (e < 2)
-                curve.duration = Math.max(curve.duration, params + 1);
-            curve.animEvents.push({ type, time: 0, delay, params, rawParams });
-            continue;
-        }
-
-        if (type === EV_TIMING_SYNC) {
-            runningTime = params;
-            curve.animEvents.push({ type, time: Math.max(0, runningTime), delay, params, rawParams });
-            continue;
-        }
-
-        const time = Math.max(0, runningTime);
-        curve.animEvents.push({ type, time, delay, params, rawParams });
-
-        if (type === EV_SUBEVENT && params > 0) {
-            runningTime += delay;
-            e += params;
-        } else {
-            if (type !== EV_SOUND_OTHER)
-                runningTime += delay;
-        }
-    }
-
-    const kfStart = cBinOffs + (cEvCount * 4);
-    const kfEnd = Math.min(cBinOffs + cSize, kfStart + curve.keyframeCount * 8);
-    for (let k = kfStart; k + 8 <= kfEnd; k += 8) {
-        const chan = cBinView.getUint8(k + 0x5) & 0x1F;
-        if (chan >= ANIMCURVES_KEYFRAME_CHANNELS)
-            continue;
-
-        if (!curve.channels.has(chan))
-            curve.channels.set(chan, []);
-
-        curve.channels.get(chan)!.push({
-            time: cBinView.getInt16(k + 0x6),
-            value: cBinView.getFloat32(k + 0x0),
-            interp: cBinView.getInt8(k + 0x4),
-        });
-    }
-
-    for (const keys of curve.channels.values())
-        keys.sort((a, b) => a.time - b.time);
-
-    return curve;
 }
 
 function dpExtractModelNums(objBin: DataView, startOffs: number, defSize: number): number[] {
@@ -294,7 +172,7 @@ this.currentTime = 0;
         const startOffs = seqTab.getUint16(sequenceId * 2) * 8;
         const endOffs = seqTab.getUint16((sequenceId + 1) * 2) * 8;
         
-        const objSeq2CurveTab = o2cBuf.createDataView();
+        const curveBaseIdx = o2cBuf.createDataView().getUint16(sequenceId * 2);
         const cTabView = cTabBuf.createDataView();
         const cBinView = cBinBuf.createDataView();
         const modTab = modTabBuf.createDataView();
@@ -304,11 +182,59 @@ this.currentTime = 0;
         const objBin = objBinBuf.createDataView();
 
         let actorIdx = 0;
-        for (let offset = startOffs; offset < endOffs && actorIdx < ANIMCURVES_ACTORS_MAX; offset += 8) {
+        for (let offset = startOffs; offset < endOffs; offset += 8) {
             const scnId = seqBin.getUint16(offset + 0x6);
-            const sequenceIdBitfield = ANIMCURVES_IS_OBJSEQ2CURVE_INDEX | ((sequenceId & 0x07FF) << 4) | actorIdx;
-            const curveIndex = resolveAnimCurveIndex(sequenceIdBitfield, objSeq2CurveTab);
-            const actorCurve = curveIndex !== null ? parseAnimCurve(cTabView, cBinView, curveIndex) : makeEmptyCurve();
+            const actorCurve = { channels: new Map<number, Keyframe[]>, animEvents: [] as any[] };
+            const cTabOffs = (curveBaseIdx + actorIdx) * 8;
+            
+if (cTabOffs + 8 <= cTabView.byteLength) {
+                const cSize = cTabView.getUint16(cTabOffs + 0x0);
+                const cEvCount = cTabView.getUint16(cTabOffs + 0x2);
+                const cBinOffs = cTabView.getUint32(cTabOffs + 0x4);
+
+let runningTime = 0;
+
+for (let e = 0; e < cEvCount; e++) {
+    const evOffs = cBinOffs + (e * 4);
+    const type = cBinView.getUint8(evOffs + 0x0);
+    const delay = cBinView.getUint8(evOffs + 0x1);
+    const params = cBinView.getUint16(evOffs + 0x2);
+
+    if (type === 0x00) {
+        runningTime = params;
+    }
+
+    actorCurve.animEvents.push({ type, time: runningTime, params });
+
+    if (type !== 0x00) {
+        runningTime += delay;
+    }
+
+    if (type === 0x0B) {
+        e++;
+    }
+}
+
+const kfStart = cBinOffs + (cEvCount * 4);
+for (let k = kfStart; k < cBinOffs + cSize; k += 8) {
+    const chan = cBinView.getUint8(k + 0x5) & 0x1F;
+    const keyTime = cBinView.getInt16(k + 0x6);
+
+    if (!actorCurve.channels.has(chan))
+        actorCurve.channels.set(chan, []);
+
+    actorCurve.channels.get(chan)!.push({
+        time: keyTime,
+        value: cBinView.getFloat32(k + 0x0),
+        interp: cBinView.getUint8(k + 0x4) & 0x03,
+    });
+}
+
+for (const keys of actorCurve.channels.values()) {
+    keys.sort((a, b) => a.time - b.time);
+}
+            
+            }
 
            const actorObj: Actor = {
     insts: [],
@@ -357,8 +283,6 @@ if (!actorObj.isCamera && scnId !== 0xFFFF) {
         }
 let maxFrame = 0;
 for (const actor of this.actors) {
-  maxFrame = Math.max(maxFrame, actor.curve.duration);
-
   for (const ev of actor.curve.animEvents)
     maxFrame = Math.max(maxFrame, ev.time);
 
@@ -467,15 +391,16 @@ if (this.isPlaying) {
 
 this.syncSequenceUI();
         for (const actor of this.actors) {
-    const x = this.sample(actor.curve, CH_TRANSLATE_X, this.currentTime);
-    const y = this.sample(actor.curve, CH_TRANSLATE_Y, this.currentTime);
-    const z = this.sample(actor.curve, CH_TRANSLATE_Z, this.currentTime);
+    const x = this.sample(actor.curve, 13, this.currentTime);
+    const y = this.sample(actor.curve, 12, this.currentTime);
+    const z = this.sample(actor.curve, 11, this.currentTime);
 
-    const rx = this.sample(actor.curve, CH_ROTATE_X, this.currentTime) * BIN_TO_RAD;
-    const ry = this.sample(actor.curve, CH_ROTATE_Y, this.currentTime) * BIN_TO_RAD;
-    const rz = this.sample(actor.curve, CH_ROTATE_Z, this.currentTime) * BIN_TO_RAD;
+    const rx = this.sample(actor.curve, 8, this.currentTime) * BIN_TO_RAD;
+    const ry = this.sample(actor.curve, 7, this.currentTime) * BIN_TO_RAD;
+    const rz = this.sample(actor.curve, 6, this.currentTime) * BIN_TO_RAD;
 
-    let s = this.sample(actor.curve, CH_SCALE, this.currentTime);
+    if (actor.insts.length > 0) {
+        let s = this.sample(actor.curve, 5, this.currentTime);
         if (s <= 0.0)
             s = 1.0;
 
@@ -483,14 +408,12 @@ this.syncSequenceUI();
 
         computeModelMatrixSRT(actor.matrix, s, s, s, rx, ry, rz, x, y, z);
 
-    if (actor.insts.length > 0) {
-
         let activeParam = -1;
         let startTime = 0;
 
         for (const ev of actor.curve.animEvents) {
             if (ev.type === EV_PLAY_ANIM && ev.time <= this.currentTime) {
-                activeParam = ev.rawParams;
+                activeParam = ev.params;
                 startTime = ev.time;
             }
         }
@@ -505,10 +428,7 @@ this.syncSequenceUI();
                     const anim = this.animColl.getAnim(animRef.animId);
                     if (anim && anim.keyframes && anim.keyframes.length > 0) {
 const elapsed = Math.max(0, this.currentTime - startTime);
-const fileAnimSpeed = (Number.isFinite(anim.speed) && anim.speed > 0.0) ? anim.speed : 1.0;
-const curveAnimSpeed = this.sample(actor.curve, CH_ANIM_SPEED, this.currentTime, 1.0);
-const safeCurveAnimSpeed = (Number.isFinite(curveAnimSpeed) && curveAnimSpeed > 0.0 && curveAnimSpeed < 16.0) ? curveAnimSpeed : 1.0;
-const animSpeed = fileAnimSpeed * safeCurveAnimSpeed;
+const animSpeed = (Number.isFinite(anim.speed) && anim.speed > 0.0) ? anim.speed : 1.0;
 const animTime = (elapsed * animSpeed) / Math.max(1, anim.keyframes.length);
 applyAnimationToModel(animTime, model.inst, anim, animRef.animNum);
                     }
@@ -521,15 +441,9 @@ applyAnimationToModel(animTime, model.inst, anim, animRef.animNum);
     }
 }
 }
-private getDefaultChannelValue(chan: number): number {
-        if (chan === CH_SCALE || chan === CH_ANIM_SPEED)
-            return 1.0;
-        return 0.0;
-    }
-
-private sample(curve: SequenceCurve, chan: number, time: number, defaultValue: number = this.getDefaultChannelValue(chan)): number {
-        const keys = curve.channels.get(chan);
-        if (!keys || keys.length === 0) return defaultValue;
+private sample(curve: any, chan: number, time: number): number {
+        const keys: Keyframe[] = curve.channels.get(chan);
+        if (!keys || keys.length === 0) return (chan === 5) ? 1.0 : 0.0;
         if (time <= keys[0].time) return keys[0].value;
         if (time >= keys[keys.length - 1].time) return keys[keys.length - 1].value;
         for (let i = 0; i < keys.length - 1; i++) {
@@ -541,7 +455,7 @@ private sample(curve: SequenceCurve, chan: number, time: number, defaultValue: n
                 return k0.value + t * (k1.value - k0.value); 
             }
         }
-        return defaultValue;
+        return 0;
     }
 
     protected override addWorldRenderInsts(device: GfxDevice, renderInstManager: GfxRenderInstManager, renderLists: SFARenderLists, sceneCtx: SceneRenderContext) {

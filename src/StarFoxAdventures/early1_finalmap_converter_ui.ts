@@ -507,7 +507,6 @@ function makeSfaTextureResourceRgba8(width: number, height: number, rgba: Uint8A
     p8(out, 0x16, 0x06);
 
     // Wrap/filter defaults. These can be tuned later.
-    // 1 is usually repeat-ish in GX-style enums; good enough for map textures.
     p8(out, 0x17, 1); // wrapS
     p8(out, 0x18, 1); // wrapT
     p8(out, 0x19, 1); // min filter
@@ -754,6 +753,8 @@ const FINAL_MOD_TO_SFA_MAP_ID = new Map<number, number>([
     [35, 0x1B],  // Darkice Mines 2
     [45, 0x28],  // NWShrine
     [48, 0x1D],  // Cape Claw
+
+    //need to finsh rest when get time
 ]);
 
 function hexMapId(v: number): string {
@@ -1182,10 +1183,7 @@ function patchSfaHitsDisableResourceIds(
             continue;
         }
 
-        // Disable both ways:
-        // 1. Null the TAB entry so the game should not load this HITS resource.
-        // 2. Zero the old 20-byte-line span in-place so stale data is gone even if something
-        //    accidentally walks the old offset.
+
         hitsBin.fill(0, start, end);
         p32(hitsTab, tabOff, missingValue);
 
@@ -1270,9 +1268,6 @@ function sfaMapsResourceOffset(
 }
 
 function finalMapGridValueForSub(firstFinalResourceId: number, finalSubIndex: number): number {
-    // Final MAPS grid cells encode final map resource ID in the upper bits.
-    // For your working Warlock case firstFinalResourceId was 0x3C0:
-    // sub0 -> 0x0780007F, sub1 -> 0x0782007F, etc.
     return (((firstFinalResourceId + finalSubIndex) * 0x20000) + 0x007F) >>> 0;
 }
 
@@ -1285,7 +1280,6 @@ function decodeFinalMapGridResourceId(cell: number): number | null {
 
     const rid = Math.floor(cell / 0x20000);
 
-    // 0x3FFF-ish values are empty/sentinel-like, not real map blocks.
     if (rid <= 0 || rid >= 0x3F00)
         return null;
 
@@ -1350,10 +1344,6 @@ function patchSfaMapsAncientWarlockLayoutAndVisibility(
     const oldStartCol = u16(mapsBin, headerOff + 0x04);
     const oldStartRow = u16(mapsBin, headerOff + 0x06);
 
-    // IMPORTANT:
-    // Working XMAPS.bin keeps the Warlock header start cell as-is: 4,3.
-    // Do NOT patch header +0x04/+0x06 here.
-    // The fix is the grid layout, not the header start cell.
 
     const gridOff = sfaMapsResourceOffset(mapsTab, mapsBin.byteLength, gridResourceId);
     const gridLen = SFA_MAP_GRID_WIDTH * SFA_MAP_GRID_HEIGHT * 4;
@@ -1409,9 +1399,6 @@ function patchSfaMapsAncientWarlockLayoutAndVisibility(
         }
     }
 
-    // IMPORTANT:
-    // Working XMAPS.bin does NOT clear visibility to zero.
-    // It preserves the existing visibility data and only overlays 44BB on occupied cells.
     const visible44BB = new Uint8Array([
         0x44, 0xBB, 0x44, 0xBB,
         0x44, 0xBB, 0x44, 0xBB,
@@ -2456,8 +2443,6 @@ function buildBitstreamForDLOrder(
 }
 
 function finalPassForShaderFlags(flags: number): 0 | 1 | 2 {
-    // Final maps expect water / real translucent effects in the later bitstream pass.
-    // Keeping Ancient water/beams in bitstream0 makes them sort/draw like opaque geometry.
     if ((flags & (FINAL_SHADER_WATER | FINAL_SHADER_TRANSLUCENT)) !== 0)
         return 2;
 
@@ -2725,8 +2710,6 @@ function retagDisplayListToVat5(
         const cmdOff = p;
         const cmd = out[p];
 
-        // Early1 must preserve the original full DL span.
-        // Ancient/Early4 debug paths may optionally trim bad trailing bytes.
         if (cmd === 0)
             return finish(cmdOff + 1);
 
@@ -3176,34 +3159,19 @@ const ANCIENT_KNOWN_WATER_TEXIDS = new Set<number>([
 ]);
 
 const ANCIENT_KNOWN_CUTOUT_TEXIDS = new Set<number>([
-    // Existing known Ancient cutouts.
     630, 646, 672, 1094, 1098, 1103, 1107, 1110, 1111, 1112,
     928, 791, 430, 573, 575, 576, 577, 2882,
     44, 2046, 2228, 2467, 2538, 1798, 2791, 574,
     684, 96, 740, 0, 595, 596, 593, 594, 592, 589,
-
-    // Ancient flower / plant cards.
-    // 1701 is the one you called out.
     1701,
-    // Ancient mod13 SwapHol palm / flower / foliage card IDs seen in current logs.
-    // These need alpha compare and no backface cull, but they must stay in pass 0.
     572, 578, 580, 582, 583, 708, 790,
-    // ThornTail / SwapHol flower-card and leafy-card raw/mapped IDs seen in Ancient mod13:
-    // raw 927/928 -> mapped 537/1701-ish foliage
-    // raw 430/431/432 -> mapped 1680/2060 flower cards
-    // raw 707 can be small vegetation/decal card depending on block.
     927, 928,
     430, 431, 432,
     707,
     1680, 2060,
-
-    // Low Ancient/final-remapped card textures seen in the current mod19 Ancient logs.
-    // These are the IDs causing visible rectangular flower cards when AlphaCompare is missing.
     87, 88, 89, 90, 91, 92, 93, 94, 95, 96,
     97, 98, 99, 100, 101, 102, 103,
     106, 107, 108, 109,
-
-    // Raw Ancient plant-card source IDs that remap into the small final texture IDs above.
     456, 457, 458, 459, 460,
     1926, 1943,
 ]);
@@ -3653,9 +3621,6 @@ function remapEarly4Texture(texId: number, modelId: number): number {
 }
 
 function remapAncientTexture(texId: number, modelId: number): number {
-    // Ancient mod13 SwapHol river.
-    // Auto map currently sends raw 918 -> final 544, which renders as rainbow/invalid.
-    // Force it to the known final water texture path first.
     if (modelId === 13 && texId === 918)
         return 788;
 
@@ -3850,17 +3815,6 @@ function ancientInfo(b: Uint8Array) {
         dlOffsetsOff: u32(b, 0x6C),
         dlSizesOff: u32(b, 0x70),
         bitsOff: u32(b, 0x7C),
-
-        // Ancient BLOCKS header layout:
-        // 0x80 = bitstream byte count
-        // 0x82 = source Y min
-        // 0x84 = source Y max
-        // 0x86 = position count
-        // 0x8A = color count
-        // 0x8C = texcoord count
-        // 0x98 = real texture count
-        // 0x99 = shader/material count
-        // 0x9A = display-list count
         bitsCount: u16(b, 0x80),
         posCount: u16(b, 0x86),
         collPosCount: u16(b, 0x88),
@@ -4111,7 +4065,6 @@ function scoreAncientDLVcdBits(dl: Uint8Array, vcdBits: number, ai: AncientInfo)
                 usedPos.add(pos);
             }
 
-            // Color is weak evidence. Some formats use wider color fields or odd palette refs.
             if (color >= Math.max(1, ai.clrCount))
                 badColor++;
 
@@ -4142,10 +4095,6 @@ function scoreAncientDLVcdBits(dl: Uint8Array, vcdBits: number, ai: AncientInfo)
         badColor * 50 -
         (prims === 0 ? 100000 : 0);
 
-    // Critical Ancient BLOCKS rule:
-    // If the block has more than 255 positions, p8 position indices cannot describe
-    // most terrain. The old scorer picked p8 because it naturally avoids OOB values,
-    // which causes holes and giant stretched triangles.
     if (largePositionTable) {
         if (posSize === 2 && badPos === 0 && prims > 0) {
             score += 300000;
@@ -4155,8 +4104,6 @@ function scoreAncientDLVcdBits(dl: Uint8Array, vcdBits: number, ai: AncientInfo)
             score -= verts * 500;
         }
     }
-
-    // For small blocks, p8 is allowed and often correct. Do not punish it there.
     if (!largePositionTable && posSize === 1 && badPos === 0 && prims > 0)
         score += 10000;
 
@@ -4184,14 +4131,11 @@ function chooseAncientVcdBits(dl: Uint8Array, decodedVcdBits: number, ai: Ancien
     const candidates = (
         largePositionTable
             ? [
-                // Big terrain blocks need 16-bit position indices or they can only use verts 0..255.
                 decoded | 0x01,
                 0x05, // p16 c8  t16
                 0x01, // p16 c8  t8
                 0x07, // p16 c16 t16
                 0x03, // p16 c16 t8
-
-                // Keep p8 as fallback only, not first-class, for large position tables.
                 decoded,
                 0x04, // p8 c8  t16
                 0x00, // p8 c8  t8
@@ -4201,7 +4145,6 @@ function chooseAncientVcdBits(dl: Uint8Array, decodedVcdBits: number, ai: Ancien
             : [
                 decoded,
 
-                // Small Ancient blocks commonly really are p8 position-indexed.
                 0x00, // p8  c8  t8
                 0x04, // p8  c8  t16
                 0x02, // p8  c16 t8
@@ -4256,9 +4199,6 @@ function chooseAncientDLSize(
 
 function collectAncientDisplayLists(root: Uint8Array, ai: AncientInfo): AncientDisplayList[] {
     const out: AncientDisplayList[] = [];
-
-    // Do not scan all 64 slots. Small Ancient blocks can have old table/data bytes
-    // after the real DL table, and scanning all 64 can pick up bogus display lists.
     const dlCount = Math.max(0, Math.min(64, ai.dlCount || ai.shaderCount || 0));
 
     for (let i = 0; i < dlCount; i++) {
@@ -4298,8 +4238,6 @@ function ancientLooksWater(
     texId0Raw: number | null,
     texId0Mapped: number | null,
 ): boolean {
-    // Do NOT use Ancient low-nibble 0x0C/0x0D as generic water.
-    // It hits normal textured/cutout materials too, including foliage.
     void flags8;
 
     return texIdInSet(ANCIENT_KNOWN_WATER_TEXIDS, texId0Raw, texId0Mapped);
@@ -4398,9 +4336,6 @@ function buildFinalShaderTableFromAncient(
 
         if (src + ANCIENT_SHADER_STRIDE <= root.byteLength) {
             flags8 = u8(root, src + 0x38);
-
-            // Ancient attr high bits 0x10 / 0x18 are Ancient-only material hints.
-            // Do NOT copy them into the final shader attr byte.
             ancientAttrRaw = u8(root, src + 0x39);
             attr = ancientAttrRaw & 0x03;
 
@@ -4471,11 +4406,6 @@ function buildFinalShaderTableFromAncient(
 
         p32(out, dst + 0x34, 0xFFFFFFFF);
         p32(out, dst + 0x38, 0xFFFFFFFF);
-
-        // ANCIENT SAFE MATERIAL MODE:
-        // Restore water / alpha / double-sided foliage flags, but DO NOT move DLs
-        // to pass 2 or sort layer 11. Pass routing is handled in rebuildResourceAppendAncient()
-        // and must stay forced to opaque pass 0 for now.
         let finalFlags = FINAL_SHADER_CULL_BACKFACE;
 
         const water =
@@ -4488,9 +4418,6 @@ function buildFinalShaderTableFromAncient(
 
 const ancientAttrHi = ancientAttrRaw & 0x18;
 const wantsAncientCutout = ancientAttrHi === 0x10;
-
-// Ancient 0x18 is blend/effect-ish, but it is too broad to enable globally.
-// Only allow known beam/ribbon/translucent texture IDs through.
 const wantsAncientBlend =
     ancientAttrHi === 0x18 &&
     hasTex &&
@@ -4513,8 +4440,6 @@ const wantsAncientBlend =
                         : -1;
 
             if (finalWaterPrototype !== null) {
-                // Use a real Final water shader as the material template.
-                // This gives the renderer the proper water flags / TEV / attr setup.
                 out.set(finalWaterPrototype.shader, dst);
 
                 attr = u8(out, dst + 0x40) & 0x0F;
@@ -4548,8 +4473,6 @@ const wantsAncientBlend =
                         numLayersOut = layer + 1;
                         attr |= layer === 0 ? 0x04 : 0x08;
                     } else if (layer === 0 && ancientWaterSlot >= 0) {
-                        // If the Final prototype used a texture not present in this Ancient block,
-                        // keep the prototype TEV but feed it the Ancient water texture slot.
                         p32(out, layerOff + 0x00, ancientWaterSlot);
                         numLayersOut = 1;
                         attr |= 0x04;
@@ -4577,7 +4500,6 @@ const wantsAncientBlend =
                 finalFlags &= ~FINAL_SHADER_ALPHA_COMPARE;
                 finalFlags &= ~FINAL_SHADER_CULL_BACKFACE;
             } else {
-                // Fallback only if no real Final water shader was found.
                 finalFlags |= FINAL_SHADER_TRANSLUCENT;
                 finalFlags &= ~FINAL_SHADER_ALPHA_COMPARE;
                 finalFlags &= ~FINAL_SHADER_WATER;
@@ -4589,15 +4511,9 @@ const wantsAncientBlend =
         } else if (cutout) {
             finalFlags |= FINAL_SHADER_ALPHA_COMPARE;
         }
-
-        // Water / translucent / alpha-tested cards must be double-sided.
-        // This fixes palm leaves disappearing from underneath.
         if ((finalFlags & (FINAL_SHADER_WATER | FINAL_SHADER_TRANSLUCENT | FINAL_SHADER_ALPHA_COMPARE)) !== 0) {
             finalFlags &= ~FINAL_SHADER_CULL_BACKFACE;
         }
-
-        // Alpha cards usually need a simple final TEV setup so texture alpha reaches alpha compare.
-        // Do this for cutout/blend only; leave water TEV alone.
         if (
             numLayersOut > 0 &&
             !water &&
@@ -4751,8 +4667,6 @@ copiedDLs.push(retagDisplayListToVat5(srcDL.dl, chosenVcd.vcdBits, true));
     const shaderTable = textureless
         ? buildShaderTable(final, finalInfo(final), shaderCount, texCount)
         : buildFinalShaderTableFromAncient(root, ai, shaderCount, texCount, srcTex, mapped, finalWaterPrototype);
-    // Route only confirmed real Final-water shaders to pass 2.
-    // Do not route generic Ancient translucent/cutout materials here.
     const passForDL = shaderFor.map((shader) => {
         const shaderOff = shader * SHADER_STRIDE;
 
@@ -5395,8 +5309,6 @@ function patchAncientCollisionTris(
         if (outMin === 0x7FFFFFFF)
             outMin = 0;
 
-        // Prefer doing nothing only when it is actually valid.
-        // If keep has any invalid indices, heavily prefer a decoded mode.
         if (mode === 'keep' && invalid > 0)
             score -= 1000000;
 
@@ -5522,14 +5434,6 @@ function transformAncientBatchAABB(
 
     const out = copyU8(batch);
     const pad = collisionPadForMode(mode);
-
-    // Ancient BLOCKS collision batches use the same six s16 bound fields as final DL info:
-    // 0x06 x0, 0x08 y0, 0x0A z0, 0x0C x1, 0x0E y1, 0x10 z1.
-    //
-    // The visual position table is converted to final coordinates as:
-    // x*8, (y-yTranslate)*8, z*8.
-    //
-    // So the collision batch broadphase bounds must be converted the same way.
     const subtractY = mode !== 'raw_scale8';
 
     let firstLog = 'none';
@@ -5610,11 +5514,6 @@ function patchAncientBatchAbsolutePointers(
             );
         }
     };
-
-    // Ancient may store absolute resource offsets inside batch records.
-    // If so, copying the batch to the end of the final resource leaves those pointers stale.
-    // Scan aligned u32 fields inside each 0x14-byte batch record and rebase only values that
-    // exactly point inside the old Ancient batch or tri tables.
     for (let o = 0; o + 0x14 <= out.byteLength; o += 0x14) {
         for (const field of [0x00, 0x04, 0x08, 0x0C, 0x10]) {
             const p = o + field;
@@ -5800,25 +5699,12 @@ function buildAncientVisualCollision(
         throw new Error(`Ancient visual collision generated zero triangles`);
 
     const tris = new Uint8Array(triRecords);
-
-    // Synthetic broad collision batch in Early1/Final collision-batch style.
-    //
-    // The working Early1 collision path only transforms +0x06/+0x08 as Y min/max,
-    // which means +0x00/+0x02/+0x04 are not XYZ bounds. They are batch metadata.
-    // The previous fullXYZ test wrote -32768 into those metadata fields, likely
-    // making the batch unreachable or empty.
     const batch = new Uint8Array(0x14);
-
-    // Probable batch metadata: first tri / tri count / reserved-or-link.
     p16(batch, 0x00, 0);
     p16(batch, 0x02, Math.min(0xFFFF, emitted));
     p16(batch, 0x04, 0);
-
-    // Known from the working Early1 copier: these are Y bounds.
     ps16(batch, 0x06, -32768);
     ps16(batch, 0x08, 32767);
-
-    // Leave remaining fields neutral.
     p16(batch, 0x0A, 0);
     p16(batch, 0x0C, 0);
     p16(batch, 0x0E, 0);
@@ -5872,26 +5758,6 @@ function patchResourceCollisionFromAncient(
         );
     }
 
-    // Ancient BLOCKS collision triangles are 0x10 bytes each:
-    //
-    // +0x00 v0
-    // +0x02 v1
-    // +0x04 v2
-    // +0x06 ancient plane/index 0
-    // +0x08 ancient plane/index 1
-    // +0x0A ancient plane/index 2
-    // +0x0C ancient plane/index 3
-    // +0x0E collision flags/material
-    //
-    // Final collision tris are 0x08 bytes:
-    //
-    // +0x00 v0
-    // +0x02 v1
-    // +0x04 v2
-    // +0x06 collision flags/material
-    //
-    // The previous build used +0x06 as the final flags. That was wrong;
-    // +0x06 is an Ancient plane/index field. The usable final flags are at +0x0E.
     const ancientTriStride = 0x10;
     const ancientTriCountFromHeader = u16(ancient, 0x8E);
     const ancientTriCount =
@@ -5958,9 +5824,6 @@ function patchResourceCollisionFromAncient(
         flagMin = 0;
 
     const ancientBatchRaw = ancient.slice(info.batchOff, info.batchOff + info.batchLen);
-
-    // Keep the real Ancient batch table. It already points at triangle ranges by index,
-    // so compacting 0x10 tris to 0x08 tris does not change those range indices.
     const patchedBatch = transformBatchY(ancientBatchRaw, yTranslate, yMode);
 
     const appendOff = align(out.byteLength, 0x20);
@@ -6098,13 +5961,7 @@ collisionYMode: options.collisionYMode ?? 'subtract',
 
     const prePatchMapsBin: OwnedU8 | undefined = opts.mapsBin !== undefined ? asU8(opts.mapsBin) : undefined;
     const prePatchMapsTab: OwnedU8 | undefined = opts.mapsTab !== undefined ? asU8(opts.mapsTab) : undefined;
-
-    // Keep generated visual resources at the selected Final archive IDs.
-    // This matches the working X mod16.zlb.bin / Xmod16..tab behavior.
     const outTab = copyU8(finalArc.tab);
-
-    // MAPS grid IDs are separate from output archive IDs.
-    // The working XMAPS.bin uses the existing Warlock MAPS grid base, normally 0x3C0.
     let mapsGridFirstResourceId = firstFinalResourceId;
 
     if (ancientSource && opts.modelId === 16) {
@@ -6173,14 +6030,7 @@ collisionYMode: options.collisionYMode ?? 'subtract',
             : rid;
 
         const outputRid = rid;
-
-        // HITS.bin/tab is keyed by the final BLOCK resource ID used by MAPS grid cells.
-        // Disable it for every BLOCK in the selected final map archive, not just resources
-        // where visual conversion succeeded.
         hitResourceIdsToDisable.push(outputRid);
-
-        // Warlock Ancient layout may be anchored to the existing MAPS grid base.
-        // If that base differs from the selected output TAB IDs, patch both IDs.
         if (ancientSource && opts.modelId === 16)
             hitResourceIdsToDisable.push(mapsGridFirstResourceId + finalSubIndex);
 
@@ -6499,9 +6349,6 @@ async function buildTextureInjectEntriesFromFiles(
             name: file.name,
         });
     }
-
-    // Allow the map box to contain a full texture list while only injecting
-    // the PNG files selected in this run.
     void seenKeys;
 
     return entries;
