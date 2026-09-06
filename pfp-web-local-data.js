@@ -392,21 +392,123 @@
     b.onclick=fn; return b;
   }
 
+  function installWebLandingCss() {
+    if (document.getElementById('pfp-web-landing-fixes')) return;
+    var style = document.createElement('style');
+    style.id = 'pfp-web-landing-fixes';
+    style.textContent = `
+body.pfp-web-landing,
+html:has(body.pfp-web-landing) {
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  height: auto !important;
+  min-height: 100% !important;
+}
+body.pfp-web-landing .pfp-web-unclip {
+  overflow: visible !important;
+  max-height: none !important;
+}
+body.pfp-web-landing .pfp-web-game-landing {
+  height: auto !important;
+  min-height: 472px !important;
+  padding-bottom: 22px !important;
+}
+body.pfp-web-landing #landing-version {
+  margin-bottom: 18px !important;
+}
+#pfp-web-local-buttons {
+  margin: 12px 0 14px !important;
+  padding: 10px 10px 8px !important;
+  border: 1px solid rgba(224,181,78,.20) !important;
+  border-radius: 10px !important;
+  background: rgba(0,0,0,.18) !important;
+}
+#pfp-web-local-buttons:before {
+  content: 'WEB DATA';
+  display: block;
+  margin-bottom: 5px;
+  color: #E0B54E;
+  font: 800 11px monospace;
+  letter-spacing: 1px;
+}
+#pfp-web-local-buttons button {
+  border: 1px solid rgba(255,255,255,.20) !important;
+  border-radius: 5px !important;
+  background: rgba(255,255,255,.08) !important;
+  color: #fff !important;
+}
+#pfp-web-local-buttons button:hover {
+  background: rgba(224,181,78,.16) !important;
+  border-color: rgba(224,181,78,.45) !important;
+}
+.pfp-clean-game-title {
+  display: grid;
+  place-items: center;
+  width: min(86%, 300px);
+  min-height: 72px;
+  margin: 0 auto;
+  padding: 12px 14px;
+  box-sizing: border-box;
+  border: 1px solid rgba(224,181,78,.22);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(21,43,76,.62), rgba(8,18,34,.45));
+  color: #f4f7fb;
+  font: 900 25px/1.05 monospace;
+  letter-spacing: 1.4px;
+  text-align: center;
+  text-shadow: 0 2px 8px rgba(0,0,0,.8);
+}
+.pfp-clean-game-title[data-game='dp'] {
+  color: #f0c66b;
+  border-color: rgba(224,181,78,.28);
+}
+`;
+    document.head.appendChild(style);
+  }
+
+  function unclipLanding() {
+    installWebLandingCss();
+    var isLanding = document.body && document.body.dataset && document.body.dataset.landing === '1';
+    document.body && document.body.classList.toggle('pfp-web-landing', !!isLanding);
+    if (!isLanding) return;
+
+    var exact = Array.from(document.querySelectorAll('div,span,h1,h2,h3')).find(function (el) {
+      return (el.textContent || '').trim().toUpperCase() === 'SELECT GAME';
+    });
+    if (exact && exact.parentElement) {
+      var gameLanding = exact.parentElement;
+      gameLanding.classList.add('pfp-web-game-landing', 'pfp-web-unclip');
+      var n = gameLanding.parentElement;
+      for (var i = 0; i < 5 && n && n !== document.body; i++, n = n.parentElement)
+        n.classList.add('pfp-web-unclip');
+    }
+
+    var intro = Array.from(document.querySelectorAll('div')).find(function (el) {
+      return (el.textContent || '').trim() === 'Explore released and development material from Star Fox Adventures and Dinosaur Planet';
+    });
+    if (intro && intro.parentElement) {
+      intro.parentElement.classList.add('pfp-web-unclip');
+      var p = intro.parentElement.parentElement;
+      for (var j = 0; j < 4 && p && p !== document.body; j++, p = p.parentElement)
+        p.classList.add('pfp-web-unclip');
+    }
+  }
+
   function cleanLandingArt() {
     var pics = {
-      '48f1fc0f8c5be9e9c584.png':'STAR FOX ADVENTURES',
-      'a42fc47a0a079a2980f2.png':'DINOSAUR PLANET'
+      '48f1fc0f8c5be9e9c584.png':['STAR FOX ADVENTURES','sfa'],
+      'a42fc47a0a079a2980f2.png':['DINOSAUR PLANET','dp']
     };
     document.querySelectorAll('img').forEach(function(img){
-      var src=(img.getAttribute('src')||'').split('/').pop(); var label=pics[src]; if(!label||img.dataset.pfpTextLogo) return;
+      var src=(img.getAttribute('src')||'').split('/').pop(); var info=pics[src]; if(!info||img.dataset.pfpTextLogo) return;
       img.dataset.pfpTextLogo='1'; img.style.display='none';
-      var d=document.createElement('div'); d.textContent=label; d.className='pfp-clean-game-title';
-      d.style.cssText='font:900 26px/1.1 monospace;letter-spacing:1px;text-align:center;color:#f1f1f1;text-shadow:0 2px 10px #000;padding:34px 10px;';
+      var d=document.createElement('div'); d.textContent=info[0]; d.className='pfp-clean-game-title'; d.dataset.game=info[1];
       img.parentElement && img.parentElement.appendChild(d);
     });
   }
 
   function installUi() {
+    unclipLanding();
     cleanLandingArt();
     if (STATIC_WEB) {
       document.querySelectorAll('button').forEach(function (b) {
@@ -433,7 +535,15 @@
     row.appendChild(button('LOAD KIOSK ISO/GCM', async function(){try{var fs=await filePicker({accept:'.iso,.gcm'});if(!fs.length)return;busy('Reading Kiosk ISO file table...');var r=await makeGameCubeMount(fs[0],'StarFoxAdventuresDemo');done('Kiosk ISO ready ('+r.gameId.trim()+') - '+r.files+' files. Dont refresh the page while using it. A few desktop-only patcher bits are not used on the website.');}catch(e){fail(e);}}));
     row.appendChild(button('LOAD DINOSAUR PLANET ROM', async function(){try{var fs=await filePicker({accept:'.z64,.n64,.v64'});if(!fs.length)return;busy('Reading Dinosaur Planet ROM...');var r=await makeDpRomMount(fs[0]);done('Dinosaur Planet ROM ready ('+r.mode+'). Files are unpacked only when FoxPlanet asks for them. Dont refresh the page while using it.');}catch(e){fail(e);}}));
 
-    old.parentElement.appendChild(wrap);
+    var introNode = Array.from(document.querySelectorAll('div')).find(function (d) {
+      return (d.textContent || '').trim() === 'Explore released and development material from Star Fox Adventures and Dinosaur Planet';
+    });
+    if (introNode && introNode.parentElement) {
+      introNode.parentElement.insertBefore(wrap, introNode.nextSibling);
+    } else {
+      old.parentElement.appendChild(wrap);
+    }
+    unclipLanding();
   }
 
   window.__PFP_WEB_LOCAL_DATA = {
