@@ -16,7 +16,8 @@
           this.world.context.dataFetcher=mainFetcher;
           var rt=this.__pfpMapSequenceRuntime;
           if(rt&&rt.fetcher!==mainFetcher)rt.fetcher=mainFetcher;
-          if(rt&&rt.dirTables&&rt.dirTables.size===0&&!rt.__pfpR8Retrying&&typeof rt.init==='function'){
+          if(rt&&rt.dirTables&&rt.dirTables.size===0&&!rt.__pfpR8Retried&&!rt.__pfpR8Retrying&&typeof rt.init==='function'){
+            rt.__pfpR8Retried=true;
             rt.__pfpR8Retrying=true;
             Promise.resolve(rt.init()).catch(function(e){console.warn('[FoxPlanet R8] sequence retry',e);}).finally(function(){rt.__pfpR8Retrying=false;});
           }
