@@ -386,164 +386,197 @@
     });
   }
 
-  function button(text, fn) {
+  function button(text, fn, cls) {
     var b=document.createElement('button'); b.textContent=text; b.type='button';
-    b.style.cssText='padding:10px 12px;font:700 12px monospace;cursor:pointer;margin:4px 6px 4px 0;';
+    if (cls) b.className=cls;
     b.onclick=fn; return b;
   }
 
-  function installWebLandingCss() {
-    if (document.getElementById('pfp-web-landing-fixes')) return;
-    var style = document.createElement('style');
-    style.id = 'pfp-web-landing-fixes';
-    style.textContent = `
-body.pfp-web-landing,
-html:has(body.pfp-web-landing) {
-  overflow-y: auto !important;
-  overflow-x: hidden !important;
-  height: auto !important;
-  min-height: 100% !important;
+  function installWebUiCss() {
+    if (document.getElementById('pfp-web-ui-css')) return;
+    var style=document.createElement('style');
+    style.id='pfp-web-ui-css';
+    style.textContent=`
+body[data-landing="1"] { overflow:hidden !important; }
+body[data-landing="1"] #SceneSelect { overflow:hidden !important; }
+#pfp-web-open-data {
+  height:22px !important;
+  padding:1px 8px !important;
+  margin:0 5px 0 6px !important;
+  border:1px solid rgba(224,181,78,.48) !important;
+  border-radius:5px !important;
+  background:linear-gradient(180deg,#17314f,#0d2036) !important;
+  color:#f5d570 !important;
+  font:800 10px/18px monospace !important;
+  letter-spacing:.35px !important;
+  white-space:nowrap !important;
+  cursor:pointer !important;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.03) !important;
 }
-body.pfp-web-landing .pfp-web-unclip {
-  overflow: visible !important;
-  max-height: none !important;
+#pfp-web-open-data:hover { border-color:#f0c75a !important; color:#fff !important; }
+#pfp-web-data-modal {
+  position:fixed; inset:0; z-index:2147483000;
+  display:grid; place-items:center;
+  background:rgba(0,0,0,.72);
+  backdrop-filter:blur(4px);
 }
-body.pfp-web-landing .pfp-web-game-landing {
-  height: auto !important;
-  min-height: 472px !important;
-  padding-bottom: 22px !important;
+#pfp-web-data-modal[hidden] { display:none !important; }
+#pfp-web-data-card {
+  width:min(560px,calc(100vw - 36px));
+  box-sizing:border-box;
+  padding:18px;
+  border:1px solid rgba(224,181,78,.42);
+  border-radius:14px;
+  background:linear-gradient(180deg,#10253f,#07111e 78%);
+  color:#eef6ff;
+  font-family:monospace;
+  box-shadow:0 24px 70px rgba(0,0,0,.75), inset 0 0 0 1px rgba(255,255,255,.03);
 }
-body.pfp-web-landing #landing-version {
-  margin-bottom: 18px !important;
+#pfp-web-data-card .pfp-web-data-head { display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px; }
+#pfp-web-data-card .pfp-web-data-title { color:#f0c75a;font-weight:900;font-size:16px;letter-spacing:1px; }
+#pfp-web-data-card .pfp-web-data-close {
+  width:30px;height:30px;border-radius:50%;border:1px solid rgba(255,255,255,.24);
+  background:rgba(255,255,255,.06);color:white;font:bold 18px monospace;cursor:pointer;
 }
-#pfp-web-local-buttons {
-  margin: 12px 0 14px !important;
-  padding: 10px 10px 8px !important;
-  border: 1px solid rgba(224,181,78,.20) !important;
-  border-radius: 10px !important;
-  background: rgba(0,0,0,.18) !important;
+#pfp-web-data-card .pfp-web-data-note { color:#b8c7d9;font-size:11px;line-height:1.45;margin:0 0 12px; }
+#pfp-web-data-card .pfp-web-data-grid { display:grid;grid-template-columns:1fr 1fr;gap:9px; }
+#pfp-web-data-card .pfp-web-choice {
+  min-height:46px;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.18);
+  background:linear-gradient(180deg,rgba(29,62,98,.86),rgba(12,31,52,.90));
+  color:#fff;font:800 12px/1.2 monospace;cursor:pointer;
 }
-#pfp-web-local-buttons:before {
-  content: 'WEB DATA';
-  display: block;
-  margin-bottom: 5px;
-  color: #E0B54E;
-  font: 800 11px monospace;
-  letter-spacing: 1px;
+#pfp-web-data-card .pfp-web-choice:hover { border-color:rgba(224,181,78,.60);background:rgba(224,181,78,.14); }
+#pfp-web-data-status { min-height:30px;margin-top:11px;padding-top:10px;border-top:1px solid rgba(255,255,255,.10);color:#b8c7d9;font:11px/1.4 monospace;white-space:pre-wrap; }
+@media(max-width:620px){#pfp-web-data-card .pfp-web-data-grid{grid-template-columns:1fr}}
+body[data-landing="1"] #landing-version { margin:0 auto 2px !important; }
+body[data-landing="1"] #landing-version .landing-patch-card {
+  width:min(520px,calc(100% - 44px)) !important;
+  margin:0 auto 2px !important;
+  padding:4px 8px 5px !important;
+  border-radius:10px !important;
 }
-#pfp-web-local-buttons button {
-  border: 1px solid rgba(255,255,255,.20) !important;
-  border-radius: 5px !important;
-  background: rgba(255,255,255,.08) !important;
-  color: #fff !important;
+body[data-landing="1"] #landing-version .landing-patch-title {
+  font-size:9px !important; line-height:1 !important; margin-bottom:2px !important;
 }
-#pfp-web-local-buttons button:hover {
-  background: rgba(224,181,78,.16) !important;
-  border-color: rgba(224,181,78,.45) !important;
+body[data-landing="1"] #landing-version .landing-patch-lines {
+  font-size:7.35px !important; line-height:1.06 !important; column-gap:10px !important;
 }
-.pfp-clean-game-title {
-  display: grid;
-  place-items: center;
-  width: min(86%, 300px);
-  min-height: 72px;
-  margin: 0 auto;
-  padding: 12px 14px;
-  box-sizing: border-box;
-  border: 1px solid rgba(224,181,78,.22);
-  border-radius: 12px;
-  background: linear-gradient(180deg, rgba(21,43,76,.62), rgba(8,18,34,.45));
-  color: #f4f7fb;
-  font: 900 25px/1.05 monospace;
-  letter-spacing: 1.4px;
-  text-align: center;
-  text-shadow: 0 2px 8px rgba(0,0,0,.8);
-}
-.pfp-clean-game-title[data-game='dp'] {
-  color: #f0c66b;
-  border-color: rgba(224,181,78,.28);
-}
+body[data-landing="1"] #landing-version .landing-patch-col { gap:1px !important; }
+body[data-landing="1"] #landing-version .landing-patch-wide { margin-top:1px !important; }
 `;
     document.head.appendChild(style);
   }
 
-  function unclipLanding() {
-    installWebLandingCss();
-    var isLanding = document.body && document.body.dataset && document.body.dataset.landing === '1';
-    document.body && document.body.classList.toggle('pfp-web-landing', !!isLanding);
-    if (!isLanding) return;
-
-    var exact = Array.from(document.querySelectorAll('div,span,h1,h2,h3')).find(function (el) {
-      return (el.textContent || '').trim().toUpperCase() === 'SELECT GAME';
+  function findExactText(text) {
+    var wanted=String(text).trim().toUpperCase();
+    var all=Array.from(document.querySelectorAll('div,span,h1,h2,h3')).filter(function(el){
+      return (el.textContent||'').trim().toUpperCase()===wanted;
     });
-    if (exact && exact.parentElement) {
-      var gameLanding = exact.parentElement;
-      gameLanding.classList.add('pfp-web-game-landing', 'pfp-web-unclip');
-      var n = gameLanding.parentElement;
-      for (var i = 0; i < 5 && n && n !== document.body; i++, n = n.parentElement)
-        n.classList.add('pfp-web-unclip');
-    }
-
-    var intro = Array.from(document.querySelectorAll('div')).find(function (el) {
-      return (el.textContent || '').trim() === 'Explore released and development material from Star Fox Adventures and Dinosaur Planet';
+    return all.filter(function(el){
+      return !Array.from(el.children||[]).some(function(ch){
+        return (ch.textContent||'').trim().toUpperCase()===wanted;
+      });
     });
-    if (intro && intro.parentElement) {
-      intro.parentElement.classList.add('pfp-web-unclip');
-      var p = intro.parentElement.parentElement;
-      for (var j = 0; j < 4 && p && p !== document.body; j++, p = p.parentElement)
-        p.classList.add('pfp-web-unclip');
-    }
   }
 
-  function cleanLandingArt() {
-    var pics = {
-      '48f1fc0f8c5be9e9c584.png':['STAR FOX ADVENTURES','sfa'],
-      'a42fc47a0a079a2980f2.png':['DINOSAUR PLANET','dp']
-    };
-    document.querySelectorAll('img').forEach(function(img){
-      var src=(img.getAttribute('src')||'').split('/').pop(); var info=pics[src]; if(!info||img.dataset.pfpTextLogo) return;
-      img.dataset.pfpTextLogo='1'; img.style.display='none';
-      var d=document.createElement('div'); d.textContent=info[0]; d.className='pfp-clean-game-title'; d.dataset.game=info[1];
-      img.parentElement && img.parentElement.appendChild(d);
+  function fixLandingLayout() {
+    installWebUiCss();
+    if (!document.body || document.body.dataset.landing!=='1') return;
+
+    // right hand game picker was a touch too tall. keep it all inside the page.
+    var sels=findExactText('SELECT GAME').filter(function(el){
+      var r=el.getBoundingClientRect(); return r.width>0 && r.height>0;
     });
+    if (sels.length) {
+      sels.sort(function(a,b){return b.getBoundingClientRect().left-a.getBoundingClientRect().left;});
+      var landing=sels[0].parentElement;
+      if (landing) {
+        landing.style.minHeight='0px';
+        landing.style.height='min(620px, calc(100vh - 185px))';
+        landing.style.padding='14px 18px 12px';
+        landing.style.gap='10px';
+        landing.style.overflow='hidden';
+        var grid=sels[0].nextElementSibling;
+        if (grid) {
+          grid.style.gap='10px';
+          Array.from(grid.children).forEach(function(card){
+            card.style.height='140px';
+            var img=card.querySelector('img');
+            if (img) { img.style.display='block'; img.style.maxHeight='102px'; img.style.width='220px'; }
+          });
+        }
+      }
+    }
+
+    // make sure an old text-logo patch from the first web test cannot hide the real logos.
+    document.querySelectorAll('.pfp-clean-game-title').forEach(function(e){e.remove();});
+    ['48f1fc0f8c5be9e9c584.png','a42fc47a0a079a2980f2.png'].forEach(function(name){
+      document.querySelectorAll('img').forEach(function(img){
+        if ((img.getAttribute('src')||'').split('/').pop()===name) img.style.display='block';
+      });
+    });
+  }
+
+  function buildDataModal() {
+    var old=document.getElementById('pfp-web-data-modal');
+    if (old) return old;
+    var modal=document.createElement('div'); modal.id='pfp-web-data-modal'; modal.hidden=true;
+    var card=document.createElement('div'); card.id='pfp-web-data-card'; modal.appendChild(card);
+    var head=document.createElement('div'); head.className='pfp-web-data-head'; card.appendChild(head);
+    var title=document.createElement('div'); title.className='pfp-web-data-title'; title.textContent='LOAD YOUR GAME FILES'; head.appendChild(title);
+    var close=button('×',function(){modal.hidden=true;},'pfp-web-data-close'); head.appendChild(close);
+    var note=document.createElement('div'); note.className='pfp-web-data-note';
+    note.textContent='Choose your existing FoxPlanet GameData folder, or load your own game image/ROM. Everything stays on this computer and is only read by the browser.'; card.appendChild(note);
+    var grid=document.createElement('div'); grid.className='pfp-web-data-grid'; card.appendChild(grid);
+    var status=document.createElement('div'); status.id='pfp-web-data-status'; status.textContent='Nothing loaded yet.'; card.appendChild(status);
+    function busy(s){status.textContent=s;}
+    function done(s){status.textContent=s+'\nNothing was uploaded anywhere.';}
+    function fail(e){status.textContent='Could not load it. '+(e&&e.message?e.message:String(e));}
+
+    grid.appendChild(button('EXISTING GAMEDATA FOLDER',async function(){
+      try{var fs=await filePicker({directory:true});if(!fs.length)return;busy('Reading GameData...');var r=await mountFolderFiles(fs);done('GameData ready - '+r.files+' files. You can close this and open a map. Dont refresh the page or the browser will forget the folder.');}catch(e){fail(e);}
+    },'pfp-web-choice'));
+    grid.appendChild(button('STAR FOX ADVENTURES ISO / GCM',async function(){
+      try{var fs=await filePicker({accept:'.iso,.gcm'});if(!fs.length)return;busy('Reading the SFA ISO file table...');var r=await makeGameCubeMount(fs[0],'StarFoxAdventures');done('SFA ready ('+r.gameId.trim()+') - '+r.files+' files. You can close this and open a map.');}catch(e){fail(e);}
+    },'pfp-web-choice'));
+    grid.appendChild(button('KIOSK DEMO ISO / GCM',async function(){
+      try{var fs=await filePicker({accept:'.iso,.gcm'});if(!fs.length)return;busy('Reading the Kiosk ISO file table...');var r=await makeGameCubeMount(fs[0],'StarFoxAdventuresDemo');done('Kiosk ready ('+r.gameId.trim()+') - '+r.files+' files. Desktop-only ISO patcher bits are not used on the website.');}catch(e){fail(e);}
+    },'pfp-web-choice'));
+    grid.appendChild(button('DINOSAUR PLANET ROM',async function(){
+      try{var fs=await filePicker({accept:'.z64,.n64,.v64'});if(!fs.length)return;busy('Reading the Dinosaur Planet ROM...');var r=await makeDpRomMount(fs[0]);done('Dinosaur Planet ready ('+r.mode+'). Files will be unpacked only when FoxPlanet asks for them.');}catch(e){fail(e);}
+    },'pfp-web-choice'));
+
+    modal.addEventListener('click',function(e){if(e.target===modal)modal.hidden=true;});
+    document.body.appendChild(modal);
+    return modal;
+  }
+
+  function installMainLoadButton() {
+    if (!document.body || document.body.dataset.landing!=='1') return;
+    if (document.getElementById('pfp-web-open-data')) return;
+    var labels=findExactText('AUTO MUSIC OFF');
+    if (!labels.length) return;
+    var label=labels[0], row=label.parentElement;
+    if (!row || row.children.length<2) return;
+    row.style.gridTemplateColumns='1fr auto 24px';
+    var open=button('LOAD GAME FILES',function(e){
+      if(e){e.preventDefault();e.stopPropagation();}
+      buildDataModal().hidden=false;
+    });
+    open.id='pfp-web-open-data';
+    open.addEventListener('mousedown',function(e){e.stopPropagation();});
+    row.insertBefore(open,row.lastElementChild);
   }
 
   function installUi() {
-    unclipLanding();
-    cleanLandingArt();
+    installWebUiCss();
     if (STATIC_WEB) {
       document.querySelectorAll('button').forEach(function (b) {
-        if (/^LOAD GAMEDATA FOLDER$/i.test((b.textContent || '').trim())) b.style.display = 'none';
+        if (/^LOAD GAMEDATA FOLDER$/i.test((b.textContent || '').trim())) b.style.display='none';
       });
     }
-    if (document.getElementById('pfp-web-local-buttons')) return;
-    var old = Array.from(document.querySelectorAll('button')).find(function (b) { return /LOAD GAMEDATA FOLDER/i.test(b.textContent || ''); });
-    if (!old || !old.parentElement) {
-      var cards = Array.from(document.querySelectorAll('div')).filter(function (d) { return /Use your own local FoxPlanet GameData folder/i.test(d.textContent || ''); });
-      if (!cards.length) return;
-      old = { parentElement: cards[0] };
-    }
-    var wrap=document.createElement('div'); wrap.id='pfp-web-local-buttons'; wrap.style.cssText='margin-top:8px;max-width:520px;';
-    var row=document.createElement('div'); wrap.appendChild(row);
-    var status=document.createElement('div'); status.style.cssText='font:11px monospace;color:#aaa;line-height:1.35;margin-top:4px;white-space:pre-wrap;';
-    status.textContent='Your files stay on this computer. Nothing gets uploaded.'; wrap.appendChild(status);
-    function busy(s){status.textContent=s;}
-    function done(s){status.textContent=s+'\nYour files stay on this computer. Nothing gets uploaded.';}
-    function fail(e){status.textContent=(e&&e.message?e.message:String(e));}
-
-    row.appendChild(button('LOAD EXISTING GAMEDATA', async function(){try{var fs=await filePicker({directory:true});if(!fs.length)return;busy('Reading GameData...');var r=await mountFolderFiles(fs);done('GameData ready - '+r.files+' files. Open a map to use it. Dont refresh the page or the browser will forget the folder.');}catch(e){fail(e);}}));
-    row.appendChild(button('LOAD SFA ISO/GCM', async function(){try{var fs=await filePicker({accept:'.iso,.gcm'});if(!fs.length)return;busy('Reading SFA ISO file table...');var r=await makeGameCubeMount(fs[0],'StarFoxAdventures');done('SFA ISO ready ('+r.gameId.trim()+') - '+r.files+' files. Dont refresh the page while using it.');}catch(e){fail(e);}}));
-    row.appendChild(button('LOAD KIOSK ISO/GCM', async function(){try{var fs=await filePicker({accept:'.iso,.gcm'});if(!fs.length)return;busy('Reading Kiosk ISO file table...');var r=await makeGameCubeMount(fs[0],'StarFoxAdventuresDemo');done('Kiosk ISO ready ('+r.gameId.trim()+') - '+r.files+' files. Dont refresh the page while using it. A few desktop-only patcher bits are not used on the website.');}catch(e){fail(e);}}));
-    row.appendChild(button('LOAD DINOSAUR PLANET ROM', async function(){try{var fs=await filePicker({accept:'.z64,.n64,.v64'});if(!fs.length)return;busy('Reading Dinosaur Planet ROM...');var r=await makeDpRomMount(fs[0]);done('Dinosaur Planet ROM ready ('+r.mode+'). Files are unpacked only when FoxPlanet asks for them. Dont refresh the page while using it.');}catch(e){fail(e);}}));
-
-    var introNode = Array.from(document.querySelectorAll('div')).find(function (d) {
-      return (d.textContent || '').trim() === 'Explore released and development material from Star Fox Adventures and Dinosaur Planet';
-    });
-    if (introNode && introNode.parentElement) {
-      introNode.parentElement.insertBefore(wrap, introNode.nextSibling);
-    } else {
-      old.parentElement.appendChild(wrap);
-    }
-    unclipLanding();
+    fixLandingLayout();
+    installMainLoadButton();
   }
 
   window.__PFP_WEB_LOCAL_DATA = {
