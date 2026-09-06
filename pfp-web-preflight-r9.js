@@ -16,6 +16,7 @@
     if(typeof fn!=='function')return false;
     var s='';try{s=Function.prototype.toString.call(fn);}catch(_){}
     return (s.indexOf('compactGamePicker')>=0&&s.indexOf('rawGameTextTick')>=0) ||
+           (s.indexOf('compactGamePicker')>=0&&s.indexOf('patchDataModal')>=0&&s.indexOf('wrapGameTextApi')>=0) ||
            (s.indexOf('compactLanding')>=0&&s.indexOf('keepMountAlive')>=0);
   }
 
