@@ -190,3 +190,15 @@ body[data-game-theme="dp"].pfp-headings-v6 .pfp-game-logo-dp.active {
 body.pfp-headings-v6 .sfa-list-scroll > .pfp-game-group-row {
   display: none !important;
 }
+
+body.pfp-headings-v6 .pfp-game-image-logo {
+  display:block;
+  width:auto;
+  max-width:94%;
+  max-height:42px;
+  object-fit:contain;
+  user-select:none;
+  pointer-events:none;
+  filter:drop-shadow(0 2px 5px rgba(0,0,0,.7));
+}
+body.pfp-headings-v6 .pfp-game-logo-dp .pfp-game-image-logo { max-height:46px; }

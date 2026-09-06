@@ -63983,7 +63983,7 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
           )
             t = t.parentElement;
           if (!t) return;
-          ((t.style.position = "relative"), (t.style.minHeight = "760px"));
+          ((t.style.position = "relative"), (t.style.minHeight = "618px"));
           let n = document.getElementById("landing-version");
           const s = `
             <div class="landing-patch-card">
@@ -65429,15 +65429,29 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
               this.gameRow.appendChild(t),
               this.gameRow.appendChild(this.gameMiniIcons),
               this.contents.prepend(this.gameRow));
-            const s = new K("Auto Music Off", !0);
-            ((s.onchanged = () => {
-              const e = window.musicState;
-              ((e.muted = s.checked),
-                e.muted &&
-                  e.audio &&
-                  (e.audio.pause(), (e.audio.currentTime = 0)));
-            }),
-              this.contents.prepend(s.elem),
+            const s = document.createElement("div");
+            ((s.id = "pfp-web-open-data"),
+              (s.textContent = "LOAD GAME FILES"),
+              (s.title = "Load your GameData folder, ISO/GCM or Dinosaur Planet ROM"),
+              (s.style.height = "27px"),
+              (s.style.display = "grid"),
+              (s.style.placeItems = "center"),
+              (s.style.boxSizing = "border-box"),
+              (s.style.margin = "0"),
+              (s.style.border = "1px solid rgba(224,181,78,.76)"),
+              (s.style.borderRadius = "5px"),
+              (s.style.background = "linear-gradient(90deg, rgba(18,60,94,.94), rgba(70,51,18,.92))"),
+              (s.style.color = "white"),
+              (s.style.font = "bold 13px monospace"),
+              (s.style.letterSpacing = ".5px"),
+              (s.style.cursor = "pointer"),
+              (s.style.userSelect = "none"),
+              (s.onclick = (e) => {
+                (e.preventDefault(), e.stopPropagation());
+                const t = window.__PFP_WEB_OPEN_DATA;
+                "function" == typeof t && t();
+              }),
+              this.contents.prepend(s),
               (this.landingBlurb = document.createElement("div")),
               (this.landingBlurb.style.marginTop = "18px"),
               (this.landingBlurb.style.padding = "18px"),

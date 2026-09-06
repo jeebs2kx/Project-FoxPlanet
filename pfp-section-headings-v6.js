@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '8.0.0';
+  const VERSION = '8.0.1';
   if (window.__pfpSectionHeadingsV6 === VERSION) return;
   window.__pfpSectionHeadingsV6 = VERSION;
 
@@ -50,10 +50,12 @@
     button.title = `Switch to ${title}`;
     button.setAttribute('aria-label', `Switch to ${title}`);
 
-    const label = document.createElement('span');
-    label.className = 'pfp-game-text-logo';
-    label.textContent = title.toUpperCase();
-    button.appendChild(label);
+    const logo = document.createElement('img');
+    logo.className = 'pfp-game-image-logo';
+    logo.src = game === 'sfa' ? '48f1fc0f8c5be9e9c584.png' : 'a42fc47a0a079a2980f2.png';
+    logo.alt = title;
+    logo.draggable = false;
+    button.appendChild(logo);
 
     button.addEventListener('click', (e) => {
       e.preventDefault();

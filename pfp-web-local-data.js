@@ -448,6 +448,9 @@ body[data-landing="1"] #SceneSelect { overflow:hidden !important; }
 #pfp-web-data-card .pfp-web-choice:hover { border-color:rgba(224,181,78,.60);background:rgba(224,181,78,.14); }
 #pfp-web-data-status { min-height:30px;margin-top:11px;padding-top:10px;border-top:1px solid rgba(255,255,255,.10);color:#b8c7d9;font:11px/1.4 monospace;white-space:pre-wrap; }
 @media(max-width:620px){#pfp-web-data-card .pfp-web-data-grid{grid-template-columns:1fr}}
+
+#landing-version { transform:translateY(-28px) !important; margin-bottom:-28px !important; }
+#landing-version .landing-patch-card { padding-top:3px !important; padding-bottom:3px !important; }
 body[data-landing="1"] #landing-version { margin:0 auto 2px !important; }
 body[data-landing="1"] #landing-version .landing-patch-card {
   width:min(520px,calc(100% - 44px)) !important;
@@ -551,8 +554,14 @@ body[data-landing="1"] #landing-version .landing-patch-wide { margin-top:1px !im
     return modal;
   }
 
+  window.__PFP_WEB_OPEN_DATA = function () {
+    var modal = buildDataModal();
+    modal.hidden = false;
+    return modal;
+  };
+
   function installMainLoadButton() {
-    if (!document.body || document.body.dataset.landing!=='1') return;
+    if (!document.body) return;
     if (document.getElementById('pfp-web-open-data')) return;
     var labels=findExactText('AUTO MUSIC OFF');
     if (!labels.length) return;
