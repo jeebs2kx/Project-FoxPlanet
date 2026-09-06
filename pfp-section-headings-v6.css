@@ -1,0 +1,192 @@
+
+
+
+
+body.pfp-headings-v6 .sfa-list-scroll.pfp-list-theme-sfa {
+  --pfp-map-rgb: 74, 164, 190;
+  --pfp-other-rgb: 210, 164, 70;
+}
+
+body.pfp-headings-v6 .sfa-list-scroll.pfp-list-theme-dp {
+  --pfp-map-rgb: 77, 112, 166;
+  --pfp-other-rgb: 205, 148, 57;
+}
+
+body.pfp-headings-v6 .sfa-list-scroll > .pfp-section-heading {
+  --pfp-heading-rgb: var(--pfp-other-rgb, 210, 164, 70);
+  position: relative;
+  margin: 12px 8px 5px !important;
+  min-height: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  cursor: default !important;
+  pointer-events: none !important;
+}
+
+body.pfp-headings-v6 .sfa-list-scroll > .pfp-section-heading:first-child {
+  margin-top: 4px !important;
+}
+
+body.pfp-headings-v6 .sfa-list-scroll > .pfp-section-heading[data-pfp-heading-kind="maps"] {
+  --pfp-heading-rgb: var(--pfp-map-rgb);
+}
+
+body.pfp-headings-v6 .sfa-list-scroll > .pfp-section-heading[data-pfp-heading-kind="other"] {
+  --pfp-heading-rgb: var(--pfp-other-rgb);
+  margin-top: 16px !important;
+}
+
+body.pfp-headings-v6 .sfa-list-scroll > .pfp-section-heading span.header {
+  position: relative;
+  display: block !important;
+  width: 100% !important;
+  min-height: 32px !important;
+  box-sizing: border-box !important;
+  overflow: hidden !important;
+  padding: 7px 10px 6px 13px !important;
+  border: 0 !important;
+  border-left: 4px solid rgba(var(--pfp-heading-rgb), .98) !important;
+  border-bottom: 1px solid rgba(var(--pfp-heading-rgb), .58) !important;
+  border-radius: 0 !important;
+  background: linear-gradient(90deg,
+    rgba(var(--pfp-heading-rgb), .18) 0%,
+    rgba(var(--pfp-heading-rgb), .055) 62%,
+    rgba(var(--pfp-heading-rgb), 0) 100%) !important;
+  color: rgb(var(--pfp-heading-rgb)) !important;
+  font-family: "Segoe UI Variable", "Segoe UI", Arial, sans-serif !important;
+  font-size: 13.5px !important;
+  font-weight: 800 !important;
+  line-height: 18px !important;
+  letter-spacing: .72px !important;
+  text-transform: uppercase !important;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .88) !important;
+  -webkit-text-stroke: 0 !important;
+  paint-order: normal !important;
+  white-space: nowrap !important;
+  text-overflow: ellipsis !important;
+}
+
+body.pfp-headings-v6 .sfa-list-scroll > .pfp-section-heading span.extra {
+  display: none !important;
+}
+
+body.pfp-headings-v6 .sfa-right-menu .sfa-list-scroll > .pfp-section-heading {
+  margin-left: 6px !important;
+  margin-right: 6px !important;
+}
+
+body.pfp-headings-v6 .sfa-right-menu .sfa-list-scroll > .pfp-section-heading span.header {
+  min-height: 30px !important;
+  padding-top: 6px !important;
+  padding-bottom: 5px !important;
+  font-size: 13px !important;
+  font-weight: 800 !important;
+}
+
+/* game buttons live here */
+body.pfp-headings-v6 .sfa-list-scroll > .pfp-game-switch-heading {
+  margin: 7px 8px 7px !important;
+  pointer-events: auto !important;
+  cursor: default !important;
+}
+
+body.pfp-headings-v6 .sfa-list-scroll > .pfp-game-switch-heading span.header {
+  min-height: 66px !important;
+  padding: 6px 8px !important;
+  border-left: 0 !important;
+  border-bottom: 1px solid rgba(224, 181, 78, .34) !important;
+  background:
+    radial-gradient(circle at 14% 45%, rgba(62, 151, 216, .16), transparent 34%),
+    radial-gradient(circle at 86% 48%, rgba(211, 154, 58, .15), transparent 35%),
+    linear-gradient(90deg, rgba(7, 18, 31, .70), rgba(22, 18, 11, .62)) !important;
+  overflow: visible !important;
+  pointer-events: auto !important;
+}
+
+body.pfp-headings-v6 .pfp-game-switcher {
+  width: 100%;
+  min-height: 53px;
+  display: grid;
+  grid-template-columns: minmax(0, 1.18fr) 1px minmax(0, .92fr);
+  align-items: center;
+  gap: 11px;
+  box-sizing: border-box;
+  pointer-events: auto;
+}
+
+body.pfp-headings-v6 .pfp-game-logo-divider {
+  width: 1px;
+  height: 36px;
+  justify-self: center;
+  background: linear-gradient(180deg, transparent, rgba(224,181,78,.44), transparent);
+  box-shadow: 0 0 8px rgba(224,181,78,.12);
+}
+
+body.pfp-headings-v6 .pfp-game-logo-button {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  height: 52px;
+  display: grid;
+  place-items: center;
+  padding: 4px 8px;
+  margin: 0;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  cursor: pointer;
+  opacity: .58;
+  filter: saturate(.78) brightness(.86);
+  transition: opacity .12s ease, filter .12s ease, transform .12s ease, background .12s ease, border-color .12s ease, box-shadow .12s ease;
+  pointer-events: auto;
+}
+
+body.pfp-headings-v6 .pfp-game-text-logo {
+  display: block;
+  max-width: 100%;
+  font: 900 13px/1.05 monospace;
+  letter-spacing: .7px;
+  text-align: center;
+  color: rgba(245,247,250,.94);
+  text-shadow: 0 1px 6px rgba(0,0,0,.7);
+  user-select: none;
+  pointer-events: none;
+}
+
+body.pfp-headings-v6 .pfp-game-logo-dp .pfp-game-text-logo {
+  color: rgba(242,199,103,.96);
+}
+
+body.pfp-headings-v6 .pfp-game-logo-sfa .pfp-game-text-logo {
+  color: rgba(180,220,255,.98);
+}
+
+body.pfp-headings-v6 .pfp-game-logo-button:hover {
+  opacity: 1;
+  filter: saturate(1.05) brightness(1.08);
+  transform: translateY(-1px) scale(1.015);
+  background: rgba(255,255,255,.035);
+  border-color: rgba(255,255,255,.12);
+}
+
+body.pfp-headings-v6 .pfp-game-logo-button.active {
+  opacity: 1;
+  filter: saturate(1.05) brightness(1.06);
+  background: rgba(255,255,255,.028);
+}
+
+body[data-game-theme="sfa"].pfp-headings-v6 .pfp-game-logo-sfa.active {
+  border-color: rgba(78, 160, 224, .36);
+  box-shadow: inset 0 0 14px rgba(49, 113, 183, .10), 0 0 10px rgba(54, 132, 202, .08);
+}
+
+body[data-game-theme="dp"].pfp-headings-v6 .pfp-game-logo-dp.active {
+  border-color: rgba(211, 154, 58, .38);
+  box-shadow: inset 0 0 14px rgba(211, 154, 58, .09), 0 0 10px rgba(211, 154, 58, .07);
+}
+
+body.pfp-headings-v6 .sfa-list-scroll > .pfp-game-group-row {
+  display: none !important;
+}

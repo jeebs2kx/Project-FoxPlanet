@@ -1,0 +1,1 @@
+This package contains viewer/runtime code only. No extracted Star Fox Adventures, Kiosk Demo or Dinosaur Planet game files are included.
