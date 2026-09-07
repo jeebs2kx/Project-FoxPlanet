@@ -51,11 +51,12 @@ A big part of the original viewer base comes from **noclip.website**:
 
 https://github.com/magcius/noclip.website
 
-I have also used a lot of useful research and documentation from these projects while working on FoxPlanet:
+I’ve also used a lot of useful research and documentation shared publicly by members of the Dinosaur Planet Community Discord, who were kind enough to make their work available for others researching the games.
 
-- https://github.com/zcanann/SFA-Decomp
-- https://github.com/RenaKunisaki/StarFoxAdventures
-- https://github.com/zestydevy/dinosaur-planet
+Additional documentation and credit also goes to the folks behind these GitHub pages:
+
+https://github.com/RenaKunisaki/StarFoxAdventures
+https://github.com/zestydevy/dinosaur-planet
 
 Thanks to everyone who has worked on documenting, reverse engineering and preserving these games!
 
