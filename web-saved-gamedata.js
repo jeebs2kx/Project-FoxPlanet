@@ -7,16 +7,20 @@ const DB_NAME='project-foxplanet-saved-gamedata';
 const STORE='state';
 const HANDLE_KEY='folder-handle';
 const MANIFEST_KEY='folder-manifest-v1';
+const AUTO_KEY='projectFoxPlanet.autoReconnectGameData.v1';
 const ROOTS=new Set(['starfoxadventures','starfoxadventuresdemo','dinosaurplanet','dinosaurplanet_vanilla','sequence-data']);
 let savedHandle=null;
 let savedManifest=null;
-let stateLoaded=false;
+let statePromise=null;
 let reconnecting=false;
 let activeMount=null;
+let autoNeedsClick=false;
 
 const clean=p=>String(p||'').replace(/\\/g,'/').replace(/^\/+/, '').replace(/\/+/g,'/');
 const lower=p=>clean(p).toLowerCase();
 const yieldUi=()=>new Promise(r=>setTimeout(r,0));
+const autoEnabled=()=>{try{return localStorage.getItem(AUTO_KEY)==='1';}catch(_){return false;}};
+const setAutoEnabled=v=>{try{if(v)localStorage.setItem(AUTO_KEY,'1');else localStorage.removeItem(AUTO_KEY);}catch(_){}};
 
 class LocalSlice{
   constructor(buffer,name){this.arrayBuffer=buffer;this.byteOffset=0;this.byteLength=buffer.byteLength;this.name=name||'';}
@@ -84,7 +88,7 @@ async function makeMount(root,manifest){
     const rel=clean(manifest[i]);if(!rel)continue;
     const entry=new SavedFileEntry(root,rel);
     for(const a of aliasesFor(rel))entries.set(lower(a),entry);
-    if((i%1000)===999)await yieldUi();
+    if((i%350)===349)await yieldUi();
   }
   return {label:'Local GameData (remembered)',__pfpAliasesReady:true,entries,async fetchData(path,opts){const e=entries.get(lower(path));return e?e.read(clean(path),opts||{}):null;}};
 }
@@ -119,10 +123,12 @@ async function buildManifest(root){
   return out;
 }
 
-async function loadSavedState(){
-  if(stateLoaded)return;
-  stateLoaded=true;
-  try{savedHandle=await dbGet(HANDLE_KEY);savedManifest=await dbGet(MANIFEST_KEY);}catch(e){console.warn('[FoxPlanet] saved GameData state',e);}
+function loadSavedState(){
+  if(statePromise)return statePromise;
+  statePromise=(async()=>{
+    try{savedHandle=await dbGet(HANDLE_KEY);savedManifest=await dbGet(MANIFEST_KEY);}catch(e){console.warn('[FoxPlanet] saved GameData state',e);}
+  })();
+  return statePromise;
 }
 
 async function permission(handle,request){
@@ -147,7 +153,7 @@ async function remember(handle){
   try{navigator.storage&&navigator.storage.persist&&navigator.storage.persist();}catch(_){}
   status('Connecting remembered GameData...');
   await attachMount(handle,manifest);
-  status('GameData remembered - '+manifest.length+' files. Next visit, open LOAD GAME FILES and click RECONNECT SAVED GAMEDATA.');
+  status('GameData remembered - '+manifest.length+' files.');
   renderBox();
 }
 
@@ -164,30 +170,49 @@ async function chooseFolderToRemember(){
     const msg=String(e&&e.message||e||'');
     if(/system|sensitive|not allowed|security/i.test(msg)){
       status('Chrome/Edge cannot remember GameData from AppData or other protected Windows folders. EXISTING GAMEDATA FOLDER still works for this session. To use reconnect later, keep a copy of GameData in Documents, Desktop or another normal folder/drive.');
-    }else{
-      status('Could not remember GameData. '+msg);
-    }
+    }else status('Could not remember GameData. '+msg);
   }
 }
 
-async function reconnect(){
-  if(reconnecting||!savedHandle)return;reconnecting=true;
+async function reconnect(options){
+  options=options||{};
+  if(reconnecting||!savedHandle)return false;reconnecting=true;
   try{
-    status('Reconnecting saved GameData...');
-    const p=await permission(savedHandle,true);
-    if(p!=='granted')throw new Error('Chrome did not grant access to the saved folder.');
+    if(!options.silent)status('Reconnecting saved GameData...');
+    const p=await permission(savedHandle,!options.noPrompt);
+    if(p!=='granted'){
+      autoNeedsClick=!!options.noPrompt;
+      if(!options.silent)status('Chrome needs permission for the saved folder this visit. Click RECONNECT SAVED GAMEDATA.');
+      renderBox();
+      return false;
+    }
     if(!savedManifest||!savedManifest.length){savedManifest=await buildManifest(savedHandle);await dbPut(MANIFEST_KEY,savedManifest);}
     await attachMount(savedHandle,savedManifest);
-    status('Saved GameData connected - '+savedManifest.length+' files.');
+    autoNeedsClick=false;
+    if(!options.silent)status('Saved GameData connected - '+savedManifest.length+' files.');
     renderBox();
+    return true;
   }catch(e){
-    status('Could not reconnect GameData. '+(e&&e.message?e.message:String(e)));
+    if(!options.silent)status('Could not reconnect GameData. '+(e&&e.message?e.message:String(e)));
+    return false;
   }finally{reconnecting=false;}
+}
+
+async function setAutoFromCheckbox(input){
+  if(!input.checked){setAutoEnabled(false);status('Automatic GameData reconnect turned off.');return;}
+  const p=await permission(savedHandle,true);
+  if(p!=='granted'){
+    input.checked=false;setAutoEnabled(false);
+    status('Chrome did not grant persistent access. You can still reconnect GameData manually each visit.');
+    return;
+  }
+  setAutoEnabled(true);autoNeedsClick=false;
+  status('Automatic GameData reconnect is on. FoxPlanet will reconnect after the splash loads when Chrome still has permission.');
 }
 
 async function forget(){
   await dbDelete(HANDLE_KEY);await dbDelete(MANIFEST_KEY);
-  savedHandle=null;savedManifest=null;stateLoaded=true;
+  savedHandle=null;savedManifest=null;statePromise=Promise.resolve();setAutoEnabled(false);autoNeedsClick=false;
   status('Saved GameData forgotten.');
   renderBox();
 }
@@ -199,6 +224,8 @@ function installStyle(){
 #pfp-saved-gamedata strong{display:block;color:#e2b737;margin-bottom:4px;letter-spacing:.4px}
 #pfp-saved-gamedata small{display:block;opacity:.8;line-height:1.35}
 #pfp-saved-gamedata .pfp-saved-action{display:inline-block;margin-top:7px;padding:5px 9px;border:1px solid rgba(227,181,54,.55);border-radius:5px;color:#e2b737;cursor:pointer}
+#pfp-saved-gamedata .pfp-saved-auto{display:flex;align-items:center;justify-content:center;gap:7px;margin-top:8px;font-size:11px;color:#cbd6df;cursor:pointer}
+#pfp-saved-gamedata .pfp-saved-auto input{margin:0}
 #pfp-saved-gamedata .pfp-saved-forget{display:block;margin:6px auto 0;border:0;background:none;color:#9fb5c7;font:11px monospace;text-decoration:underline;cursor:pointer}
 `;(document.head||document.documentElement).appendChild(s);
 }
@@ -210,32 +237,45 @@ function renderBox(){
   if(window.__PFP_SAVED_GAMEDATA_ACTIVE){
     title.textContent='GAMEDATA REMEMBERED';note.textContent='Connected for this visit and saved for later.';
   }else if(savedHandle){
-    title.textContent='SAVED GAMEDATA FOUND';note.textContent='Reconnect it without choosing the folder again.';action.className='pfp-saved-action';action.textContent='RECONNECT SAVED GAMEDATA';action.onclick=reconnect;
+    title.textContent='SAVED GAMEDATA FOUND';
+    note.textContent=autoNeedsClick?'Automatic reconnect is enabled, but Chrome needs permission this visit.':'Reconnect it without choosing the folder again.';
+    action.className='pfp-saved-action';action.textContent='RECONNECT SAVED GAMEDATA';action.onclick=()=>reconnect();
   }else{
     title.textContent='REMEMBER GAMEDATA';
     note.textContent='Optional: choose a GameData folder Chrome/Edge is allowed to remember. Protected Windows folders such as AppData cannot be saved for later visits.';
     action.className='pfp-saved-action';action.textContent='CHOOSE FOLDER TO REMEMBER';action.onclick=chooseFolderToRemember;
   }
   box.append(title,note);if(action.textContent)box.append(action);
-  if(savedHandle){const forgetBtn=document.createElement('button');forgetBtn.className='pfp-saved-forget';forgetBtn.type='button';forgetBtn.textContent='Forget saved folder';forgetBtn.onclick=e=>{e.preventDefault();e.stopPropagation();forget().catch(()=>{});};box.append(forgetBtn);}
+  if(savedHandle){
+    const auto=document.createElement('label');auto.className='pfp-saved-auto';
+    const check=document.createElement('input');check.type='checkbox';check.checked=autoEnabled();check.onchange=()=>setAutoFromCheckbox(check).catch(()=>{});
+    const text=document.createElement('span');text.textContent='AUTO RECONNECT ON STARTUP';auto.append(check,text);box.append(auto);
+    const forgetBtn=document.createElement('button');forgetBtn.className='pfp-saved-forget';forgetBtn.type='button';forgetBtn.textContent='Forget saved folder';forgetBtn.onclick=e=>{e.preventDefault();e.stopPropagation();forget().catch(()=>{});};box.append(forgetBtn);
+  }
 }
 
 async function setupModal(){
   const card=document.getElementById('pfp-web-data-card');if(!card)return;
   installStyle();
   let box=document.getElementById('pfp-saved-gamedata');
-  if(!box){
-    box=document.createElement('div');box.id='pfp-saved-gamedata';
-    const statusEl=document.getElementById('pfp-web-data-status');card.insertBefore(box,statusEl||null);
-  }
-  await loadSavedState();
-  renderBox();
+  if(!box){box=document.createElement('div');box.id='pfp-saved-gamedata';const statusEl=document.getElementById('pfp-web-data-status');card.insertBefore(box,statusEl||null);}
+  await loadSavedState();renderBox();
 }
 
-// Nothing runs at page startup. The saved-folder UI is prepared only after LOAD GAME FILES is opened.
+async function autoReconnectStartup(){
+  if(!autoEnabled())return;
+  await loadSavedState();
+  if(!savedHandle)return;
+  for(let i=0;i<24&&!document.getElementById('pfp-web-open-data');i++)await new Promise(r=>setTimeout(r,250));
+  const run=()=>reconnect({silent:true,noPrompt:true}).catch(()=>{});
+  if(typeof requestIdleCallback==='function')requestIdleCallback(run,{timeout:2500});else setTimeout(run,750);
+}
+
 document.addEventListener('click',e=>{
   const b=e.target&&e.target.closest&&e.target.closest('#pfp-web-open-data');
   if(!b)return;
   setTimeout(()=>setupModal().catch(err=>console.warn('[FoxPlanet] saved GameData UI',err)),0);
 },true);
+
+window.addEventListener('load',()=>{if(autoEnabled())setTimeout(()=>autoReconnectStartup().catch(()=>{}),1800);});
 })();
