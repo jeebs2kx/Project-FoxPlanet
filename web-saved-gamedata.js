@@ -19,8 +19,8 @@ const key=p=>clean(p).toLowerCase();
 
 class LocalSlice{
   constructor(buffer,name){this.arrayBuffer=buffer;this.byteOffset=0;this.byteLength=buffer.byteLength;this.name=name||'';}
-  slice(begin,end,copyData){begin=begin||0;const realEnd=end&&end!==0?end:this.byteLength;const b=this.arrayBuffer.slice(begin,realEnd);return new LocalSlice(b,this.name);}
-  subarray(begin,byteLength,copyData){begin=begin||0;if(byteLength===undefined)byteLength=this.byteLength-begin;return new LocalSlice(this.arrayBuffer.slice(begin,begin+byteLength),this.name);}
+  slice(begin,end){begin=begin||0;const realEnd=end&&end!==0?end:this.byteLength;return new LocalSlice(this.arrayBuffer.slice(begin,realEnd),this.name);}
+  subarray(begin,byteLength){begin=begin||0;if(byteLength===undefined)byteLength=this.byteLength-begin;return new LocalSlice(this.arrayBuffer.slice(begin,begin+byteLength),this.name);}
   copyToBuffer(begin,byteLength){begin=begin||0;if(byteLength===undefined)byteLength=this.byteLength-begin;return this.arrayBuffer.slice(begin,begin+byteLength);}
   createDataView(offs,length){offs=offs||0;if(length===undefined)length=this.byteLength-offs;return new DataView(this.arrayBuffer,offs,length);}
   createTypedArray(clazz,offs,count,endianness){
@@ -87,6 +87,7 @@ function makeMount(root,manifest){
   }
   return {
     label:MOUNT_LABEL,
+    __pfpAliasesReady:true,
     entries,
     async fetchData(path,opts){const e=entries.get(key(path));return e?e.read(clean(path),opts||{}):null;}
   };
@@ -132,7 +133,7 @@ async function rememberHandle(handle){
   await dbPut(HANDLE_KEY,handle);await dbPut(MANIFEST_KEY,manifest);
   try{navigator.storage&&navigator.storage.persist&&navigator.storage.persist();}catch(_){}
   await attachSavedMount(handle,manifest);
-  status('GameData remembered - '+manifest.length+' files. Chrome/Edge can reconnect this folder on later visits.');
+  status('GameData remembered - '+manifest.length+' files. Next time, use RECONNECT GAMEDATA instead of choosing the folder again.');
   updateUi();
 }
 
@@ -153,7 +154,8 @@ async function reconnect(){
   try{
     status('Reconnecting saved GameData...');
     const p=await permission(savedHandle,true);
-    if(p!=='granted'){status('GameData is still remembered, but Chrome did not grant access.');return false;}
+    if(p!=='granted'){status('GameData is remembered, but Chrome did not grant access.');return false;}
+    if(!savedManifest||!savedManifest.length)savedManifest=await dbGet(MANIFEST_KEY);
     if(!savedManifest||!savedManifest.length){
       savedManifest=await buildManifest(savedHandle,n=>status('Reading saved GameData... '+n+' files found'));
       await dbPut(MANIFEST_KEY,savedManifest);
@@ -195,7 +197,7 @@ function updateUi(){
   const title=box.querySelector('strong'),note=box.querySelector('small'),forgetBtn=box.querySelector('button');
   box.classList.toggle('pfp-can-reconnect',!!savedHandle&&!window.__PFP_SAVED_GAMEDATA_ACTIVE);
   if(window.__PFP_SAVED_GAMEDATA_ACTIVE){title.textContent='GAMEDATA REMEMBERED';note.textContent='This folder is connected for this visit and saved for later visits.';}
-  else if(savedHandle){title.textContent='RECONNECT SAVED GAMEDATA';note.textContent='Click here once. If Chrome asks, choose Allow on every visit to make future visits automatic.';}
+  else if(savedHandle){title.textContent='RECONNECT SAVED GAMEDATA';note.textContent='Click once to reconnect the folder saved by this browser. No folder picker is needed.';}
   else{title.textContent='REMEMBER GAMEDATA';note.textContent='Chrome/Edge: drag your GameData folder here once to remember it between visits.';}
   forgetBtn.hidden=!savedHandle;
 }
@@ -213,8 +215,7 @@ function enhanceModal(){
   box.addEventListener('drop',e=>{
     e.preventDefault();e.stopPropagation();box.classList.remove('pfp-drag');
     const items=Array.from(e.dataTransfer&&e.dataTransfer.items||[]).filter(x=>x.kind==='file');
-    const promises=items.map(x=>typeof x.getAsFileSystemHandle==='function'?x.getAsFileSystemHandle():Promise.resolve(null));
-    Promise.all(promises).then(handles=>{
+    Promise.all(items.map(x=>typeof x.getAsFileSystemHandle==='function'?x.getAsFileSystemHandle():Promise.resolve(null))).then(handles=>{
       const h=handles.find(x=>x&&x.kind==='directory');
       if(!h){status('This browser cannot remember that dropped folder. Chrome or Edge works best for this feature.');return;}
       rememberHandle(h).catch(err=>status('Could not remember GameData. '+(err&&err.message?err.message:String(err))));
@@ -225,19 +226,11 @@ function enhanceModal(){
   updateUi();
 }
 
-async function restoreSaved(){
-  try{
-    savedHandle=await dbGet(HANDLE_KEY);savedManifest=await dbGet(MANIFEST_KEY);
-    if(!savedHandle){updateUi();return;}
-    const p=await permission(savedHandle,false);
-    if(p==='granted'){
-      if(!savedManifest||!savedManifest.length){savedManifest=await buildManifest(savedHandle);await dbPut(MANIFEST_KEY,savedManifest);}
-      await attachSavedMount(savedHandle,savedManifest);
-      status('Saved GameData restored - '+savedManifest.length+' files.');
-    }else{
-      updateUi();
-    }
-  }catch(e){console.warn('[FoxPlanet] saved GameData restore failed',e);updateUi();}
+// Startup is deliberately lightweight. Only read the saved directory handle here.
+// The large manifest and mount are restored only after the user clicks RECONNECT GAMEDATA.
+async function readSavedState(){
+  try{savedHandle=await dbGet(HANDLE_KEY);}catch(e){console.warn('[FoxPlanet] saved GameData state',e);}
+  updateUi();
 }
 
 document.addEventListener('click',e=>{
@@ -249,5 +242,5 @@ document.addEventListener('click',e=>{
 
 new MutationObserver(()=>{enhanceModal();updateLoadButton();}).observe(document.documentElement,{childList:true,subtree:true});
 window.addEventListener('load',()=>{setTimeout(enhanceModal,100);setTimeout(updateLoadButton,300);});
-setTimeout(restoreSaved,150);
+setTimeout(readSavedState,500);
 })();
