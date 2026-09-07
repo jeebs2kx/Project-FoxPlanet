@@ -56,6 +56,7 @@ I’ve also used a lot of useful research and documentation shared publicly by m
 Additional documentation and credit also goes to the folks behind these GitHub pages:
 
 https://github.com/RenaKunisaki/StarFoxAdventures
+
 https://github.com/zestydevy/dinosaur-planet
 
 Thanks to everyone who has worked on documenting, reverse engineering and preserving these games!
