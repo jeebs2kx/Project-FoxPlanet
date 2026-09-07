@@ -138,7 +138,7 @@ async function permission(handle,request){
 }
 
 async function remember(handle){
-  if(!handle||handle.kind!=='directory')throw new Error('Drop the GameData folder itself.');
+  if(!handle||handle.kind!=='directory')throw new Error('Choose the GameData folder itself.');
   status('Reading GameData folder...');
   const manifest=await buildManifest(handle);
   if(!manifest.length)throw new Error('No files were found in that folder.');
@@ -151,6 +151,25 @@ async function remember(handle){
   renderBox();
 }
 
+async function chooseFolderToRemember(){
+  if(typeof window.showDirectoryPicker!=='function'){
+    status('Remember GameData needs Chrome or Edge. Use EXISTING GAMEDATA FOLDER for this session.');
+    return;
+  }
+  try{
+    const handle=await window.showDirectoryPicker({id:'project-foxplanet-gamedata',mode:'read'});
+    await remember(handle);
+  }catch(e){
+    if(e&&e.name==='AbortError')return;
+    const msg=String(e&&e.message||e||'');
+    if(/system|sensitive|not allowed|security/i.test(msg)){
+      status('Chrome/Edge cannot remember GameData from AppData or other protected Windows folders. EXISTING GAMEDATA FOLDER still works for this session. To use reconnect later, keep a copy of GameData in Documents, Desktop or another normal folder/drive.');
+    }else{
+      status('Could not remember GameData. '+msg);
+    }
+  }
+}
+
 async function reconnect(){
   if(reconnecting||!savedHandle)return;reconnecting=true;
   try{
@@ -161,6 +180,8 @@ async function reconnect(){
     await attachMount(savedHandle,savedManifest);
     status('Saved GameData connected - '+savedManifest.length+' files.');
     renderBox();
+  }catch(e){
+    status('Could not reconnect GameData. '+(e&&e.message?e.message:String(e)));
   }finally{reconnecting=false;}
 }
 
@@ -174,12 +195,11 @@ async function forget(){
 function installStyle(){
   if(document.getElementById('pfp-saved-gamedata-style'))return;
   const s=document.createElement('style');s.id='pfp-saved-gamedata-style';s.textContent=`
-#pfp-saved-gamedata{margin:10px 0 0;padding:10px 12px;border:1px dashed rgba(227,181,54,.58);border-radius:8px;background:rgba(12,26,38,.72);color:#d7dde5;font:12px monospace;text-align:center}
+#pfp-saved-gamedata{margin:10px 0 0;padding:10px 12px;border:1px solid rgba(227,181,54,.42);border-radius:8px;background:rgba(12,26,38,.72);color:#d7dde5;font:12px monospace;text-align:center}
 #pfp-saved-gamedata strong{display:block;color:#e2b737;margin-bottom:4px;letter-spacing:.4px}
 #pfp-saved-gamedata small{display:block;opacity:.8;line-height:1.35}
 #pfp-saved-gamedata .pfp-saved-action{display:inline-block;margin-top:7px;padding:5px 9px;border:1px solid rgba(227,181,54,.55);border-radius:5px;color:#e2b737;cursor:pointer}
 #pfp-saved-gamedata .pfp-saved-forget{display:block;margin:6px auto 0;border:0;background:none;color:#9fb5c7;font:11px monospace;text-decoration:underline;cursor:pointer}
-#pfp-saved-gamedata.pfp-drag{background:rgba(51,79,92,.92);border-style:solid}
 `;(document.head||document.documentElement).appendChild(s);
 }
 
@@ -190,9 +210,11 @@ function renderBox(){
   if(window.__PFP_SAVED_GAMEDATA_ACTIVE){
     title.textContent='GAMEDATA REMEMBERED';note.textContent='Connected for this visit and saved for later.';
   }else if(savedHandle){
-    title.textContent='SAVED GAMEDATA FOUND';note.textContent='Reconnect it without choosing the folder again.';action.className='pfp-saved-action';action.textContent='RECONNECT SAVED GAMEDATA';action.onclick=()=>reconnect().catch(e=>status('Could not reconnect GameData. '+(e&&e.message?e.message:String(e))));
+    title.textContent='SAVED GAMEDATA FOUND';note.textContent='Reconnect it without choosing the folder again.';action.className='pfp-saved-action';action.textContent='RECONNECT SAVED GAMEDATA';action.onclick=reconnect;
   }else{
-    title.textContent='REMEMBER GAMEDATA';note.textContent='Chrome/Edge: drag your GameData folder onto this box once to remember it between visits.';
+    title.textContent='REMEMBER GAMEDATA';
+    note.textContent='Optional: choose a GameData folder Chrome/Edge is allowed to remember. Protected Windows folders such as AppData cannot be saved for later visits.';
+    action.className='pfp-saved-action';action.textContent='CHOOSE FOLDER TO REMEMBER';action.onclick=chooseFolderToRemember;
   }
   box.append(title,note);if(action.textContent)box.append(action);
   if(savedHandle){const forgetBtn=document.createElement('button');forgetBtn.className='pfp-saved-forget';forgetBtn.type='button';forgetBtn.textContent='Forget saved folder';forgetBtn.onclick=e=>{e.preventDefault();e.stopPropagation();forget().catch(()=>{});};box.append(forgetBtn);}
@@ -205,23 +227,12 @@ async function setupModal(){
   if(!box){
     box=document.createElement('div');box.id='pfp-saved-gamedata';
     const statusEl=document.getElementById('pfp-web-data-status');card.insertBefore(box,statusEl||null);
-    box.addEventListener('dragover',e=>{e.preventDefault();box.classList.add('pfp-drag');});
-    box.addEventListener('dragleave',()=>box.classList.remove('pfp-drag'));
-    box.addEventListener('drop',e=>{
-      e.preventDefault();e.stopPropagation();box.classList.remove('pfp-drag');
-      const items=Array.from(e.dataTransfer&&e.dataTransfer.items||[]).filter(x=>x.kind==='file');
-      Promise.all(items.map(x=>typeof x.getAsFileSystemHandle==='function'?x.getAsFileSystemHandle():Promise.resolve(null))).then(handles=>{
-        const h=handles.find(x=>x&&x.kind==='directory');
-        if(!h){status('This browser cannot remember that dropped folder. Chrome or Edge works best.');return;}
-        remember(h).catch(err=>status('Could not remember GameData. '+(err&&err.message?err.message:String(err))));
-      });
-    });
   }
   await loadSavedState();
   renderBox();
 }
 
-// Nothing runs at page startup. Only prepare the remembered-folder UI after the user opens LOAD GAME FILES.
+// Nothing runs at page startup. The saved-folder UI is prepared only after LOAD GAME FILES is opened.
 document.addEventListener('click',e=>{
   const b=e.target&&e.target.closest&&e.target.closest('#pfp-web-open-data');
   if(!b)return;
