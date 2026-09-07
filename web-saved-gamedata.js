@@ -15,6 +15,7 @@ let statePromise=null;
 let reconnecting=false;
 let activeMount=null;
 let autoNeedsClick=false;
+let autoPermissionArmed=false;
 
 const clean=p=>String(p||'').replace(/\\/g,'/').replace(/^\/+/, '').replace(/\/+/g,'/');
 const lower=p=>clean(p).toLowerCase();
@@ -143,6 +144,13 @@ async function permission(handle,request){
   return 'denied';
 }
 
+function requestPermissionDirect(handle){
+  try{
+    if(handle&&typeof handle.requestPermission==='function')return handle.requestPermission({mode:'read'});
+  }catch(_){}
+  return Promise.resolve('denied');
+}
+
 async function remember(handle){
   if(!handle||handle.kind!=='directory')throw new Error('Choose the GameData folder itself.');
   status('Reading GameData folder...');
@@ -168,9 +176,8 @@ async function chooseFolderToRemember(){
   }catch(e){
     if(e&&e.name==='AbortError')return;
     const msg=String(e&&e.message||e||'');
-    if(/system|sensitive|not allowed|security/i.test(msg)){
-      status('Chrome/Edge cannot remember GameData from AppData or other protected Windows folders. EXISTING GAMEDATA FOLDER still works for this session. To use reconnect later, keep a copy of GameData in Documents, Desktop or another normal folder/drive.');
-    }else status('Could not remember GameData. '+msg);
+    if(/system|sensitive|not allowed|security/i.test(msg))status('Chrome/Edge cannot remember GameData from AppData or other protected Windows folders. EXISTING GAMEDATA FOLDER still works for this session. To use reconnect later, keep a copy of GameData in Documents, Desktop or another normal folder/drive.');
+    else status('Could not remember GameData. '+msg);
   }
 }
 
@@ -182,7 +189,7 @@ async function reconnect(options){
     const p=await permission(savedHandle,!options.noPrompt);
     if(p!=='granted'){
       autoNeedsClick=!!options.noPrompt;
-      if(!options.silent)status('Chrome needs permission for the saved folder this visit. Click RECONNECT SAVED GAMEDATA.');
+      if(!options.silent)status('Chrome needs permission for the saved folder this visit.');
       renderBox();
       return false;
     }
@@ -198,16 +205,54 @@ async function reconnect(options){
   }finally{reconnecting=false;}
 }
 
+async function reconnectFromGesture(){
+  if(!savedHandle||reconnecting)return false;
+  let p='denied';
+  try{p=await requestPermissionDirect(savedHandle);}catch(_){}
+  if(p!=='granted'){
+    autoNeedsClick=true;
+    status('Chrome did not grant access to the saved folder.');
+    renderBox();
+    return false;
+  }
+  autoNeedsClick=false;
+  return reconnect({noPrompt:true});
+}
+
+function armAutoPermissionOnFirstClick(){
+  if(autoPermissionArmed||!autoEnabled()||!savedHandle)return;
+  autoPermissionArmed=true;
+  const onClick=()=>{
+    document.removeEventListener('click',onClick,true);
+    autoPermissionArmed=false;
+    if(!autoEnabled()||!savedHandle||window.__PFP_SAVED_GAMEDATA_ACTIVE)return;
+    let req;
+    try{req=requestPermissionDirect(savedHandle);}catch(_){req=Promise.resolve('denied');}
+    Promise.resolve(req).then(p=>{
+      if(p!=='granted'){
+        autoNeedsClick=true;
+        renderBox();
+        return;
+      }
+      autoNeedsClick=false;
+      const run=()=>reconnect({silent:true,noPrompt:true}).catch(()=>{});
+      if(typeof requestIdleCallback==='function')requestIdleCallback(run,{timeout:1200});else setTimeout(run,0);
+    }).catch(()=>{});
+  };
+  document.addEventListener('click',onClick,true);
+}
+
 async function setAutoFromCheckbox(input){
-  if(!input.checked){setAutoEnabled(false);status('Automatic GameData reconnect turned off.');return;}
-  const p=await permission(savedHandle,true);
+  if(!input.checked){setAutoEnabled(false);autoNeedsClick=false;status('Automatic GameData reconnect turned off.');return;}
+  let p='denied';
+  try{p=await requestPermissionDirect(savedHandle);}catch(_){}
   if(p!=='granted'){
     input.checked=false;setAutoEnabled(false);
-    status('Chrome did not grant persistent access. You can still reconnect GameData manually each visit.');
+    status('Chrome did not grant folder access. You can still reconnect GameData manually each visit.');
     return;
   }
   setAutoEnabled(true);autoNeedsClick=false;
-  status('Automatic GameData reconnect is on. FoxPlanet will reconnect after the splash loads when Chrome still has permission.');
+  status('Automatic GameData reconnect is on. If Chrome keeps folder access it will reconnect automatically; otherwise your first click next visit will ask for permission.');
 }
 
 async function forget(){
@@ -238,8 +283,8 @@ function renderBox(){
     title.textContent='GAMEDATA REMEMBERED';note.textContent='Connected for this visit and saved for later.';
   }else if(savedHandle){
     title.textContent='SAVED GAMEDATA FOUND';
-    note.textContent=autoNeedsClick?'Automatic reconnect is enabled, but Chrome needs permission this visit.':'Reconnect it without choosing the folder again.';
-    action.className='pfp-saved-action';action.textContent='RECONNECT SAVED GAMEDATA';action.onclick=()=>reconnect();
+    note.textContent=autoNeedsClick?'Automatic reconnect is waiting for your first click so Chrome can ask for folder access.':'Reconnect it without choosing the folder again.';
+    action.className='pfp-saved-action';action.textContent='RECONNECT SAVED GAMEDATA';action.onclick=()=>reconnectFromGesture();
   }else{
     title.textContent='REMEMBER GAMEDATA';
     note.textContent='Optional: choose a GameData folder Chrome/Edge is allowed to remember. Protected Windows folders such as AppData cannot be saved for later visits.';
@@ -267,8 +312,15 @@ async function autoReconnectStartup(){
   await loadSavedState();
   if(!savedHandle)return;
   for(let i=0;i<24&&!document.getElementById('pfp-web-open-data');i++)await new Promise(r=>setTimeout(r,250));
-  const run=()=>reconnect({silent:true,noPrompt:true}).catch(()=>{});
-  if(typeof requestIdleCallback==='function')requestIdleCallback(run,{timeout:2500});else setTimeout(run,750);
+  const p=await permission(savedHandle,false);
+  if(p==='granted'){
+    const run=()=>reconnect({silent:true,noPrompt:true}).catch(()=>{});
+    if(typeof requestIdleCallback==='function')requestIdleCallback(run,{timeout:2500});else setTimeout(run,750);
+  }else{
+    autoNeedsClick=true;
+    armAutoPermissionOnFirstClick();
+    renderBox();
+  }
 }
 
 document.addEventListener('click',e=>{
