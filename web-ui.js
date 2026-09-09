@@ -2,7 +2,7 @@
 'use strict';
 if(window.__PFP_WEB_POLISH_R20)return;window.__PFP_WEB_POLISH_R20=true;
 
-// Exact DP map track + MusicAction choices from the desktop FoxPlanet build.
+// same DP map music choices as the desktop one
 const DESKTOP_DP_MAP_MUSIC={
   2:{sequenceId:19,actionId:0},3:{sequenceId:34,actionId:0},4:{sequenceId:15,actionId:0},5:{sequenceId:94,actionId:0},
   6:{sequenceId:63,actionId:13},7:{sequenceId:17,actionId:18},8:{sequenceId:17,actionId:236},9:{sequenceId:28,actionId:272},
@@ -44,13 +44,11 @@ function stopSceneDpMusic(scene){
   }catch(e){console.warn('[FoxPlanet R20] DP music transition stop',e);}
 }
 
-// Desktop does not suspend/resume the AudioContext around every schedule pass.
-// R18/R19 did that only on web; removing that web-only scheduler wrapper fixes the
-// remaining layered/action tracks that stuttered despite using the correct action.
+// the web scheduler used to mess with a few layered tracks, so leave it alone here
 function ensureDesktopScheduler(){
   const C=window.__pfpDPNativeMusicClass,p=C&&C.prototype;
   if(!p)return false;
-  // Fresh R20 pages never install the R18/R19 wrapper. Mark only for diagnostics.
+  // just a little flag so I can tell this bit has run
   p.__pfpWebDesktopSchedulerR20=true;
   return true;
 }
@@ -59,7 +57,7 @@ function syncCurrentDpMusic(){
   const scene=currentScene();
   if(!scene||!scene.isDPMapScene)return false;
   const mapNum=Number(scene.mapNum),routeMap=routeDpMapNum();
-  // Never touch the outgoing DP scene while a different route is being loaded.
+  // don't poke the old map while the new one is loading
   if(routeMap!==null&&routeMap!==mapNum)return false;
   const pref=DESKTOP_DP_MAP_MUSIC[mapNum];
   if(!pref)return true;
@@ -90,9 +88,7 @@ function syncCurrentDpMusic(){
   return true;
 }
 
-// Stop the outgoing DP scheduler before noclip clears the old scene. This prevents
-// thousands of already-scheduled DP sample nodes/timers from competing with the next
-// DP/SFA scene load in Chrome, which was the source of the long black transitions.
+// stop the old map's music before swapping maps or Chrome can get a bit grumpy
 function patchSceneTransitions(){
   const app=window.main;
   if(!app||typeof app._loadSceneDesc!=='function')return false;
