@@ -28,6 +28,10 @@ function swapSection(text,start,end,replacement,name){
 }
 
 function patchMain(text){
+  const oldSkyType='            (e[(e.Skyscape = 4)] = "Skyscape"));';
+  if(!text.includes(oldSkyType))throw new Error('could not find skyscape type');
+  text=text.replace(oldSkyType,'            (e[(e.Skyscape = 6)] = "Skyscape"));');
+
   const oldMapStart='        async function nn(e, t, n, s, i, a, r = 577) {';
   const oldMapEnd='        function pfpParseVoxDataView(e) {';
   text=swapSection(text,oldMapStart,oldMapEnd,NEW_OLD_MAP_SKY, 'old map sky stuff');
@@ -46,6 +50,21 @@ function patchMain(text){
   const skyStart='            } else if (i.type === s.Skyscape) {';
   const skyEnd='            return (\n              "StarFoxAdventuresDemo" === this.world.gameInfo.pathBase &&';
   text=swapSection(text,skyStart,skyEnd,NEW_SKYSCAPE,'skyscape');
+
+  const oldX='              tn(x) && (await nn(p, h, this.gameInfo, t.dataFetcher, m, x)),';
+  const newX='              await nn(p, h, this.gameInfo, t.dataFetcher, m, x),';
+  if(text.split(oldX).length-1!==3)throw new Error('old map sky calls have moved');
+  text=text.split(oldX).join(newX);
+
+  const oldH='            (tn(h) && (await nn(r, i, this.gameInfo, t.dataFetcher, l, h)),';
+  const newH='            (await nn(r, i, this.gameInfo, t.dataFetcher, l, h),';
+  if(!text.includes(oldH))throw new Error('early2 sky call has moved');
+  text=text.replace(oldH,newH);
+
+  const oldM='            (tn(m) && (await nn(h, l, this.gameInfo, t.dataFetcher, d, m)),';
+  const newM='            (await nn(h, l, this.gameInfo, t.dataFetcher, d, m),';
+  if(!text.includes(oldM))throw new Error('early4 sky call has moved');
+  text=text.replace(oldM,newM);
   return text;
 }
 
@@ -60,7 +79,7 @@ function loadScript(src){
 }
 
 async function boot(){
-  const r=await fetch(MAIN+'?envfx=20260909',{cache:'no-store'});
+  const r=await fetch(MAIN+'?envfx=20260909b',{cache:'no-store'});
   if(!r.ok)throw new Error('could not load the main FoxPlanet file ('+r.status+')');
   const original=await r.text();
   const patched=patchMain(original);
