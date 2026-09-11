@@ -253,7 +253,9 @@
   var DP_FILES = {
     'ENVFXACT.bin':[0x03B06CF4,98304], 'FONTS.bin':[0x01FE9EFE,13444],
     'AMBIENT.bin':[0x009D65E0,1232408], 'AMBIENT.tab':[0x009D65D0,16],
-    'ANIM.bin':[0x0347D752,3395584], 'ANIM.tab':[0x0347B36E,9188],
+    'ANIM.bin':[0x0347D752,3330048], 'ANIM.tab':[0x0347B36E,9188],
+    'MODANIM.tab':[0x0347805E,2058], 'MODANIM.bin':[0x03478868,11014],
+    'AMAP.tab':[0x037AA752,4116], 'AMAP.bin':[0x037AB766,209408],
     'AUDIO.bin':[0x000A4B0C,1156476], 'AUDIO.tab':[0x000A4AA0,108],
     'BLOCKS.bin':[0x02CCBE42,5849138], 'BLOCKS.tab':[0x0325FE74,4416],
     'HITS.bin':[0x03261024,166016], 'HITS.tab':[0x032898A4,4412],
@@ -400,9 +402,11 @@
 body[data-landing="1"] { overflow:hidden !important; }
 body[data-landing="1"] #SceneSelect { overflow:hidden !important; }
 #pfp-web-open-data {
-  height:22px !important;
-  padding:1px 8px !important;
-  margin:0 5px 0 6px !important;
+  width:100% !important;
+  box-sizing:border-box !important;
+  height:28px !important;
+  padding:2px 10px !important;
+  margin:0 !important;
   border:1px solid rgba(224,181,78,.48) !important;
   border-radius:5px !important;
   background:linear-gradient(180deg,#17314f,#0d2036) !important;
@@ -567,14 +571,16 @@ body[data-landing="1"] #landing-version .landing-patch-wide { margin-top:1px !im
     if (!labels.length) return;
     var label=labels[0], row=label.parentElement;
     if (!row || row.children.length<2) return;
-    row.style.gridTemplateColumns='1fr auto 24px';
+    label.style.display='none';
+    Array.from(row.children).forEach(function(el){if(el!==label)el.style.display='none';});
+    row.style.gridTemplateColumns='1fr';
     var open=button('LOAD GAME FILES',function(e){
       if(e){e.preventDefault();e.stopPropagation();}
       buildDataModal().hidden=false;
     });
     open.id='pfp-web-open-data';
     open.addEventListener('mousedown',function(e){e.stopPropagation();});
-    row.insertBefore(open,row.lastElementChild);
+    row.appendChild(open);
   }
 
   function installUi() {
