@@ -87,10 +87,10 @@ function loadScript(src){
 }
 
 async function boot(){
-  const r=await fetch(MAIN+'?envfx=20260910c',{cache:'no-store'});
+  const r=await fetch(MAIN+'?web=20260911a',{cache:'no-store'});
   if(!r.ok)throw new Error('could not load the main FoxPlanet file ('+r.status+')');
   const original=await r.text();
-  const patched=patchMain(original);
+  const patched=original.includes('DP anims added + fixed map models')?original:patchMain(original);
   (0,eval)(patched+'\n//# sourceURL='+MAIN);
   for(const src of AFTER)await loadScript(src);
 }

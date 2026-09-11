@@ -6656,6 +6656,99 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
               t.setCullMode(l.Ac.NONE),
               t.setUsePnMtxIdx(!1),
               (this.materialHelperSky = new d.kg(t.finish("atmosphere"))));
+            const n = (e, t) => {
+              const n = new h.I();
+              (n.setTexCoordGen(
+                l.gw.TEXCOORD0,
+                l.s3.MTX2x4,
+                l.Kx.TEX0,
+                l.b1.IDENTITY,
+              ),
+                n.setTevDirect(0),
+                n.setTevOrder(
+                  0,
+                  l.gw.TEXCOORD0,
+                  l.zH.TEXMAP0,
+                  e ? l.Ug.COLOR0A0 : l.Ug.COLOR_ZERO,
+                ),
+                e
+                  ? n.setTevColorIn(
+                      0,
+                      l.CC.ZERO,
+                      l.CC.TEXC,
+                      l.CC.RASC,
+                      l.CC.ZERO,
+                    )
+                  : n.setTevColorIn(
+                      0,
+                      l.CC.ZERO,
+                      l.CC.ZERO,
+                      l.CC.ZERO,
+                      l.CC.TEXC,
+                    ),
+                n.setTevColorOp(
+                  0,
+                  l.fQ.ADD,
+                  l.bt.ZERO,
+                  l.mX.SCALE_1,
+                  !0,
+                  l.UZ.PREV,
+                ),
+                e
+                  ? n.setTevAlphaIn(
+                      0,
+                      l.CA.ZERO,
+                      l.CA.TEXA,
+                      l.CA.RASA,
+                      l.CA.ZERO,
+                    )
+                  : n.setTevAlphaIn(
+                      0,
+                      l.CA.ZERO,
+                      l.CA.ZERO,
+                      l.CA.ZERO,
+                      l.CA.TEXA,
+                    ),
+                n.setTevAlphaOp(
+                  0,
+                  l.fQ.ADD,
+                  l.bt.ZERO,
+                  l.mX.SCALE_1,
+                  !0,
+                  l.UZ.PREV,
+                ),
+                e &&
+                  n.setChanCtrl(
+                    l.UQ.COLOR0A0,
+                    !1,
+                    l.uj.REG,
+                    l.uj.VTX,
+                    0,
+                    l.jN.NONE,
+                    l.bg.NONE,
+                  ),
+                n.setAlphaCompare(
+                  l.oH.GREATER,
+                  0,
+                  l.O2.AND,
+                  l.oH.ALWAYS,
+                  0,
+                ),
+                n.setBlendMode(
+                  l.Nx.BLEND,
+                  l.dn.SRCALPHA,
+                  l.dn.INVSRCALPHA,
+                ),
+                n.setZMode(!0, l.oH.LEQUAL, !1),
+                n.setCullMode(l.Ac.NONE),
+                n.setUsePnMtxIdx(!1));
+              return new d.kg(n.finish(t));
+            };
+            ((this.materialHelperSkyscape = n(!1, "skyscape-texture")),
+              (this.materialHelperSkyscapeVertex = n(
+                !0,
+                "skyscape-vertex-alpha",
+              )));
           }
           renderAtmosphere(e, t, n, o, h, y) {
             const T = this.world.envfxMan.getAtmosphereTexture();
@@ -6717,9 +6810,7 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
               }));
           }
           addSkyRenderInsts(e, t, n, s) {
-            const skyObjects = this.world.envfxMan.skyscape.objects.concat(
-              this.world.envfxMan.cloudActionObjects || [],
-            );
+            const skyObjects = this.world.envfxMan.skyscape.objects;
             if (0 !== skyObjects.length) {
               t.setCurrentRenderInstList(n.skyscape);
               const i = t.pushTemplateRenderInst();
@@ -6728,17 +6819,17 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
                   sceneCtx: s,
                   showDevGeometry: !1,
                   setupLights: () => {},
+                  _pfpSkyMaterialHelper: this.materialHelperSkyscape,
+                  _pfpSkyMaterialHelperVertex:
+                    this.materialHelperSkyscapeVertex,
                 },
                 r = b;
               (0, m.YV)(r, s.viewerInput.camera);
-              const o = r[1];
               for (let n = 0; n < skyObjects.length; n++) {
                 const s = skyObjects[n];
-                ((r[1] = !0 === s._pfpCloudMain ? o + 40 : o),
-                  "function" == typeof s.setPosition && s.setPosition(r),
+                ("function" == typeof s.setPosition && s.setPosition(r),
                   s.addRenderInsts(e, t, null, a));
               }
-              r[1] = o;
               t.popTemplateRenderInst();
             }
           }
@@ -6993,7 +7084,9 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
           };
         }
         class u {
-          constructor() {}
+          constructor() {
+            this.dpPlainOffsets = !1;
+          }
           static async create(e, t, n = !1) {
             const [s, i] = await Promise.all([
               h(e, `${t}.TAB`, `${t}.tab`, n),
@@ -7005,17 +7098,28 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
             return (
               (a.tab = s.createDataView()),
               (a.bin = i.createDataView()),
+              (a.dpPlainOffsets = String(t)
+                .toLowerCase()
+                .includes("dinosaurplanet")),
               a
             );
           }
           hasAnim(e) {
-            return (
-              !(e < 0 || 4 * (e + 1) > this.tab.byteLength) &&
-              268435456 == (4278190080 & this.tab.getUint32(4 * e))
-            );
+            if (e < 0 || 4 * (e + 1) > this.tab.byteLength) return !1;
+            const t = this.tab.getUint32(4 * e),
+              n = this.tab.getUint32(4 * (e + 1));
+            if (this.dpPlainOffsets)
+              return (
+                4294967295 !== t &&
+                4294967295 !== n &&
+                n > t &&
+                t < this.bin.byteLength
+              );
+            return 268435456 == (4278190080 & t);
           }
           getAnim(e) {
-            const t = this.tab.getUint32(4 * e),
+            const pfpDpAnim = this.dpPlainOffsets,
+              t = this.tab.getUint32(4 * e),
               n = this.tab.getUint32(4 * (e + 1)),
               s = 268435456 == (4278190080 & t),
               i = s ? 268435455 & t : t,
@@ -7043,7 +7147,7 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
                 const n = 15 & t;
                 if (0 !== n) {
                   const t = s.get(n);
-                  e.rotation += 4 * (0, l.IB)(t, 14);
+                  e.rotation += pfpDpAnim ? 32 * t : 4 * (0, l.IB)(t, 14);
                 }
                 if (((e.rotation = (0, l.so)(e.rotation)), 16 & t)) {
                   t = i();
@@ -7063,7 +7167,7 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
                     e.translation = (0, l.Bh)(65520 & t);
                     const n = 15 & t;
                     (0 !== n && (e.translation += s.get(n)),
-                      (e.translation = (0, l.Bh)(e.translation) / 512));
+                      (e.translation = (0, l.Bh)(e.translation) / (pfpDpAnim ? 32 : 512)));
                   }
                 }
                 return e;
@@ -7087,6 +7191,106 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
             for (let e = 0; e < o.numKeyframes; e++) {
               const t = c(e);
               h.push(t);
+            }
+            let dpPackedSample = null;
+            if (pfpDpAnim) {
+              const dpDescriptors = [];
+              let dpDescOff = 10;
+              for (let bone = 0; bone < o.numBones; bone++) {
+                const axes = [];
+                for (let axis = 0; axis < 3; axis++) {
+                  const rot = r.getUint16(dpDescOff);
+                  dpDescOff += 2;
+                  let scale = null,
+                    translation = null;
+                  if (16 & rot) {
+                    const next = r.getUint16(dpDescOff);
+                    if (16 & next) {
+                      scale = next;
+                      dpDescOff += 2;
+                      if (32 & next) {
+                        translation = r.getUint16(dpDescOff);
+                        dpDescOff += 2;
+                      }
+                    } else {
+                      translation = next;
+                      dpDescOff += 2;
+                    }
+                  }
+                  axes.push({ rot, scale, translation });
+                }
+                dpDescriptors.push(axes);
+              }
+              dpPackedSample = (frame0, frame1, mix, reuse) => {
+                const bit0 = new l.D2(
+                    r,
+                    o.keyframesOffset + frame0 * o.keyframeStride,
+                  ),
+                  bit1 = new l.D2(
+                    r,
+                    o.keyframesOffset + frame1 * o.keyframeStride,
+                  ),
+                  frac = Math.max(
+                    0,
+                    Math.min(1024, Math.round((Number(mix) || 0) * 1024)),
+                  ),
+                  result =
+                    reuse && reuse.poses && reuse.poses.length === o.numBones
+                      ? reuse
+                      : {
+                          poses: Array.from({ length: o.numBones }, () => ({
+                            axes: [
+                              { translation: 0, rotation: 0, scale: 1 },
+                              { translation: 0, rotation: 0, scale: 1 },
+                              { translation: 0, rotation: 0, scale: 1 },
+                            ],
+                          })),
+                        };
+                for (let bone = 0; bone < o.numBones; bone++) {
+                  const pose = result.poses[bone];
+                  for (let axis = 0; axis < 3; axis++) {
+                    const desc = dpDescriptors[bone][axis],
+                      out = pose.axes[axis],
+                      rotWidth = 15 & desc.rot;
+                    let rotRaw;
+                    if (0 !== rotWidth) {
+                      const first = bit0.get(rotWidth),
+                        second = bit1.get(rotWidth);
+                      let diff = second - first;
+                      diff = (diff << 21) >> 21;
+                      const value = first + ((diff * frac) >> 10);
+                      rotRaw = (65520 & desc.rot) + (value << 5);
+                    } else rotRaw = 65520 & desc.rot;
+                    out.rotation = (0, l.so)(rotRaw);
+                    if (null !== desc.scale) {
+                      const scaleWidth = 15 & desc.scale;
+                      let scaleRaw;
+                      if (0 !== scaleWidth) {
+                        const first = bit0.get(scaleWidth),
+                          second = bit1.get(scaleWidth),
+                          value = first + (((second - first) * frac) >> 10);
+                        scaleRaw =
+                          ((65472 & desc.scale) + (value << 1)) & 65535;
+                      } else scaleRaw = 65535 & desc.scale;
+                      out.scale = 0 === scaleRaw ? 1 : scaleRaw / 1024;
+                    } else out.scale = 1;
+                    if (null !== desc.translation) {
+                      const transWidth = 15 & desc.translation;
+                      let transRaw;
+                      if (0 !== transWidth) {
+                        const first = bit0.get(transWidth),
+                          second = bit1.get(transWidth);
+                        let diff = second - first;
+                        diff = (diff << 16) >> 16;
+                        const value = first + ((diff * frac) >> 10);
+                        transRaw = (65520 & desc.translation) + value;
+                      } else transRaw = desc.translation;
+                      out.translation = (0, l.Bh)(transRaw) / 32;
+                    } else out.translation = 0;
+                  }
+                }
+                return result;
+              };
             }
             let d = 1, rootCurve = null;
             if (0 !== o.timesOffset && o.timesOffset + 6 <= r.byteLength) {
@@ -7112,7 +7316,14 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
                 if (valid && 6 === axes.length) rootCurve = { scale: rootScale, sampleCount, axes };
               }
             }
-            return { keyframes: h, speed: d, times: [], frameControl: r.getInt8(1), rootCurve };
+            return {
+              keyframes: h,
+              speed: d,
+              times: [],
+              frameControl: r.getInt8(1),
+              rootCurve,
+              dpPackedSample,
+            };
           }
         }
         function p(e, t, n, s) {
@@ -7159,29 +7370,33 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
             r = (e * i) % i,
             l = Math.floor(r),
             magicPlantInstantLoop =
+              !0 === t._pfpHardLoop ||
               "magicplant" ===
-              String(
-                t._pfpObjectType && t._pfpObjectType.name
-                  ? t._pfpObjectType.name
-                  : "",
-              ).toLowerCase();
+                String(
+                  t._pfpObjectType && t._pfpObjectType.name
+                    ? t._pfpObjectType.name
+                    : "",
+                ).toLowerCase();
           let c = l + 1;
           c >= i && (c = magicPlantInstantLoop ? l : 0);
           const h = n.keyframes[l],
             u = n.keyframes[c],
             p = magicPlantInstantLoop && l === i - 1 ? 0 : r - l;
-          ((t.poses = (function (e, t, n, s) {
-            const i = Math.min(e.poses.length, t.poses.length),
-              a =
-                void 0 !== s
-                  ? s
-                  : (function (e) {
-                      return { poses: (0, o.y5)(e, () => d()) };
-                    })(i);
-            for (let s = 0; s < i; s++)
-              a.poses[s] = m(e.poses[s], t.poses[s], n, a.poses[s]);
-            return a;
-          })(h, u, p, t.poses)),
+          ((t.poses =
+            "function" == typeof n.dpPackedSample
+              ? n.dpPackedSample(l, c, p, t.poses)
+              : (function (e, t, n, s) {
+                  const i = Math.min(e.poses.length, t.poses.length),
+                    a =
+                      void 0 !== s
+                        ? s
+                        : (function (e) {
+                            return { poses: (0, o.y5)(e, () => d()) };
+                          })(i);
+                  for (let s = 0; s < i; s++)
+                    a.poses[s] = m(e.poses[s], t.poses[s], n, a.poses[s]);
+                  return a;
+                })(h, u, p, t.poses)),
             (function (e, t, n) {
               t.resetPose();
               for (let s = 0; s < t.model.joints.length; s++) {
@@ -7230,8 +7445,6 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
           if(!slots||slot>=slots.length)return -1;
           const jointRemap=Number(slots[slot]);
           if(!Number.isInteger(jointRemap)||jointRemap<0||jointRemap===255)return -1;
-          // OBJECTS jointData stores the model joint/remap index used to index the
-          // active AMAP row in retail model.c, so it is a skeleton-array index here.
           return jointRemap<modelInst.model.joints.length?jointRemap:-1;
         }
         function pfpApplySequenceJointRotation(modelInst, jointIndex, rx, ry, rz) {
@@ -7255,9 +7468,6 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
           if(!face||!modelInst||!modelInst.skeletonInst)return;
           let mouth=Number(face.mouth)||0;
           mouth=Math.max(-90,Math.min(90,mouth))*Math.PI/180;
-          // Retail track 0x11 writes X rotation to objFindJointPoseVector(obj, 1).
-          // Eye tracks 0x0F/0x10 scroll object texture slots; they are deliberately
-          // NOT treated as skeleton rotations here (that was the arm/foot corruption).
           if(Math.abs(mouth)>0.0001)pfpApplySequenceJointRotation(modelInst,pfpSequenceJointByKey(modelInst,1),mouth,0,0);
         }
         function pfpCopyView(v){const a=new Uint8Array(v.byteLength);a.set(new Uint8Array(v.buffer,v.byteOffset,v.byteLength));return new DataView(a.buffer);}
@@ -7281,10 +7491,6 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
           if(model.hasFineSkinning){mi._pfpMorphSourceBuffer=pfpCopyView(model.originalPosBuffer);return mi._pfpMorphSourceBuffer;}
           const old=model.originalPosBuffer,clone=pfpCopyView(old);model.originalPosBuffer=clone;try{mi.modelShapes=model.createModelShapes();mi._pfpMorphOwnShapes=!0;}finally{model.originalPosBuffer=old;}mi._pfpMorphSourceBuffer=mi.modelShapes.posBuffer;return mi._pfpMorphSourceBuffer;
         }
-        // Sequence vertex morphs are sparse. The old viewer path copied the entire
-        // position buffer several times and scanned every vertex on every rendered
-        // frame. Keep the same retail blend result, but only restore/update vertices
-        // actually referenced by the active morph streams.
         function pfpResetMorphVertices(dst,base,touched,fineDst){
           if(!touched||!touched.size)return !1;let changed=!1;
           for(const vi of touched){const o=(vi|0)*6;if(o<0||o+6>dst.byteLength||o+6>base.byteLength)continue;for(let k=0;k<3;k++){const off=o+k*2,v=base.getInt16(off,!1);dst.setInt16(off,v,!1);if(fineDst&&off+2<=fineDst.byteLength)fineDst.setInt16(off,v,!1);}changed=!0;}
@@ -7314,8 +7520,6 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
         function pfpApplySequencePose(state, modelInst) {
           if(!state||!modelInst||!modelInst.model)return;
           if(!modelInst.model.joints.length){pfpApplySequenceMorph(state.morph,modelInst);return;}
-          // A morph-only or temporarily unresolved command must not reset a character
-          // to bind pose. Preserve the last/default pose and apply only the morph.
           if(!state.anim){pfpApplySequenceMorph(state.morph,modelInst);return;}
           const cur=pfpSampleAnimPose(state.phase,state.anim,modelInst), curMap=modelInst.getAmap(state.modelAnimNum);
           const usePrev=state.prevAnim&&Number(state.blend)<1;
@@ -7324,9 +7528,6 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
           const fallback=state.fallbackAnim?pfpSampleAnimPose(state.fallbackPhase,state.fallbackAnim,modelInst):null;
           const fallbackMap=state.fallbackAnim?modelInst.getAmap(state.fallbackModelAnimNum):null;
           const mix=Math.max(0,Math.min(1,Number(state.blend)));
-          // Preserve the previously-rendered matrices as a final fallback for joints
-          // omitted by both animation maps. This matches persistent ObjAnim state and
-          // removes the one-frame/partial T-pose between moves.
           const poseMatrices=modelInst.skeletonInst&&modelInst.skeletonInst.poseMatrices;
           let held=modelInst._pfpSequenceHeldPoseCache;
           if(!held||!poseMatrices||held.length!==poseMatrices.length){held=poseMatrices?poseMatrices.map(q=>q?new Float32Array(q.length):null):[];modelInst._pfpSequenceHeldPoseCache=held;}
@@ -7404,11 +7605,17 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
                 ),
               "string" == typeof n)
             ) {
-              const e = await u.create(t, `${i}/${n}/ANIM`, !0);
+              const e = await u.create(
+                t,
+                n ? `${i}/${n}/ANIM` : `${i}/ANIM`,
+                !0,
+              );
               e && s.animFiles.push(e);
             } else {
               const e = await Promise.all(
-                n.map((e) => u.create(t, `${i}/${e}/ANIM`, !0)),
+                n.map((e) =>
+                  u.create(t, e ? `${i}/${e}/ANIM` : `${i}/ANIM`, !0),
+                ),
               );
               s.animFiles = e.filter((e) => null !== e);
             }
@@ -8194,7 +8401,7 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
           d = n(8267);
         !(function (e) {
           ((e[(e.Atmosphere = 5)] = "Atmosphere"),
-            (e[(e.Skyscape = 4)] = "Skyscape"));
+            (e[(e.Skyscape = 6)] = "Skyscape"));
         })(s || (s = {}));
         class u {
           constructor() {
@@ -8373,17 +8580,18 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
             return null !== (n = m[i]) && void 0 !== n ? n : null;
           }
           shouldForceTextureOnlySky() {
+            if (this.world._pfpNoEnvfx) return !1;
             return (
               null !== this.kioskTextureOnlySkyFetcher &&
               null !== this.getKioskTextureOnlyAtmosTexIds()
             );
           }
           forceKioskTextureOnlySky() {
+            if (this.world._pfpNoEnvfx) return;
             if ("StarFoxAdventuresDemo" !== this.world.gameInfo.pathBase)
               return;
             if (null === this.kioskTextureOnlySkyFetcher) return;
             if (this.world._pfpIsSpaceStage) return;
-            this.skyscape.objects = [];
             const e = this.getKioskTextureOnlyAtmosTexIds();
             if (null !== e) {
               this.atmosphere.textures = (0, o.y5)(8, () => null);
@@ -8397,6 +8605,7 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
             } else this.atmosphere.textures = (0, o.y5)(8, () => null);
           }
           loadEnvfx(e) {
+            if (this.world._pfpNoEnvfx) return;
             const t = e * this.ENVFX_SIZE;
             if (t + this.ENVFX_SIZE > this.envfxactBin.byteLength) return;
             const n = (0, h.Y)(this.envfxactBin, t, this.ENVFX_SIZE),
@@ -8448,71 +8657,32 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
                             t);
               }
             } else if (i.type === s.Skyscape) {
+              for (const e of this.skyscape.objects)
+                try {
+                  e.destroy(this.world.context.device);
+                } catch (e) {}
               this.skyscape.objects = [];
-              const e = [0, 769, 616, 1377],
-                t = [0, 239, 0, 0, 0],
-                s = [0, 1017, 1018, 1389, 0],
+              this.cloudActionObjects = [];
+              const e = [0, 1576, 1890, 2147],
+                t = [0, 1578, 2140, 2145, 2147],
+                s = [0, 1575, 1577, 1886, 1525],
                 i = n.getUint8(93),
                 r = n.getUint8(91),
                 o = n.getUint8(90),
                 l = (e) => {
-                  if (e) {
-                    const t = this.world && this.world.resColl ? this.world.resColl.modelFetcher : null,
-                      n = t && Array.isArray(t.subdirOrder) ? t.subdirOrder.slice() : null,
-                      s = this.world && this.world.resColl ? this.world.resColl.texFetcher : null,
-                      i = s && Object.prototype.hasOwnProperty.call(s, "preferredSubdir") ? s.preferredSubdir : void 0;
-                    try {
-                      n && n.includes("arwing") && (t.subdirOrder = ["arwing"].concat(n.filter((e) => "arwing" !== e)));
-                      const r = this.world.objectMan.createObjectInstance(
-                        e,
-                        new DataView(new ArrayBuffer(128)),
-                        a.vt(),
-                        !0,
-                      );
-                      r &&
-                        ((r.cullRadius = 999999),
-                        this.skyscape.objects.push(r));
-                    } catch (e) {} finally {
-                      n && (t.subdirOrder = n),
-                        s && "function" == typeof s.setPreferredSubdir && s.setPreferredSubdir(i);
-                    }
-                  }
+                  if (!e) return;
+                  try {
+                    const t = this.world.objectMan.createObjectInstance(
+                      e,
+                      new DataView(new ArrayBuffer(128)),
+                      a.vt(),
+                    );
+                    t &&
+                      ((t.cullRadius = 999999),
+                      this.skyscape.objects.push(t));
+                  } catch (e) {}
                 };
               (l(s[i] || 0), l(e[r] || 0), l(t[o] || 0));
-            } else if (6 === i.type) {
-              this.cloudActionObjects = [];
-              if (0 != (2 & n.getUint8(88)) && 0 != (1 & n.getUint8(89))) {
-                const mainCloudAssetIds = [0, 1575, 1577, 1886, 1525],
-                  upperCloudAssetIds = [0, 1576, 1890, 2147],
-                  lowerCloudAssetIds = [0, 1578, 2140, 2145, 2147],
-                  addCloudObject = (e) => {
-                    if (e) {
-                      const t = this.world && this.world.resColl ? this.world.resColl.modelFetcher : null,
-                        n = t && Array.isArray(t.subdirOrder) ? t.subdirOrder.slice() : null,
-                        s = this.world && this.world.resColl ? this.world.resColl.texFetcher : null,
-                        i = s && Object.prototype.hasOwnProperty.call(s, "preferredSubdir") ? s.preferredSubdir : void 0;
-                      try {
-                        n && n.includes("arwing") && (t.subdirOrder = ["arwing"].concat(n.filter((e) => "arwing" !== e)));
-                        const r = this.world.objectMan.createObjectInstance(
-                          e,
-                          new DataView(new ArrayBuffer(128)),
-                          a.vt(),
-                          !1,
-                        );
-                        r &&
-                          ((r.cullRadius = 999999),
-                          1525 === e && ((r.scale = 100), (r._pfpCloudMain = !0)),
-                          this.cloudActionObjects.push(r));
-                      } catch (e) {} finally {
-                        n && (t.subdirOrder = n),
-                          s && "function" == typeof s.setPreferredSubdir && s.setPreferredSubdir(i);
-                      }
-                    }
-                  };
-                (addCloudObject(mainCloudAssetIds[n.getUint8(93)] || 0),
-                  addCloudObject(upperCloudAssetIds[n.getUint8(91)] || 0),
-                  addCloudObject(lowerCloudAssetIds[n.getUint8(90)] || 0));
-              }
             }
             return (
               "StarFoxAdventuresDemo" === this.world.gameInfo.pathBase &&
@@ -10734,7 +10904,6 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
                   }
                 }
               }
-              // Targeted fallback for eye materials that do not use the usual
               // Final/Kiosk layer ordering.  Do NOT change the verified normal
               // Resource-Style eye path: only use this for the three known Kiosk
               // exceptions, or for legacy/static models with a genuine scroll layer.
@@ -11166,7 +11335,6 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
             }
           }
           // Seal tiny sub-pixel cracks between adjacent UV0 triangles before the
-          // untouched-texture fallback. A crack is only filled when covered
           // eye pixels exist on opposite sides, so this does not grow the eye
           // silhouette or alter the eyelid edge.
           for (let fpCrackPass = 0; fpCrackPass < 2; fpCrackPass++) {
@@ -11283,7 +11451,9 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
         }
         function fpRigVertexData(shape, positions, model, fineMap) {
           const geom = shape.geom;
-          if ((!geom.hasSkinning && !geom.hasFineSkinning) || model.joints.length === 0) return null;
+          const dpJoints = model._pfpDpVertexJoints;
+          const dpRig = dpJoints && dpJoints.length > 0;
+          if ((!dpRig && !geom.hasSkinning && !geom.hasFineSkinning) || model.joints.length === 0) return null;
           const input = p(shape, r.fg.POS);
           if (input === null) return null;
           const data = geom.loadedVertexData;
@@ -11294,13 +11464,28 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
           const joints = new Uint16Array(count * 4);
           const weights = new Float32Array(count * 4);
           const staticJoint = model.joints.length;
-          const sourcePosOffsets = geom.hasFineSkinning ? fpRigSourcePositionOffsets(shape) : null;
+          const sourcePosOffsets = (dpRig || geom.hasFineSkinning) ? fpRigSourcePositionOffsets(shape) : null;
           let fineMiss = 0;
           for (let i = 0; i < count; i++) {
             const raw = u(buf, input.bufferOffset + i * stride, input.format);
             const slot = Math.trunc(raw[3] ?? 0);
             let assigned = false;
-            if (geom.hasFineSkinning && slot === 9) {
+            if (dpRig) {
+              const srcOffs = sourcePosOffsets && i < sourcePosOffsets.length ? sourcePosOffsets[i] : -1;
+              const srcIndex = srcOffs >= 0 ? Math.floor(srcOffs / 6) : -1;
+              const jiRaw = srcIndex >= 0 && srcIndex < dpJoints.length ? Number(dpJoints[srcIndex]) : -1;
+              const fpSrc = model._pfpDpBindPosBuffer;
+              if (fpSrc && srcOffs >= 0 && srcOffs + 5 < fpSrc.byteLength) {
+                positions[i * 3 + 0] = fpSrc.getInt16(srcOffs + 0);
+                positions[i * 3 + 1] = fpSrc.getInt16(srcOffs + 2);
+                positions[i * 3 + 2] = fpSrc.getInt16(srcOffs + 4);
+              }
+              if (jiRaw >= 0 && jiRaw < model.joints.length) {
+                joints[i * 4 + 0] = fpRigJointIndex(model, jiRaw);
+                weights[i * 4 + 0] = 1;
+                assigned = true;
+              }
+            } else if (geom.hasFineSkinning && slot === 9) {
               const srcOffs = sourcePosOffsets && i < sourcePosOffsets.length ? sourcePosOffsets[i] : -1;
               const info = srcOffs >= 0 ? fineMap.get(srcOffs) : null;
               if (info) {
@@ -11406,7 +11591,9 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
           for (let i = 0; i < model.joints.length; i++) {
             const o = i * 16;
             ibm[o + 0] = ibm[o + 5] = ibm[o + 10] = ibm[o + 15] = 1;
-            const inv = model.invBindTranslations && model.invBindTranslations[i];
+            const inv = model._pfpDpInvBindTranslations && model._pfpDpInvBindTranslations[i]
+              ? model._pfpDpInvBindTranslations[i]
+              : model.invBindTranslations && model.invBindTranslations[i];
             const bind = model.joints[i].bindTranslation;
             ibm[o + 12] = inv ? inv[0] : -(bind ? bind[0] : 0);
             ibm[o + 13] = inv ? inv[1] : -(bind ? bind[1] : 0);
@@ -11684,7 +11871,6 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
                     maskName: `${prim.material.name}_eye_mask`,
                   };
                   // Keep the verified Final/Kiosk path exactly as before unless this
-                  // primitive came from the targeted explicit-UV fallback above.
                   prim.material = Object.assign({}, prim.material, {
                     key: `${prim.material.key}:resource-style-iris`,
                     name: `${prim.material.name}_eye_iris`,
@@ -11856,7 +12042,6 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
                 // Some SFA TEV layers are flagged opaque even though their selected
                 // texture is an alpha cutout overlay (eyes are a common example).
                 // OPAQUE makes transparent texels show as their black RGB; BLEND made
-                // the previous export look ghosted. MASK preserves the intended layer.
                 if ("OPAQUE" === alphaMode && alphaInfo.alphaMode !== "OPAQUE") alphaMode = "MASK";
                 baseColor[3] < 0.999 && "OPAQUE" === alphaMode && (alphaMode = "BLEND");
                 const material = {
@@ -15313,7 +15498,9 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
               (this.texFetcher = n),
               (this.materialFactory = s),
               (this.cache = new Map()),
-              (this.modelInd = null));
+              (this.modelInd = null),
+              (this.modelsTab = null),
+              (this.modelsBin = null));
             const i = new w.Kx(g.o.DinosaurPlanet);
             ((i.hasFineSkinning = !1),
               (i.sharedModelShapes = new w.Cu(
@@ -15326,11 +15513,23 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
           }
           async init() {
             try {
-              const e = await this.dataFetcher.fetchData(
-                `${this.gameInfo.pathBase}/MODELIND.bin`,
-                { allow404: !0 },
-              );
-              this.modelInd = e.createDataView();
+              const [e, t, n] = await Promise.all([
+                this.dataFetcher.fetchData(
+                  `${this.gameInfo.pathBase}/MODELIND.bin`,
+                  { allow404: !0 },
+                ),
+                this.dataFetcher.fetchData(
+                  `${this.gameInfo.pathBase}/MODELS.tab`,
+                  { allow404: !0 },
+                ),
+                this.dataFetcher.fetchData(
+                  `${this.gameInfo.pathBase}/MODELS.bin`,
+                  { allow404: !0 },
+                ),
+              ]);
+              (e.byteLength > 0 && (this.modelInd = e.createDataView()),
+                t.byteLength > 0 && (this.modelsTab = t.createDataView()),
+                n.byteLength > 0 && (this.modelsBin = n));
             } catch (e) {}
           }
           getRealModelId(e) {
@@ -15341,22 +15540,58 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
             const t = e.map(async (e) => {
               if (void 0 === e || 0 === e || 65535 === e || -1 === e) return;
               const t = this.getRealModelId(e);
-              if (!this.cache.has(t))
+              if (this.cache.has(t)) return;
+              let n = null;
+              try {
+                const e = await this.dataFetcher.fetchData(
+                  `${this.gameInfo.pathBase}/uncompressed_models/${t}.bin`,
+                  { allow404: !0 },
+                );
+                e.byteLength > 0 && (n = e.createDataView());
+              } catch (e) {}
+              if (n)
                 try {
-                  const e = await this.dataFetcher.fetchData(
-                    `${this.gameInfo.pathBase}/uncompressed_models/${t}.bin`,
-                    { allow404: !0 },
+                  this.cache.set(
+                    t,
+                    (0, g.c)(
+                      n,
+                      this.texFetcher,
+                      this.materialFactory,
+                      g.o.DinosaurPlanet,
+                    ),
                   );
-                  e.byteLength > 0 &&
+                  return;
+                } catch (e) {
+                  n = null;
+                }
+              if (
+                !n &&
+                this.modelsTab &&
+                this.modelsBin &&
+                4 * (t + 2) <= this.modelsTab.byteLength
+              )
+                try {
+                  const e = this.modelsTab.getUint32(4 * t),
+                    n = this.modelsTab.getUint32(4 * (t + 1));
+                  if (
+                    4294967295 !== e &&
+                    4294967295 !== n &&
+                    n > e + 13 &&
+                    n <= this.modelsBin.byteLength
+                  ) {
+                    const s = await pfpInflateDPRarezip(
+                      this.modelsBin.subarray(e + 8, n - e - 8),
+                    );
                     this.cache.set(
                       t,
                       (0, g.c)(
-                        e.createDataView(),
+                        s,
                         this.texFetcher,
                         this.materialFactory,
                         g.o.DinosaurPlanet,
                       ),
                     );
+                  }
                 } catch (e) {}
             });
             await Promise.all(t);
@@ -15370,6 +15605,8 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
               "function" != typeof s.setAmap && (s.setAmap = () => {}),
               "function" != typeof s.getAmap &&
                 (s.getAmap = () => new DataView(new ArrayBuffer(64))),
+              (s._pfpModelId = t),
+              (s._pfpDummyModel = !n),
               s
             );
           }
@@ -16332,6 +16569,26 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
                           65535 &
                           (null !== (b = L._dpRomId) && void 0 !== b ? b : -1);
                       if (null == e ? void 0 : e.createModelInstance) {
+                        if (
+                          290 === Number(L.objClass) &&
+                          u.byteLength > 28 &&
+                          Array.isArray(L.modelNums) &&
+                          L.modelNums.length > 0
+                        ) {
+                          let t = u.getUint8(28);
+                          t >= L.modelNums.length && (t = 0);
+                          t !== m._pfpModelSlot && m.setModelNum(t);
+                        }
+                        if (
+                          502 === Number(L.objClass) &&
+                          u.byteLength > 32 &&
+                          Array.isArray(L.modelNums) &&
+                          L.modelNums.length > 0
+                        ) {
+                          let t = u.getUint8(32);
+                          t >= L.modelNums.length && (t = 0);
+                          t !== m._pfpModelSlot && m.setModelNum(t);
+                        }
                         if (568 === t) {
                           const t = u.byteLength >= 28 ? u.getUint16(26) : 0,
                             n = new Set([
@@ -16532,6 +16789,128 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
                   i.addRenderInsts(e, t, n, h);
                   continue;
                 }
+                const dpObjClass = Number(i.objType ? i.objType.objClass : -1),
+                  dpNoAmbientAnim = 311 === dpObjClass || 312 === dpObjClass,
+                  dpAnimPreset =
+                    290 === dpObjClass
+                      ? { local: 4, speed: 0.005, hardLoop: !0 }
+                      : 502 === dpObjClass
+                        ? { local: 0, speed: 0.005, hardLoop: !1 }
+                        : 688 === dpObjClass
+                          ? { local: 8, speed: 0.01, hardLoop: !1 }
+                          : 428 === dpObjClass
+                            ? { local: 3, speed: 0.03, hardLoop: !1 }
+                            : 508 === dpObjClass
+                              ? { local: 0, speed: 0.006, hardLoop: !1 }
+                              : 496 === dpObjClass || 712 === dpObjClass
+                                ? { local: 0, speed: 0.005, hardLoop: !1 }
+                                : null,
+                  dpModelId = Number(a._pfpModelId);
+                if (
+                  !a._pfpDummyModel &&
+                  Number.isFinite(dpModelId) &&
+                  i._pfpDpAnimModelId !== dpModelId
+                ) {
+                  try {
+                    const rc = i.world && i.world.resColl,
+                      dpAmap =
+                        rc && rc.amapColl
+                          ? rc.amapColl.getAmap(dpModelId)
+                          : null,
+                      dpModanim =
+                        rc && rc.modanimColl
+                          ? rc.modanimColl.getModanim(dpModelId)
+                          : null;
+                    if (
+                      dpAmap &&
+                      dpAmap.byteLength > 0 &&
+                      "function" == typeof a.setAmap
+                    )
+                      a.setAmap(dpAmap);
+                    i.modanim =
+                      dpModanim && dpModanim.byteLength > 0
+                        ? dpModanim
+                        : new DataView(new ArrayBuffer(0));
+                    a.modanim = i.modanim;
+                    a._pfpHardLoop = !!(dpAnimPreset && dpAnimPreset.hardLoop);
+                    let dpLocal = null,
+                      dpAnim = null;
+                    if (dpAnimPreset) {
+                      if (
+                        2 * dpAnimPreset.local + 2 <= i.modanim.byteLength
+                      ) {
+                        const globalAnim = i.modanim.getInt16(
+                          2 * dpAnimPreset.local,
+                        );
+                        globalAnim >= 0 &&
+                          rc &&
+                          rc.animColl &&
+                          ((dpAnim = rc.animColl.getAnim(globalAnim)),
+                          dpAnim && (dpLocal = dpAnimPreset.local));
+                      }
+                    } else if (!dpNoAmbientAnim && rc && rc.animColl) {
+                      for (
+                        let local = 0;
+                        local < Math.floor(i.modanim.byteLength / 2);
+                        local++
+                      ) {
+                        const globalAnim = i.modanim.getInt16(2 * local);
+                        if (globalAnim < 0) continue;
+                        const candidate = rc.animColl.getAnim(globalAnim);
+                        if (candidate) {
+                          ((dpLocal = local), (dpAnim = candidate));
+                          break;
+                        }
+                      }
+                    }
+                    if (dpAnim && null !== dpLocal) {
+                      ((i.modelAnimNum = dpLocal),
+                        (i.animSpeed =
+                          dpAnimPreset && dpAnimPreset.speed > 0
+                            ? dpAnimPreset.speed
+                            : 0.01),
+                        (i.anim = dpAnim),
+                        (i._pfpDpAnimFailed = !1));
+                    } else {
+                      ((i.modelAnimNum = null),
+                        (i.anim = null),
+                        (i._pfpDpAnimFailed = !0));
+                    }
+                  } catch (_) {
+                    ((i.modelAnimNum = null),
+                      (i.anim = null),
+                      (i._pfpDpAnimFailed = !0));
+                  }
+                  i._pfpDpAnimModelId = dpModelId;
+                }
+                if (
+                  i._pfpSequenceAnimState &&
+                  (i._pfpSequenceAnimState.anim ||
+                    i._pfpSequenceAnimState.morph)
+                )
+                  (0, T.qF)(i._pfpSequenceAnimState, a);
+                else if (
+                  !i._pfpDpAnimFailed &&
+                  i.anim &&
+                  null !== i.modelAnimNum &&
+                  void 0 !== i.modelAnimNum
+                )
+                  try {
+                    (0, T.hF)(
+                      i.world.animController.animController.getTimeInFrames() *
+                        i.animSpeed,
+                      a,
+                      i.anim,
+                      i.modelAnimNum,
+                    );
+                  } catch (_) {
+                    i._pfpDpAnimFailed = !0;
+                    try {
+                      (a.resetPose(),
+                        "function" == typeof a.updateSkinning &&
+                          a.updateSkinning());
+                    } catch (_) {}
+                  }
                 const l = null !== (r = i._dpScale) && void 0 !== r ? r : 1,
                   c =
                     65535 &
@@ -16879,31 +17258,105 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
         function tn(e) {
           return "" !== e && Jt.has(e);
         }
-        async function nn(e, t, n, s, i, a, r = 577) {
-          var o, l, c, h, d, u;
-          const p = {
-            renderCache:
+        async function nn(e, t, n, s, i, a, z = 577, noEnvfx = !1) {
+          var o, l, c, h;
+          const mapDirs = {
+              2: "dragrock",
+              4: "volcano",
+              7: "swaphol",
+              8: "swaphol",
+              10: "nwastes",
+              11: "warlock",
+              12: "crfort",
+              13: "wallcity",
+              14: "lightfoot",
+              15: "crfort",
+              16: "crfort",
+              18: "mmpass",
+              19: "darkicemines",
+              23: "icemountain",
+              27: "darkicemines",
+              29: "capeclaw",
+              43: "crfort",
+              50: "dfptop",
+              52: "dragrock",
+            },
+            groups = {
+              capeclaw: [575, 576, 577],
+              nwastes: [180, 181, 182, 183],
+              icemountain: [180, 181, 182, 183],
+              swaphol: [434, 435, 436],
+              mmpass: [314, 312, 313],
+              lightfoot: [79, 80, 581],
+              darkicemines: [352, 346, 348, 351],
+              crfort: [86, 13, 17, 14],
+              warlock: [60],
+              wallcity: [507, 511, 508, 509],
+              dfptop: [86, 13, 17, 14],
+              dragrock: [507, 511, 508, 509],
+              volcano: [507, 511, 508, 509],
+            },
+            numMatch = String(e.mapNum).match(/(\d+)$/),
+            mapNo = numMatch ? Number(numMatch[1]) : -1,
+            skyDir = mapDirs[mapNo] || (groups[a] ? a : "");
+          if (!skyDir || !groups[skyDir]) return;
+          const cache =
               null !== (o = t.cache) && void 0 !== o
                 ? o
                 : null === (c = (l = t).getCache) || void 0 === c
                   ? void 0
                   : c.call(l),
+            skyTex = await S.JU.create(n, s, !1);
+          skyTex.setModelVersion(g.o.Final);
+          i && i.textureHolder && (skyTex.textureHolder = i.textureHolder);
+          try {
+            await skyTex.loadSubdirs([skyDir], s);
+          } catch (_) {
+            return;
+          }
+          try {
+            await skyTex.loadSubdirs([""], s);
+          } catch (_) {}
+          "function" == typeof skyTex.setPreferredSubdir &&
+            skyTex.setPreferredSubdir(skyDir);
+          const modelFetcher = await w.Ju.create(
+            n,
+            Promise.resolve(skyTex),
+            t,
+            e.animController,
+            g.o.Final,
+          );
+          await modelFetcher.loadSubdirs([skyDir, ""], s);
+          const world = {
+            context: e.context,
+            renderCache: cache,
             gameInfo: n,
-            subdirs: [a],
+            subdirs: [skyDir],
             worldLights: e.worldLights,
-            resColl: { texFetcher: i },
-            objectMan: { createObjectInstance: () => ({ destroy: () => {} }) },
+            resColl: {
+              texFetcher: skyTex,
+              modelFetcher,
+              animColl: null,
+              amapColl: null,
+              modanimColl: null,
+            },
+            animController: e.animController,
+            objectMan: null,
+            envfxMan: null,
+            mapInstance: null,
+            _pfpNoEnvfx: noEnvfx,
           };
-          ((e.envfxMan = await C.R.create(p, s)),
-            (p.envfxMan = e.envfxMan),
+          try {
+            world.objectMan = await r.rl.create(world, s, !1, !0);
+            world.envfxMan = await C.R.create(world, s);
+            e.envfxMan = world.envfxMan;
+            e._pfpLegacySkyModelFetcher = modelFetcher;
+            e._pfpLegacySkyTexFetcher = skyTex;
             e.envfxMan.setTimeOfDay(
-              null !== (h = Qt[a]) && void 0 !== h ? h : 4,
-            ),
-            e.envfxMan.loadEnvfx(r),
-            (null === (u = (d = e.envfxMan).shouldForceTextureOnlySky) ||
-            void 0 === u
-              ? void 0
-              : u.call(d)) && e.envfxMan.forceKioskTextureOnlySky());
+              null !== (h = Qt[skyDir]) && void 0 !== h ? h : 4,
+            );
+            for (const idx of groups[skyDir]) e.envfxMan.loadEnvfx(idx);
+          } catch (_) {}
         }
         function pfpParseVoxDataView(e) {
           if (!e || e.byteLength < 44) return null;
@@ -20771,7 +21224,7 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
                 Promise.resolve(m),
               ),
             ),
-              tn(x) && (await nn(p, h, this.gameInfo, t.dataFetcher, m, x)),
+              await nn(p, h, this.gameInfo, t.dataFetcher, m, x),
               await p.create(d, this.gameInfo, t.dataFetcher, v),
               cn(
                 async (e) => {
@@ -21129,7 +21582,7 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
                 Promise.resolve(m),
               ),
             ),
-              tn(x) && (await nn(p, h, this.gameInfo, t.dataFetcher, m, x)),
+              await nn(p, h, this.gameInfo, t.dataFetcher, m, x, 577, 11 === this.mapNum),
               await p.create(d, this.gameInfo, t.dataFetcher, v),
               cn(
                 async (e) => {
@@ -21217,7 +21670,7 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
               s,
               Promise.resolve(l),
             );
-            (tn(h) && (await nn(r, i, this.gameInfo, t.dataFetcher, l, h)),
+            (await nn(r, i, this.gameInfo, t.dataFetcher, l, h, 577, 52 === this.mapNum),
               await r.create(a, this.gameInfo, t.dataFetcher, d));
             const p = u.vt();
             return (window.__pfpSfaGameText&&window.__pfpSfaGameText.activate(this.gameInfo.pathBase),window.__pfpSfaAudio&&window.__pfpSfaAudio.ensure(t.dataFetcher,this.gameInfo.pathBase),u.Z8(p, p, (3 * Math.PI) / 4), r.setMatrix(p), r);
@@ -21304,7 +21757,7 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
                 Promise.resolve(m),
               ),
             ),
-              tn(x) && (await nn(p, h, this.gameInfo, t.dataFetcher, m, x)),
+              await nn(p, h, this.gameInfo, t.dataFetcher, m, x, 577, 11 === this.mapNum),
               await p.create(d, this.gameInfo, t.dataFetcher, v),
               cn(
                 async (e) => {
@@ -21389,7 +21842,7 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
               r,
               Promise.resolve(d),
             );
-            (tn(m) && (await nn(h, l, this.gameInfo, t.dataFetcher, d, m)),
+            (await nn(h, l, this.gameInfo, t.dataFetcher, d, m, 577, 11 === this.mapNum),
               await h.create(c, this.gameInfo, t.dataFetcher, f));
             const x = u.vt();
             return (window.__pfpSfaGameText&&window.__pfpSfaGameText.activate(this.gameInfo.pathBase),window.__pfpSfaAudio&&window.__pfpSfaAudio.ensure(t.dataFetcher,this.gameInfo.pathBase),u.Z8(x, x, (3 * Math.PI) / 4), h.setMatrix(x), h);
@@ -22421,8 +22874,16 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
               (x.dpMinimapMapId = this.mapNum));
             const w = await S.JU.create(c, t.dataFetcher, !1);
             w.setModelVersion(g.o.DinosaurPlanet);
+            try {
+              w &&
+                "function" == typeof w.loadSubdirs &&
+                (await w.loadSubdirs([""], t.dataFetcher));
+            } catch (_) {}
             const _ = new lt(c, t.dataFetcher, w, m);
             await _.init();
+            const dpModanimColl = await T.y5.create(c, t.dataFetcher),
+              dpAmapColl = await T.E0.create(c, t.dataFetcher),
+              dpAnimColl = await T.K4.create(c, t.dataFetcher, [""]);
             const I = {
                 renderCache:
                   null !== (s = m.cache) && void 0 !== s
@@ -22435,11 +22896,11 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
                 resColl: {
                   texFetcher: w,
                   modelFetcher: _,
-                  amapCollection: { getAmap: () => null },
-                  animCollection: { getAnim: () => null },
-                  modanimCollection: { getModanim: () => null },
+                  amapColl: dpAmapColl,
+                  animColl: dpAnimColl,
+                  modanimColl: dpModanimColl,
                 },
-                animController: { animController: p, enableFineSkinAnims: !1 },
+                animController: p,
                 objectMan: null,
                 mapInstance: {
                   getBlockAtPosition: () => null,
@@ -22603,8 +23064,8 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
                         (l.objClass = o),
                         (l.modelNums = []));
                       let c = (function (e, t, n) {
-                        if (n < 88) return [];
-                        const s = e.getUint8(t + 84);
+                        if (n < 94) return [];
+                        const s = e.getUint8(t + 93);
                         if (0 === s || s > 32) return [];
                         const i = e.getUint32(t + 8);
                         if (4294967295 === i || i >= n) return [];
@@ -26497,9 +26958,7 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
                 this.setupShaderLayers(!1, e),
                 this.mb.getTevStageCount() < 8 && this.addMistStages());
             }
-            // Retail ObjSeq track 3 writes GameObject render alpha. Keep the model
             // material itself instance-safe by multiplying only the current object's
-            // alpha at draw time; non-sequence objects see the default 1.0.
             {
               const e=this.mb.genKonstColor((e,t)=>{
                 let n=1;
@@ -27786,7 +28245,7 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
               (this.modelLoadGeneration = 0),
               (this.dpNormalize = !0),
               (this.dpTargetMaxDim = 1e3),
-              (this.dpAnimsEnabled = !1),
+              (this.dpAnimsEnabled = this.modelVersion === x.o.DinosaurPlanet),
               (this.dpNormReady = !1),
               (this.dpNormScale = 1),
               (this.dpNormCenter = i.vt()),
@@ -27886,7 +28345,8 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
               e.contents.append(o));
             if (true) {
               const fpExport = document.createElement("button");
-              const fpHasNativeAnims = this.modelVersion === x.o.Final;
+              const fpHasNativeAnims =
+                this.modelVersion === x.o.Final || this.modelVersion === x.o.DinosaurPlanet;
               fpExport.textContent = fpHasNativeAnims
                 ? "Export GLB (Rig + All Animations)"
                 : "Export GLB";
@@ -28069,21 +28529,21 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
             return subdir;
           }
           fpCollectExportAnimationClips(modelInst, modanim, amap) {
-            // Final/Kiosk are the animation format this public exporter has been
-            // verified against. Older SFA model revisions still export their
-            // model, textures and rig/joints, but do not borrow Final animations.
-            if (this.modelVersion !== x.o.Final || !modanim) return [];
+            const fpIsDP = this.modelVersion === x.o.DinosaurPlanet;
+            if ((this.modelVersion !== x.o.Final && !fpIsDP) || !modanim) return [];
             const clips = [];
             const seen = new Set();
             const count = Math.floor(modanim.byteLength / 2);
             const joints = modelInst && modelInst.model && Array.isArray(modelInst.model.joints)
               ? modelInst.model.joints.length : 0;
-            const stride = 8 * (((joints + 8) / 8) | 0);
+            const stride = fpIsDP
+              ? 8 + (-8 & Math.max(0, joints - 1))
+              : 8 * (((joints + 8) / 8) | 0);
             for (let local = 0; local < count; local++) {
               let global, anim, localAmap = null;
               try {
-                global = (0, f.CV)(modanim, 0, local);
-                if (void 0 === global) continue;
+                global = fpIsDP ? modanim.getInt16(2 * local) : (0, f.CV)(modanim, 0, local);
+                if (void 0 === global || global < 0) continue;
                 anim = this.animColl.getAnim(global);
                 if (!anim || !Array.isArray(anim.keyframes) || anim.keyframes.length === 0) continue;
                 if (amap && stride > 0 && local * stride < amap.byteLength)
@@ -28129,7 +28589,6 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
             const fileName = this.fpMakeExportFileName(modelNum, clips);
             const tag = this.fpExportDatasetTag();
             // Final/Kiosk keep the verified native rig exporter exactly as-is.
-            // Dinosaur Planet exports the displayed static pose, but unlike older SFA
             // revisions it keeps the viewer's vertex-colour + lit material profile.
             const fpIsDP = this.modelVersion === x.o.DinosaurPlanet;
             const fpLegacyStatic = !fpIsDP && this.modelVersion !== x.o.Final;
@@ -28147,8 +28606,8 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
                 textureLayerMode: "auto",
                 includeWaters: !0,
                 includeAuxiliaryShapes: this.modelVersion === x.o.Final,
-                bakeSkinning: fpIsDP || fpLegacyStatic,
-                exportRigging: !fpIsDP && !fpLegacyStatic,
+                bakeSkinning: fpLegacyStatic,
+                exportRigging: !fpLegacyStatic,
                 includeVertexColors: fpIsDP ? !0 : !fpLegacyStatic,
                 resourceStyleEyes: !fpIsDP && !fpLegacyStatic,
                 dpEyeAlphaPair: !1,
@@ -28222,8 +28681,13 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
             alert(`Export All complete.\n\nExported: ${exported}\nEmpty/unused slots: ${emptySlots}\nSkipped: ${skipped}\nFailed: ${failed}\n\nFolder:\n${picked.path || ""}`);
           }
           getGlobalAnimNum(e) {
-            if (this.modanim && !(2 * e >= this.modanim.byteLength))
+            if (this.modanim && !(2 * e >= this.modanim.byteLength)) {
+              if (this.modelVersion === x.o.DinosaurPlanet) {
+                const t = this.modanim.getInt16(2 * e);
+                return t < 0 ? void 0 : t;
+              }
               return (0, f.CV)(this.modanim, 0, e);
+            }
           }
           getAmapForModelAnim(e) {
             if (this.autogenAmap) {
@@ -29869,9 +30333,22 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
                   (0, m.Ir)(Y.u_TexMtx[t], 0, 0, 0),
                   o.lK(Y.u_TexMtx[t], Y.u_TexMtx[t], e));
             }
-            const p = this.material.getGXMaterialHelper();
+            let p;
+            if (i && i.modelCtx && i.modelCtx._pfpSkyMaterialHelper) {
+              const e =
+                  this.geom && "function" == typeof this.geom.getLoadedVertexLayout
+                    ? this.geom.getLoadedVertexLayout()
+                    : null,
+                t =
+                  e &&
+                  e.vertexAttributeOffsets &&
+                  void 0 !== e.vertexAttributeOffsets[11];
+              p =
+                t && i.modelCtx._pfpSkyMaterialHelperVertex
+                  ? i.modelCtx._pfpSkyMaterialHelperVertex
+                  : i.modelCtx._pfpSkyMaterialHelper;
+            } else p = this.material.getGXMaterialHelper();
             (0, U.g)(t, n, p, Y, u);
-            // Match retail objRender: a sequence alpha below 255 switches this
             // object draw to SRCALPHA/INVSRCALPHA and disables depth writes.
             try {
               const e=i&&i.modelCtx&&i.modelCtx.object,t=e&&Number(e._pfpSequenceOpacity);
@@ -34955,6 +35432,11 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
                     Qe.setUint8(4 * $n + 2, ue[4 * $n + 2]),
                     Qe.setUint8(4 * $n + 3, ue[4 * $n + 3]));
                 }
+                (b._pfpDpVertexJoints = Int16Array.from(me),
+                  (b._pfpDpBindPosBuffer = new DataView(Ye.slice(0))),
+                  (b._pfpDpInvBindTranslations = ce.map((e) =>
+                    e ? r.fA(-e[12], -e[13], -e[14]) : r.vt(),
+                  )));
                 for (const Zn of he)
                   if (
                     0 !== Zn.tris.length &&
@@ -38858,7 +39340,6 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
           cmbsrctwall: 689,
           combustionsourc: 689,
         };
-        // SFA retail/Kiosk models that are explicitly developer/debug geometry.
         // These are the visible placeholder/LEV/OBJ/FX/trigger cubes, arrows, axes,
         // light-bulb markers, etc. Keep them available through the Dev Objects toggle
         // but never draw them as normal map objects.
@@ -39084,7 +39565,6 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
                   )
                 : void 0;
             // Final SFA and Kiosk share a family of editor/debug models which can
-            // legitimately be placed all over retail maps. Their object definitions
             // are not consistently flagged as developer-only, so classify them from
             // the model ID before normal rendering. The existing Dev Objects toggle
             // then controls them exactly like every other developer object.
@@ -39241,19 +39721,27 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
             (s.C(this.position, e), (this.srtDirty = !0));
           }
           setModelNum(e) {
+            const t = this.objType.modelNums[e];
+            if (void 0 === t) return void (this.modelInst = null);
+            let n;
             try {
-              const t = this.objType.modelNums[e];
-              if (void 0 === t) return void (this.modelInst = null);
-              const n = this.world.resColl.modelFetcher.createModelInstance(t);
-              ((this.modelInst = n), (this._pfpModelSlot = e));
-              try { ((n._pfpObjectType = this.objType), (n._pfpModelSlot = e)); } catch (_) {}
-              const s = this.world.resColl.amapColl
+              n = this.world.resColl.modelFetcher.createModelInstance(t);
+            } catch (_) {
+              return void (this.modelInst = null);
+            }
+            if (!n) return void (this.modelInst = null);
+            ((this.modelInst = n), (this._pfpModelSlot = e));
+            try {
+              ((n._pfpObjectType = this.objType), (n._pfpModelSlot = e));
+            } catch (_) {}
+            try {
+              const e = this.world.resColl.amapColl
                 ? this.world.resColl.amapColl.getAmap(t)
                 : null;
               ((this.modanim = this.world.resColl.modanimColl
                 ? this.world.resColl.modanimColl.getModanim(t)
                 : new DataView(new ArrayBuffer(0))),
-                s && "function" == typeof n.setAmap && n.setAmap(s),
+                e && "function" == typeof n.setAmap && n.setAmap(e),
                 (this.cullRadius = 10),
                 this.modelInst.model.cullRadius > this.cullRadius &&
                   (this.cullRadius = this.modelInst.model.cullRadius),
@@ -39261,19 +39749,26 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
                   (this.cullRadius *=
                     (10 * this.objType.adjustCullRadius) / 255),
                 this.world.resColl.animColl &&
-                  this.modanim &&
-                  this.modanim.byteLength > 0 &&
-                  s &&
-                  s.byteLength > 0 &&
-                  this.setModelAnimNum(0));
-            } catch (e) {
-              this.modelInst = null;
+                this.modanim &&
+                this.modanim.byteLength > 0 &&
+                e &&
+                e.byteLength > 0
+                  ? this.setModelAnimNum(0)
+                  : ((this.modelAnimNum = null), (this.anim = null)));
+            } catch (_) {
+              ((this.modanim = new DataView(new ArrayBuffer(0))),
+                (this.modelAnimNum = null),
+                (this.anim = null));
             }
           }
           setModelAnimNum(e) {
             this.modelAnimNum = e;
-            const t = (0, l.CV)(this.modanim, 0, e);
-            this.setAnim(this.world.resColl.animColl.getAnim(t));
+            const t = String(this.world.gameInfo.pathBase)
+                .toLowerCase()
+                .includes("dinosaurplanet")
+                ? this.modanim.getInt16(2 * e)
+                : (0, l.CV)(this.modanim, 0, e);
+            this.setAnim(t < 0 ? null : this.world.resColl.animColl.getAnim(t));
           }
           setAnim(e) {
             this.anim = e;
@@ -63461,7 +63956,6 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
             })("dp_global_world_explorer", "DP: Global World Explorer", i),
           ],
         };
-        // Project FoxPlanet: alphabetize the main Dinosaur Planet map list.
         (function(e){
           const a=e.indexOf("Dinosaur Planet Maps");
           if(a>=0){
@@ -63983,7 +64477,7 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
           )
             t = t.parentElement;
           if (!t) return;
-          ((t.style.position = "relative"), (t.style.minHeight = "618px"));
+          ((t.style.position = "relative"), (t.style.minHeight = "760px"));
           let n = document.getElementById("landing-version");
           const s = `
             <div class="landing-patch-card">
@@ -64005,7 +64499,7 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
                   <div><span class="landing-patch-bullet">•</span> Objects vastly improved in kiosk maps + improved HITS for SFA and DP</div>
                   <div><span class="landing-patch-bullet">•</span> GameText/Subs added to SFA and Kiosk</div>
                 </div>
-                <div class="landing-patch-wide"><span class="landing-patch-bullet">•</span> Experimental- SFA/Kiosk sequence player + Beta sequences.</div>
+                <div class="landing-patch-wide landing-patch-split"><span><span class="landing-patch-bullet">•</span> SFA + Kiosk Sequence player</span><span><span class="landing-patch-bullet">•</span> DP anims added + fixed map models</span></div>
               </div>
             </div>`;
           n
@@ -64092,7 +64586,7 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
               (function () {
                 const e = document.createElement("style");
                 ((e.textContent =
-                  '\n:root{\n  --sfa-gold:#E0B54E;\n  --sfa-navy:#0B1124;\n  --sfa-border: rgba(43,43,184,.26);\n  --sfa-accent: var(--sfa-gold);\n  --sfa-accent-8: rgba(224,181,78,.10);\n  --sfa-white:#eef6ff;\n  --radius:16px;\n  --radius-sm:12px;\n}\n\nbody[data-landing="1"] #Panel{\n  display:none !important;\n}\n\nbody[data-landing="1"] #SceneSelect,\nbody[data-landing="1"] [class*="scene-select"],\nbody[data-landing="1"] [class*="SceneSelect"]{\n  margin-inline:auto !important;\n}\n\nbody[data-landing="1"] #SceneSelect{\n  overflow-y:hidden !important;\n}\n\n#sfa-dp-splash-title{\n  text-align:center;\n  margin: 6px 0 18px 0;\n  padding: 8px 10px 2px 10px;\n  pointer-events:none;\n}\n\n#sfa-dp-splash-title .splash-main{\n  color:#F0C75A;\n  font-weight:900;\n  letter-spacing:1.2px;\n  text-transform:uppercase;\n  font-size: 1.35rem;\n  line-height:1.15;\n  text-shadow:\n    0 1px 0 #1a1258,\n    0 2px 8px rgba(0,0,0,.45);\n}\n\n#sfa-dp-splash-title .splash-sub{\n  margin-top:6px;\n  color:#dfeaff;\n  font-weight:800;\n  letter-spacing:1px;\n  text-transform:uppercase;\n  font-size:.95rem;\n  line-height:1.1;\n  opacity:.95;\n  text-shadow: 0 1px 6px rgba(0,0,0,.45);\n}\n\n#landing-version{\n  position:static;\n  display:grid;\n  place-items:center;\n  width:100%;\n  margin:4px auto 8px auto;\n  color:rgba(255,255,255,.72);\n  font-size:12px;\n  font-weight:600;\n  letter-spacing:.5px;\n  text-align:center;\n  text-shadow:0 1px 4px rgba(0,0,0,.55);\n  pointer-events:none;\n  z-index:20;\n}\n\n#landing-version .landing-patch-card{\n  width:min(520px, calc(100% - 54px));\n  margin:0 auto 8px auto;\n  padding:6px 10px 7px 10px;\n  border-radius:12px;\n  border:1px solid rgba(224,181,78,.30);\n  background:linear-gradient(180deg, rgba(5,10,18,.76), rgba(0,0,0,.58));\n  box-shadow:0 12px 26px rgba(0,0,0,.45), inset 0 0 1px rgba(255,255,255,.06);\n  text-align:left;\n}\n\n#landing-version .landing-patch-title{\n  color:#F0C75A;\n  font-size:10px;\n  font-weight:900;\n  letter-spacing:1px;\n  text-transform:uppercase;\n  text-align:center;\n  margin-bottom:3px;\n}\n\n#landing-version .landing-patch-lines{\n  display:grid;\n  grid-template-columns:1fr 1fr;\n  column-gap:12px;\n  color:rgba(238,246,255,.88);\n  font-size:8.2px;\n  line-height:1.14;\n  letter-spacing:.10px;\n}\n\n#landing-version .landing-patch-col{\n  display:flex;\n  flex-direction:column;\n  gap:2px;\n  min-width:0;\n}\n\n#landing-version .landing-patch-wide{\n  grid-column:1 / -1;\n  text-align:center;\n  margin-top:2px;\n}\n\n#landing-version .landing-patch-bullet{\n  color:#6CCBFF;\n  font-weight:900;\n}\n\n#landing-version .landing-version-text{\n  color:rgba(255,255,255,.72);\n  font-size:12px;\n  font-weight:700;\n  letter-spacing:.55px;\n  text-align:center;\n}\n\n/* Original theme CSS kept unchanged below */\nbody[data-game-theme="dp"]{\n  --sfa-gold: #a8a8a8;\n  --sfa-purple: #8f8f8f;\n  --sfa-navy: #120C08;\n  --sfa-border: rgba(207, 207, 207, 0.3);\n  --sfa-accent: #858585;\n  --sfa-accent-8: rgba(211,154,58,.12);\n  --sfa-white: #F4E9D8;\n}\n\nbody[data-game-theme="dp"]{\n  background:\n    radial-gradient(900px 420px at 12% 8%, rgba(120,70,24,.18), transparent 55%),\n    radial-gradient(900px 420px at 88% 6%, rgba(211,154,58,.10), transparent 58%),\n    #080605 !important;\n}\n\nbody[data-game-theme="dp"] #Panel .sfa-card{\n  background: rgba(20,12,8,.92) !important;\n  box-shadow: inset 0 0 1px rgba(255,220,180,.04);\n}\n\nbody[data-game-theme="dp"] .sfa-list{\n  background: linear-gradient(180deg, rgba(22,14,9,.95), rgba(12,8,6,.95)) !important;\n  border: 1px solid rgba(170,110,48,.32) !important;\n  box-shadow: 0 16px 38px rgba(0,0,0,.65), inset 0 0 1px rgba(255,220,180,.04);\n}\n\nbody[data-game-theme="dp"] .sfa-list .selector:hover{\n  background: rgba(211,154,58,.12) !important;\n}\n\nbody[data-game-theme="dp"] .sfa-list span.text{\n  color: #F7EAD8 !important;\n  text-shadow: 0 2px 3px rgba(0,0,0,.65);\n}\n\nbody[data-game-theme="dp"] .sfa-list span.header{\n  color: #E6C89A !important;\n  border-bottom: 1px solid rgba(170,110,48,.24) !important;\n}\n\nbody[data-game-theme="dp"] .sfa-title{\n  background: linear-gradient(180deg, #D39A3A, #A66A27) !important;\n  color: #1A0D05 !important;\n  box-shadow: inset 0 1px 0 rgba(255,230,180,.10);\n}\n\nbody[data-game-theme="dp"] .sfa-dock-btn,\nbody[data-game-theme="dp"] #LeftBar button,\nbody[data-game-theme="dp"] #Toolbox button,\nbody[data-game-theme="dp"] #Tools button,\nbody[data-game-theme="dp"] #Dock button,\nbody[data-game-theme="dp"] #LeftBar .button,\nbody[data-game-theme="dp"] #Toolbox .button,\nbody[data-game-theme="dp"] #Tools .button,\nbody[data-game-theme="dp"] #Dock .button{\n  background: linear-gradient(180deg,#2A1A12,#140D09) !important;\n  border: 1px solid rgba(170,110,48,.30) !important;\n  box-shadow: 0 14px 28px rgba(0,0,0,.55), inset 0 0 1px rgba(255,220,180,.03) !important;\n}\n\nbody[data-game-theme="dp"] .sfa-dock-btn::after,\nbody[data-game-theme="dp"] #LeftBar button::after,\nbody[data-game-theme="dp"] #Toolbox button::after,\nbody[data-game-theme="dp"] #Tools button::after,\nbody[data-game-theme="dp"] #Dock button::after,\nbody[data-game-theme="dp"] #LeftBar .button::after,\nbody[data-game-theme="dp"] #Toolbox .button::after,\nbody[data-game-theme="dp"] #Tools .button::after,\nbody[data-game-theme="dp"] #Dock .button::after{\n  box-shadow: inset 0 0 0 2px rgba(120,70,24,.24) !important;\n}\n\nbody[data-game-theme="dp"] .sfa-dock-btn::before,\nbody[data-game-theme="dp"] #LeftBar button::before,\nbody[data-game-theme="dp"] #Toolbox button::before,\nbody[data-game-theme="dp"] #Tools button::before,\nbody[data-game-theme="dp"] #Dock button::before,\nbody[data-game-theme="dp"] #LeftBar .button::before,\nbody[data-game-theme="dp"] #Toolbox .button::before,\nbody[data-game-theme="dp"] #Tools .button::before,\nbody[data-game-theme="dp"] #Dock .button::before{\n  background: radial-gradient(28px 28px at -6px 50%, rgba(211,154,58,.32), transparent 60%) !important;\n}\n\nbody[data-game-theme="sfa"]{\n  background:\n    radial-gradient(900px 420px at 10% 8%, rgba(43,43,184,.10), transparent 55%),\n    radial-gradient(900px 420px at 90% 6%, rgba(224,181,78,.08), transparent 58%),\n    var(--sfa-navy);\n}\n\nbody[data-game-theme="sfa"] .sfa-shell{\n  border-radius:var(--radius) !important;\n  overflow:hidden !important;\n  background-clip:padding-box !important;\n  isolation:isolate;\n  -webkit-mask-image:-webkit-radial-gradient(white,black);\n  box-shadow:0 18px 48px rgba(0,0,0,.6), inset 0 0 1px rgba(255,255,255,.04);\n}\n\nbody[data-game-theme="sfa"] .sfa-shell > :first-child{\n  border-top-left-radius:var(--radius) !important;\n  border-top-right-radius:var(--radius) !important;\n}\nbody[data-game-theme="sfa"] .sfa-shell > :last-child{\n  border-bottom-left-radius:var(--radius) !important;\n  border-bottom-right-radius:var(--radius) !important;\n}\n\nbody[data-game-theme="sfa"] .sfa-title{\n  background:linear-gradient(180deg,var(--sfa-accent),#caa341) !important;\n  color:#1A1258 !important;\n  text-transform:uppercase;\n  letter-spacing:.8px;\n  border:0 !important;\n  box-shadow:inset 0 1px 0 rgba(255,255,255,.05);\n}\n\nbody[data-game-theme="sfa"] #Panel .sfa-card{\n  background:rgba(9,22,36,.90);\n  box-shadow:inset 0 0 1px rgba(255,255,255,.03);\n  border:0 !important;\n  backdrop-filter:blur(6px);\n}\n\nbody[data-game-theme="sfa"] .sfa-search{\n  border-radius:12px !important;\n  background:linear-gradient(180deg,rgba(8,16,30,.96),rgba(6,12,22,.96));\n  border:1px solid var(--sfa-border);\n  box-shadow:inset 0 0 0 1px rgba(255,255,255,.02);\n  color: var(--sfa-white);\n}\n\nbody[data-game-theme="sfa"] .sfa-rand{\n  border-radius:12px !important;\n  background:linear-gradient(180deg,#0b182c,#081421);\n  border:1px solid var(--sfa-border);\n}\n\nbody[data-game-theme="sfa"] .sfa-list{\n  background:linear-gradient(180deg,rgba(10,20,34,.94),rgba(7,14,26,.94));\n  border:1px solid var(--sfa-border);\n  border-radius:var(--radius) !important;\n  overflow:hidden !important;\n  box-shadow:0 16px 38px rgba(0,0,0,.6), inset 0 0 1px rgba(255,255,255,.03);\n}\n\nbody[data-game-theme="sfa"] .sfa-list .selector:hover{\n  background:var(--sfa-accent-8);\n}\n\nbody[data-game-theme="sfa"] .sfa-list span.text{\n  color:#eaf7ff;\n  text-shadow:0 2px 3px rgba(0,0,0,.6);\n  font-weight:800;\n  letter-spacing:.8px;\n}\n\nbody[data-game-theme="sfa"] .sfa-list span.header{\n  color:#cfdbff;\n  text-transform:uppercase;\n  letter-spacing:.9px;\n  padding:8px;\n  border-bottom:1px solid rgba(43,43,184,.20);\n}\n\nbody[data-game-theme="sfa"] .sfa-right-menu span.header{\n  color: var(--sfa-gold);\n  font-weight: 900;\n  letter-spacing: 1px;\n  text-transform: uppercase;\n  -webkit-text-stroke: 2.2px var(--sfa-purple);\n  paint-order: stroke fill;\n  text-shadow:\n    0 1px 0 var(--sfa-purple),  0 -1px 0 var(--sfa-purple),\n    1px 0 0 var(--sfa-purple),  -1px 0 0 var(--sfa-purple),\n    1px 1px 0 var(--sfa-purple), -1px 1px 0 var(--sfa-purple),\n    1px -1px 0 var(--sfa-purple), -1px -1px 0 var(--sfa-purple),\n    0 0 6px rgba(43,43,184,.25);\n}\n\nbody[data-game-theme="sfa"] .sfa-dock-btn,\nbody[data-game-theme="sfa"] #LeftBar button,\nbody[data-game-theme="sfa"] #Toolbox button,\nbody[data-game-theme="sfa"] #Tools button,\nbody[data-game-theme="sfa"] #Dock button,\nbody[data-game-theme="sfa"] #LeftBar .button,\nbody[data-game-theme="sfa"] #Toolbox .button,\nbody[data-game-theme="sfa"] #Tools .button,\nbody[data-game-theme="sfa"] #Dock .button{\n  position: relative;\n  border-radius: 12px !important;\n  overflow: hidden !important;\n  background: linear-gradient(180deg,#112540,#0b182c) !important;\n  border: 1px solid var(--sfa-border) !important;\n  box-shadow: 0 14px 28px rgba(0,0,0,.55), inset 0 0 1px rgba(255,255,255,.03) !important;\n  outline: none !important;\n  display: grid;\n  place-items: center;\n}\n\nbody[data-game-theme="sfa"] .sfa-dock-btn > *,\nbody[data-game-theme="sfa"] #LeftBar button > *,\nbody[data-game-theme="sfa"] #Toolbox button > *,\nbody[data-game-theme="sfa"] #Tools button > *,\nbody[data-game-theme="sfa"] #Dock button > *,\nbody[data-game-theme="sfa"] #LeftBar .button > *,\nbody[data-game-theme="sfa"] #Toolbox .button > *,\nbody[data-game-theme="sfa"] #Tools .button > *,\nbody[data-game-theme="sfa"] #Dock .button > *{\n  background: transparent !important;\n  background-image: none !important;\n  border: 0 !important;\n  box-shadow: none !important;\n}\n\nbody[data-game-theme="sfa"] .sfa-dock-btn::after,\nbody[data-game-theme="sfa"] #LeftBar button::after,\nbody[data-game-theme="sfa"] #Toolbox button::after,\nbody[data-game-theme="sfa"] #Tools button::after,\nbody[data-game-theme="sfa"] #Dock button::after,\nbody[data-game-theme="sfa"] #LeftBar .button::after,\nbody[data-game-theme="sfa"] #Toolbox .button::after,\nbody[data-game-theme="sfa"] #Tools .button::after,\nbody[data-game-theme="sfa"] #Dock .button::after{\n  content:"";\n  position:absolute;\n  inset:0;\n  border-radius:inherit;\n  pointer-events:none;\n  box-shadow: inset 0 0 0 2px rgba(43,43,184,.20);\n}\n\nbody[data-game-theme="sfa"] .sfa-dock-btn::before,\nbody[data-game-theme="sfa"] #LeftBar button::before,\nbody[data-game-theme="sfa"] #Toolbox button::before,\nbody[data-game-theme="sfa"] #Tools button::before,\nbody[data-game-theme="sfa"] #Dock button::before,\nbody[data-game-theme="sfa"] #LeftBar .button::before,\nbody[data-game-theme="sfa"] #Toolbox .button::before,\nbody[data-game-theme="sfa"] #Tools .button::before,\nbody[data-game-theme="sfa"] #Dock .button::before{\n  content:"";\n  position:absolute;\n  inset:0;\n  border-radius:inherit;\n  pointer-events:none;\n  background: radial-gradient(28px 28px at -6px 50%, rgba(224,181,78,.38), transparent 60%);\n}\n\nbody[data-game-theme="sfa"] .sfa-dock-btn:focus,\nbody[data-game-theme="sfa"] .sfa-dock-btn[aria-pressed="true"],\nbody[data-game-theme="sfa"] #LeftBar button:focus,\nbody[data-game-theme="sfa"] #Toolbox button:focus,\nbody[data-game-theme="sfa"] #Tools button:focus,\nbody[data-game-theme="sfa"] #Dock button:focus,\nbody[data-game-theme="sfa"] #LeftBar .button[aria-pressed="true"],\nbody[data-game-theme="sfa"] #Toolbox .button[aria-pressed="true"],\nbody[data-game-theme="sfa"] #Tools .button[aria-pressed="true"],\nbody[data-game-theme="sfa"] #Dock .button[aria-pressed="true"]{\n  box-shadow: 0 16px 32px rgba(0,0,0,.6), inset 0 0 0 2px rgba(224,181,78,.55) !important;\n}\n\nbody[data-game-theme="sfa"] .sfa-right-menu .selector .text,\nbody[data-game-theme="sfa"] .sfa-right-menu span.text{\n  font-size: 0.90em !important;\n  line-height: 1.25em;\n}\n.sfa-list-scroll{\n  scrollbar-width: thin;\n}\n\nbody[data-game-theme="sfa"] .sfa-list-scroll{\n  scrollbar-color: rgba(224,181,78,.70) rgba(8,16,30,.95);\n}\n\nbody[data-game-theme="dp"] .sfa-list-scroll{\n  scrollbar-color: rgba(200,138,45,.75) rgba(20,12,8,.95);\n}\n\n.sfa-list-scroll::-webkit-scrollbar{\n  width: 12px;\n  height: 12px;\n}\n\nbody[data-game-theme="sfa"] .sfa-list-scroll::-webkit-scrollbar-track{\n  background: linear-gradient(180deg, rgba(10,20,34,.96), rgba(7,14,26,.96));\n  border-left: 1px solid rgba(43,43,184,.20);\n}\n\nbody[data-game-theme="sfa"] .sfa-list-scroll::-webkit-scrollbar-thumb{\n  background: linear-gradient(180deg, rgba(224,181,78,.92), rgba(202,163,65,.92));\n  border-radius: 10px;\n  border: 2px solid rgba(8,16,30,.95);\n}\n\nbody[data-game-theme="sfa"] .sfa-list-scroll::-webkit-scrollbar-thumb:hover{\n  background: linear-gradient(180deg, rgba(240,198,86,.98), rgba(220,176,66,.98));\n}\n\nbody[data-game-theme="dp"] .sfa-list-scroll::-webkit-scrollbar-track{\n  background: linear-gradient(180deg, rgba(22,14,9,.96), rgba(12,8,6,.96));\n  border-left: 1px solid rgba(170,110,48,.24);\n}\n\nbody[data-game-theme="dp"] .sfa-list-scroll::-webkit-scrollbar-thumb{\n  background: linear-gradient(180deg, rgba(211,154,58,.92), rgba(166,106,39,.92));\n  border-radius: 10px;\n  border: 2px solid rgba(20,12,8,.95);\n}\n\nbody[data-game-theme="dp"] .sfa-list-scroll::-webkit-scrollbar-thumb:hover{\n  background: linear-gradient(180deg, rgba(226,170,78,.98), rgba(186,120,44,.98));\n}\n  '),
+                  '\n:root{\n  --sfa-gold:#E0B54E;\n  --sfa-navy:#0B1124;\n  --sfa-border: rgba(43,43,184,.26);\n  --sfa-accent: var(--sfa-gold);\n  --sfa-accent-8: rgba(224,181,78,.10);\n  --sfa-white:#eef6ff;\n  --radius:16px;\n  --radius-sm:12px;\n}\n\nbody[data-landing="1"] #Panel{\n  display:none !important;\n}\n\nbody[data-landing="1"] #SceneSelect,\nbody[data-landing="1"] [class*="scene-select"],\nbody[data-landing="1"] [class*="SceneSelect"]{\n  margin-inline:auto !important;\n}\n\nbody[data-landing="1"] #SceneSelect{\n  overflow-y:hidden !important;\n}\n\n#sfa-dp-splash-title{\n  text-align:center;\n  margin: 6px 0 18px 0;\n  padding: 8px 10px 2px 10px;\n  pointer-events:none;\n}\n\n#sfa-dp-splash-title .splash-main{\n  color:#F0C75A;\n  font-weight:900;\n  letter-spacing:1.2px;\n  text-transform:uppercase;\n  font-size: 1.35rem;\n  line-height:1.15;\n  text-shadow:\n    0 1px 0 #1a1258,\n    0 2px 8px rgba(0,0,0,.45);\n}\n\n#sfa-dp-splash-title .splash-sub{\n  margin-top:6px;\n  color:#dfeaff;\n  font-weight:800;\n  letter-spacing:1px;\n  text-transform:uppercase;\n  font-size:.95rem;\n  line-height:1.1;\n  opacity:.95;\n  text-shadow: 0 1px 6px rgba(0,0,0,.45);\n}\n\n#landing-version{\n  position:static;\n  display:grid;\n  place-items:center;\n  width:100%;\n  margin:4px auto 8px auto;\n  color:rgba(255,255,255,.72);\n  font-size:12px;\n  font-weight:600;\n  letter-spacing:.5px;\n  text-align:center;\n  text-shadow:0 1px 4px rgba(0,0,0,.55);\n  pointer-events:none;\n  z-index:20;\n}\n\n#landing-version .landing-patch-card{\n  width:min(520px, calc(100% - 54px));\n  margin:0 auto 8px auto;\n  padding:6px 10px 7px 10px;\n  border-radius:12px;\n  border:1px solid rgba(224,181,78,.30);\n  background:linear-gradient(180deg, rgba(5,10,18,.76), rgba(0,0,0,.58));\n  box-shadow:0 12px 26px rgba(0,0,0,.45), inset 0 0 1px rgba(255,255,255,.06);\n  text-align:left;\n}\n\n#landing-version .landing-patch-title{\n  color:#F0C75A;\n  font-size:10px;\n  font-weight:900;\n  letter-spacing:1px;\n  text-transform:uppercase;\n  text-align:center;\n  margin-bottom:3px;\n}\n\n#landing-version .landing-patch-lines{\n  display:grid;\n  grid-template-columns:1fr 1fr;\n  column-gap:12px;\n  color:rgba(238,246,255,.88);\n  font-size:8.2px;\n  line-height:1.14;\n  letter-spacing:.10px;\n}\n\n#landing-version .landing-patch-col{\n  display:flex;\n  flex-direction:column;\n  gap:2px;\n  min-width:0;\n}\n\n#landing-version .landing-patch-wide{\n  grid-column:1 / -1;\n  text-align:center;\n  margin-top:2px;\n}\n\n#landing-version .landing-patch-split{\n  display:flex;\n  justify-content:center;\n  align-items:center;\n  gap:18px;\n  white-space:nowrap;\n  font-size:7.6px;\n}\n\n#landing-version .landing-patch-bullet{\n  color:#6CCBFF;\n  font-weight:900;\n}\n\n#landing-version .landing-version-text{\n  color:rgba(255,255,255,.72);\n  font-size:12px;\n  font-weight:700;\n  letter-spacing:.55px;\n  text-align:center;\n}\n\n/* Original theme CSS kept unchanged below */\nbody[data-game-theme="dp"]{\n  --sfa-gold: #a8a8a8;\n  --sfa-purple: #8f8f8f;\n  --sfa-navy: #120C08;\n  --sfa-border: rgba(207, 207, 207, 0.3);\n  --sfa-accent: #858585;\n  --sfa-accent-8: rgba(211,154,58,.12);\n  --sfa-white: #F4E9D8;\n}\n\nbody[data-game-theme="dp"]{\n  background:\n    radial-gradient(900px 420px at 12% 8%, rgba(120,70,24,.18), transparent 55%),\n    radial-gradient(900px 420px at 88% 6%, rgba(211,154,58,.10), transparent 58%),\n    #080605 !important;\n}\n\nbody[data-game-theme="dp"] #Panel .sfa-card{\n  background: rgba(20,12,8,.92) !important;\n  box-shadow: inset 0 0 1px rgba(255,220,180,.04);\n}\n\nbody[data-game-theme="dp"] .sfa-list{\n  background: linear-gradient(180deg, rgba(22,14,9,.95), rgba(12,8,6,.95)) !important;\n  border: 1px solid rgba(170,110,48,.32) !important;\n  box-shadow: 0 16px 38px rgba(0,0,0,.65), inset 0 0 1px rgba(255,220,180,.04);\n}\n\nbody[data-game-theme="dp"] .sfa-list .selector:hover{\n  background: rgba(211,154,58,.12) !important;\n}\n\nbody[data-game-theme="dp"] .sfa-list span.text{\n  color: #F7EAD8 !important;\n  text-shadow: 0 2px 3px rgba(0,0,0,.65);\n}\n\nbody[data-game-theme="dp"] .sfa-list span.header{\n  color: #E6C89A !important;\n  border-bottom: 1px solid rgba(170,110,48,.24) !important;\n}\n\nbody[data-game-theme="dp"] .sfa-title{\n  background: linear-gradient(180deg, #D39A3A, #A66A27) !important;\n  color: #1A0D05 !important;\n  box-shadow: inset 0 1px 0 rgba(255,230,180,.10);\n}\n\nbody[data-game-theme="dp"] .sfa-dock-btn,\nbody[data-game-theme="dp"] #LeftBar button,\nbody[data-game-theme="dp"] #Toolbox button,\nbody[data-game-theme="dp"] #Tools button,\nbody[data-game-theme="dp"] #Dock button,\nbody[data-game-theme="dp"] #LeftBar .button,\nbody[data-game-theme="dp"] #Toolbox .button,\nbody[data-game-theme="dp"] #Tools .button,\nbody[data-game-theme="dp"] #Dock .button{\n  background: linear-gradient(180deg,#2A1A12,#140D09) !important;\n  border: 1px solid rgba(170,110,48,.30) !important;\n  box-shadow: 0 14px 28px rgba(0,0,0,.55), inset 0 0 1px rgba(255,220,180,.03) !important;\n}\n\nbody[data-game-theme="dp"] .sfa-dock-btn::after,\nbody[data-game-theme="dp"] #LeftBar button::after,\nbody[data-game-theme="dp"] #Toolbox button::after,\nbody[data-game-theme="dp"] #Tools button::after,\nbody[data-game-theme="dp"] #Dock button::after,\nbody[data-game-theme="dp"] #LeftBar .button::after,\nbody[data-game-theme="dp"] #Toolbox .button::after,\nbody[data-game-theme="dp"] #Tools .button::after,\nbody[data-game-theme="dp"] #Dock .button::after{\n  box-shadow: inset 0 0 0 2px rgba(120,70,24,.24) !important;\n}\n\nbody[data-game-theme="dp"] .sfa-dock-btn::before,\nbody[data-game-theme="dp"] #LeftBar button::before,\nbody[data-game-theme="dp"] #Toolbox button::before,\nbody[data-game-theme="dp"] #Tools button::before,\nbody[data-game-theme="dp"] #Dock button::before,\nbody[data-game-theme="dp"] #LeftBar .button::before,\nbody[data-game-theme="dp"] #Toolbox .button::before,\nbody[data-game-theme="dp"] #Tools .button::before,\nbody[data-game-theme="dp"] #Dock .button::before{\n  background: radial-gradient(28px 28px at -6px 50%, rgba(211,154,58,.32), transparent 60%) !important;\n}\n\nbody[data-game-theme="sfa"]{\n  background:\n    radial-gradient(900px 420px at 10% 8%, rgba(43,43,184,.10), transparent 55%),\n    radial-gradient(900px 420px at 90% 6%, rgba(224,181,78,.08), transparent 58%),\n    var(--sfa-navy);\n}\n\nbody[data-game-theme="sfa"] .sfa-shell{\n  border-radius:var(--radius) !important;\n  overflow:hidden !important;\n  background-clip:padding-box !important;\n  isolation:isolate;\n  -webkit-mask-image:-webkit-radial-gradient(white,black);\n  box-shadow:0 18px 48px rgba(0,0,0,.6), inset 0 0 1px rgba(255,255,255,.04);\n}\n\nbody[data-game-theme="sfa"] .sfa-shell > :first-child{\n  border-top-left-radius:var(--radius) !important;\n  border-top-right-radius:var(--radius) !important;\n}\nbody[data-game-theme="sfa"] .sfa-shell > :last-child{\n  border-bottom-left-radius:var(--radius) !important;\n  border-bottom-right-radius:var(--radius) !important;\n}\n\nbody[data-game-theme="sfa"] .sfa-title{\n  background:linear-gradient(180deg,var(--sfa-accent),#caa341) !important;\n  color:#1A1258 !important;\n  text-transform:uppercase;\n  letter-spacing:.8px;\n  border:0 !important;\n  box-shadow:inset 0 1px 0 rgba(255,255,255,.05);\n}\n\nbody[data-game-theme="sfa"] #Panel .sfa-card{\n  background:rgba(9,22,36,.90);\n  box-shadow:inset 0 0 1px rgba(255,255,255,.03);\n  border:0 !important;\n  backdrop-filter:blur(6px);\n}\n\nbody[data-game-theme="sfa"] .sfa-search{\n  border-radius:12px !important;\n  background:linear-gradient(180deg,rgba(8,16,30,.96),rgba(6,12,22,.96));\n  border:1px solid var(--sfa-border);\n  box-shadow:inset 0 0 0 1px rgba(255,255,255,.02);\n  color: var(--sfa-white);\n}\n\nbody[data-game-theme="sfa"] .sfa-rand{\n  border-radius:12px !important;\n  background:linear-gradient(180deg,#0b182c,#081421);\n  border:1px solid var(--sfa-border);\n}\n\nbody[data-game-theme="sfa"] .sfa-list{\n  background:linear-gradient(180deg,rgba(10,20,34,.94),rgba(7,14,26,.94));\n  border:1px solid var(--sfa-border);\n  border-radius:var(--radius) !important;\n  overflow:hidden !important;\n  box-shadow:0 16px 38px rgba(0,0,0,.6), inset 0 0 1px rgba(255,255,255,.03);\n}\n\nbody[data-game-theme="sfa"] .sfa-list .selector:hover{\n  background:var(--sfa-accent-8);\n}\n\nbody[data-game-theme="sfa"] .sfa-list span.text{\n  color:#eaf7ff;\n  text-shadow:0 2px 3px rgba(0,0,0,.6);\n  font-weight:800;\n  letter-spacing:.8px;\n}\n\nbody[data-game-theme="sfa"] .sfa-list span.header{\n  color:#cfdbff;\n  text-transform:uppercase;\n  letter-spacing:.9px;\n  padding:8px;\n  border-bottom:1px solid rgba(43,43,184,.20);\n}\n\nbody[data-game-theme="sfa"] .sfa-right-menu span.header{\n  color: var(--sfa-gold);\n  font-weight: 900;\n  letter-spacing: 1px;\n  text-transform: uppercase;\n  -webkit-text-stroke: 2.2px var(--sfa-purple);\n  paint-order: stroke fill;\n  text-shadow:\n    0 1px 0 var(--sfa-purple),  0 -1px 0 var(--sfa-purple),\n    1px 0 0 var(--sfa-purple),  -1px 0 0 var(--sfa-purple),\n    1px 1px 0 var(--sfa-purple), -1px 1px 0 var(--sfa-purple),\n    1px -1px 0 var(--sfa-purple), -1px -1px 0 var(--sfa-purple),\n    0 0 6px rgba(43,43,184,.25);\n}\n\nbody[data-game-theme="sfa"] .sfa-dock-btn,\nbody[data-game-theme="sfa"] #LeftBar button,\nbody[data-game-theme="sfa"] #Toolbox button,\nbody[data-game-theme="sfa"] #Tools button,\nbody[data-game-theme="sfa"] #Dock button,\nbody[data-game-theme="sfa"] #LeftBar .button,\nbody[data-game-theme="sfa"] #Toolbox .button,\nbody[data-game-theme="sfa"] #Tools .button,\nbody[data-game-theme="sfa"] #Dock .button{\n  position: relative;\n  border-radius: 12px !important;\n  overflow: hidden !important;\n  background: linear-gradient(180deg,#112540,#0b182c) !important;\n  border: 1px solid var(--sfa-border) !important;\n  box-shadow: 0 14px 28px rgba(0,0,0,.55), inset 0 0 1px rgba(255,255,255,.03) !important;\n  outline: none !important;\n  display: grid;\n  place-items: center;\n}\n\nbody[data-game-theme="sfa"] .sfa-dock-btn > *,\nbody[data-game-theme="sfa"] #LeftBar button > *,\nbody[data-game-theme="sfa"] #Toolbox button > *,\nbody[data-game-theme="sfa"] #Tools button > *,\nbody[data-game-theme="sfa"] #Dock button > *,\nbody[data-game-theme="sfa"] #LeftBar .button > *,\nbody[data-game-theme="sfa"] #Toolbox .button > *,\nbody[data-game-theme="sfa"] #Tools .button > *,\nbody[data-game-theme="sfa"] #Dock .button > *{\n  background: transparent !important;\n  background-image: none !important;\n  border: 0 !important;\n  box-shadow: none !important;\n}\n\nbody[data-game-theme="sfa"] .sfa-dock-btn::after,\nbody[data-game-theme="sfa"] #LeftBar button::after,\nbody[data-game-theme="sfa"] #Toolbox button::after,\nbody[data-game-theme="sfa"] #Tools button::after,\nbody[data-game-theme="sfa"] #Dock button::after,\nbody[data-game-theme="sfa"] #LeftBar .button::after,\nbody[data-game-theme="sfa"] #Toolbox .button::after,\nbody[data-game-theme="sfa"] #Tools .button::after,\nbody[data-game-theme="sfa"] #Dock .button::after{\n  content:"";\n  position:absolute;\n  inset:0;\n  border-radius:inherit;\n  pointer-events:none;\n  box-shadow: inset 0 0 0 2px rgba(43,43,184,.20);\n}\n\nbody[data-game-theme="sfa"] .sfa-dock-btn::before,\nbody[data-game-theme="sfa"] #LeftBar button::before,\nbody[data-game-theme="sfa"] #Toolbox button::before,\nbody[data-game-theme="sfa"] #Tools button::before,\nbody[data-game-theme="sfa"] #Dock button::before,\nbody[data-game-theme="sfa"] #LeftBar .button::before,\nbody[data-game-theme="sfa"] #Toolbox .button::before,\nbody[data-game-theme="sfa"] #Tools .button::before,\nbody[data-game-theme="sfa"] #Dock .button::before{\n  content:"";\n  position:absolute;\n  inset:0;\n  border-radius:inherit;\n  pointer-events:none;\n  background: radial-gradient(28px 28px at -6px 50%, rgba(224,181,78,.38), transparent 60%);\n}\n\nbody[data-game-theme="sfa"] .sfa-dock-btn:focus,\nbody[data-game-theme="sfa"] .sfa-dock-btn[aria-pressed="true"],\nbody[data-game-theme="sfa"] #LeftBar button:focus,\nbody[data-game-theme="sfa"] #Toolbox button:focus,\nbody[data-game-theme="sfa"] #Tools button:focus,\nbody[data-game-theme="sfa"] #Dock button:focus,\nbody[data-game-theme="sfa"] #LeftBar .button[aria-pressed="true"],\nbody[data-game-theme="sfa"] #Toolbox .button[aria-pressed="true"],\nbody[data-game-theme="sfa"] #Tools .button[aria-pressed="true"],\nbody[data-game-theme="sfa"] #Dock .button[aria-pressed="true"]{\n  box-shadow: 0 16px 32px rgba(0,0,0,.6), inset 0 0 0 2px rgba(224,181,78,.55) !important;\n}\n\nbody[data-game-theme="sfa"] .sfa-right-menu .selector .text,\nbody[data-game-theme="sfa"] .sfa-right-menu span.text{\n  font-size: 0.90em !important;\n  line-height: 1.25em;\n}\n.sfa-list-scroll{\n  scrollbar-width: thin;\n}\n\nbody[data-game-theme="sfa"] .sfa-list-scroll{\n  scrollbar-color: rgba(224,181,78,.70) rgba(8,16,30,.95);\n}\n\nbody[data-game-theme="dp"] .sfa-list-scroll{\n  scrollbar-color: rgba(200,138,45,.75) rgba(20,12,8,.95);\n}\n\n.sfa-list-scroll::-webkit-scrollbar{\n  width: 12px;\n  height: 12px;\n}\n\nbody[data-game-theme="sfa"] .sfa-list-scroll::-webkit-scrollbar-track{\n  background: linear-gradient(180deg, rgba(10,20,34,.96), rgba(7,14,26,.96));\n  border-left: 1px solid rgba(43,43,184,.20);\n}\n\nbody[data-game-theme="sfa"] .sfa-list-scroll::-webkit-scrollbar-thumb{\n  background: linear-gradient(180deg, rgba(224,181,78,.92), rgba(202,163,65,.92));\n  border-radius: 10px;\n  border: 2px solid rgba(8,16,30,.95);\n}\n\nbody[data-game-theme="sfa"] .sfa-list-scroll::-webkit-scrollbar-thumb:hover{\n  background: linear-gradient(180deg, rgba(240,198,86,.98), rgba(220,176,66,.98));\n}\n\nbody[data-game-theme="dp"] .sfa-list-scroll::-webkit-scrollbar-track{\n  background: linear-gradient(180deg, rgba(22,14,9,.96), rgba(12,8,6,.96));\n  border-left: 1px solid rgba(170,110,48,.24);\n}\n\nbody[data-game-theme="dp"] .sfa-list-scroll::-webkit-scrollbar-thumb{\n  background: linear-gradient(180deg, rgba(211,154,58,.92), rgba(166,106,39,.92));\n  border-radius: 10px;\n  border: 2px solid rgba(20,12,8,.95);\n}\n\nbody[data-game-theme="dp"] .sfa-list-scroll::-webkit-scrollbar-thumb:hover{\n  background: linear-gradient(180deg, rgba(226,170,78,.98), rgba(186,120,44,.98));\n}\n  '),
                   document.head.appendChild(e));
               })(),
               (function () {
@@ -65429,29 +65923,15 @@ const px=xrel*worldScaleX*VIEW_ZOOM+markerOffsetX,py=yrel*worldScaleZ*VIEW_ZOOM+
               this.gameRow.appendChild(t),
               this.gameRow.appendChild(this.gameMiniIcons),
               this.contents.prepend(this.gameRow));
-            const s = document.createElement("div");
-            ((s.id = "pfp-web-open-data"),
-              (s.textContent = "LOAD GAME FILES"),
-              (s.title = "Load your GameData folder, ISO/GCM or Dinosaur Planet ROM"),
-              (s.style.height = "27px"),
-              (s.style.display = "grid"),
-              (s.style.placeItems = "center"),
-              (s.style.boxSizing = "border-box"),
-              (s.style.margin = "0"),
-              (s.style.border = "1px solid rgba(224,181,78,.76)"),
-              (s.style.borderRadius = "5px"),
-              (s.style.background = "linear-gradient(90deg, rgba(18,60,94,.94), rgba(70,51,18,.92))"),
-              (s.style.color = "white"),
-              (s.style.font = "bold 13px monospace"),
-              (s.style.letterSpacing = ".5px"),
-              (s.style.cursor = "pointer"),
-              (s.style.userSelect = "none"),
-              (s.onclick = (e) => {
-                (e.preventDefault(), e.stopPropagation());
-                const t = window.__PFP_WEB_OPEN_DATA;
-                "function" == typeof t && t();
-              }),
-              this.contents.prepend(s),
+            const s = new K("Auto Music Off", !0);
+            ((s.onchanged = () => {
+              const e = window.musicState;
+              ((e.muted = s.checked),
+                e.muted &&
+                  e.audio &&
+                  (e.audio.pause(), (e.audio.currentTime = 0)));
+            }),
+              this.contents.prepend(s.elem),
               (this.landingBlurb = document.createElement("div")),
               (this.landingBlurb.style.marginTop = "18px"),
               (this.landingBlurb.style.padding = "18px"),
