@@ -2,99 +2,185 @@
 'use strict';
 
 const MAIN='main-6b7e7ae7257abae7800d-095-dpeye2.js';
+const PAYLOAD_PARTS=[...Array.from({length:9},(_,i)=>`web-sync/payload-part-${String(i).padStart(2,'0')}`),'web-sync/payload-part-09a','web-sync/payload-part-09b','web-sync/payload-part-10a','web-sync/payload-part-10b','web-sync/payload-part-11'];
 const AFTER=[
   'web-gametext.js',
   'sfa-map-sequences.js',
   'audio-hub.js',
   'web-local-data.js',
-  'web-saved-gamedata.js?v=5',
+  'web-saved-gamedata.js?v=6',
   'web-mount.js',
   'web-layout.js?v=3',
   'web-ui.js?v=2',
   'web-dp-audio.js',
   'section-headings.js'
 ];
+const REQUIRED_MARKERS=[
+  'pfpDPVertexGroups',
+  'PFP_DP_SKY_PRESETS',
+  '__pfpDPCurrentMapId',
+  '3249 === n'
+];
 
-// Bit of a bodge, but it keeps the online one matching the desktop build without another giant JS file.
-const NEW_OLD_MAP_SKY="        async function nn(e, t, n, s, i, a, z = 577, noEnvfx = !1) {\n          var o, l, c, h;\n          const mapDirs = {\n              2: \"dragrock\",\n              4: \"volcano\",\n              7: \"swaphol\",\n              8: \"swaphol\",\n              10: \"nwastes\",\n              11: \"warlock\",\n              12: \"crfort\",\n              13: \"wallcity\",\n              14: \"lightfoot\",\n              15: \"crfort\",\n              16: \"crfort\",\n              18: \"mmpass\",\n              19: \"darkicemines\",\n              23: \"icemountain\",\n              27: \"darkicemines\",\n              29: \"capeclaw\",\n              43: \"crfort\",\n              50: \"dfptop\",\n              52: \"dragrock\",\n            },\n            groups = {\n              capeclaw: [575, 576, 577],\n              nwastes: [180, 181, 182, 183],\n              icemountain: [180, 181, 182, 183],\n              swaphol: [434, 435, 436],\n              mmpass: [314, 312, 313],\n              lightfoot: [79, 80, 581],\n              darkicemines: [352, 346, 348, 351],\n              crfort: [86, 13, 17, 14],\n              warlock: [60],\n              wallcity: [507, 511, 508, 509],\n              dfptop: [86, 13, 17, 14],\n              dragrock: [507, 511, 508, 509],\n              volcano: [507, 511, 508, 509],\n            },\n            numMatch = String(e.mapNum).match(/(\\d+)$/),\n            mapNo = numMatch ? Number(numMatch[1]) : -1,\n            skyDir = mapDirs[mapNo] || (groups[a] ? a : \"\");\n          if (!skyDir || !groups[skyDir]) return;\n          const cache =\n              null !== (o = t.cache) && void 0 !== o\n                ? o\n                : null === (c = (l = t).getCache) || void 0 === c\n                  ? void 0\n                  : c.call(l),\n            skyTex = await S.JU.create(n, s, !1);\n          skyTex.setModelVersion(g.o.Final);\n          i && i.textureHolder && (skyTex.textureHolder = i.textureHolder);\n          try {\n            await skyTex.loadSubdirs([skyDir], s);\n          } catch (_) {\n            return;\n          }\n          try {\n            await skyTex.loadSubdirs([\"\"], s);\n          } catch (_) {}\n          \"function\" == typeof skyTex.setPreferredSubdir &&\n            skyTex.setPreferredSubdir(skyDir);\n          const modelFetcher = await w.Ju.create(\n            n,\n            Promise.resolve(skyTex),\n            t,\n            e.animController,\n            g.o.Final,\n          );\n          await modelFetcher.loadSubdirs([skyDir, \"\"], s);\n          const world = {\n            context: e.context,\n            renderCache: cache,\n            gameInfo: n,\n            subdirs: [skyDir],\n            worldLights: e.worldLights,\n            resColl: {\n              texFetcher: skyTex,\n              modelFetcher,\n              animColl: null,\n              amapColl: null,\n              modanimColl: null,\n            },\n            animController: e.animController,\n            objectMan: null,\n            envfxMan: null,\n            mapInstance: null,\n            _pfpNoEnvfx: noEnvfx,\n          };\n          try {\n            world.objectMan = await r.rl.create(world, s, !1, !0);\n            world.envfxMan = await C.R.create(world, s);\n            e.envfxMan = world.envfxMan;\n            e._pfpLegacySkyModelFetcher = modelFetcher;\n            e._pfpLegacySkyTexFetcher = skyTex;\n            e.envfxMan.setTimeOfDay(\n              null !== (h = Qt[skyDir]) && void 0 !== h ? h : 4,\n            );\n            for (const idx of groups[skyDir]) e.envfxMan.loadEnvfx(idx);\n          } catch (_) {}\n        }\n";
-const NEW_SKYSCAPE="            } else if (i.type === s.Skyscape) {\n              for (const e of this.skyscape.objects)\n                try {\n                  e.destroy(this.world.context.device);\n                } catch (e) {}\n              this.skyscape.objects = [];\n              this.cloudActionObjects = [];\n              const e = [0, 1576, 1890, 2147],\n                t = [0, 1578, 2140, 2145, 2147],\n                s = [0, 1575, 1577, 1886, 1525],\n                i = n.getUint8(93),\n                r = n.getUint8(91),\n                o = n.getUint8(90),\n                l = (e) => {\n                  if (!e) return;\n                  try {\n                    const t = this.world.objectMan.createObjectInstance(\n                      e,\n                      new DataView(new ArrayBuffer(128)),\n                      a.vt(),\n                    );\n                    t &&\n                      ((t.cullRadius = 999999),\n                      this.skyscape.objects.push(t));\n                  } catch (e) {}\n                };\n              (l(s[i] || 0), l(e[r] || 0), l(t[o] || 0));\n            }\n";
-
-function swapSection(text,start,end,replacement,name){
-  const a=text.indexOf(start);
-  if(a<0)throw new Error('could not find '+name+' start');
-  const b=text.indexOf(end,a+start.length);
-  if(b<0)throw new Error('could not find '+name+' end');
-  return text.slice(0,a)+replacement+text.slice(b);
+function textDecoder(){return new TextDecoder('utf-8');}
+async function fetchText(url){
+  const r=await fetch(url,{cache:'no-store'});
+  if(!r.ok)throw new Error(`could not load ${url} (${r.status})`);
+  return await r.text();
 }
-
-function patchMain(text){
-  const oldSkyType='            (e[(e.Skyscape = 4)] = "Skyscape"));';
-  if(!text.includes(oldSkyType))throw new Error('could not find skyscape type');
-  text=text.replace(oldSkyType,'            (e[(e.Skyscape = 6)] = "Skyscape"));');
-
-  const oldMapStart='        async function nn(e, t, n, s, i, a, r = 577) {';
-  const oldMapEnd='        function pfpParseVoxDataView(e) {';
-  text=swapSection(text,oldMapStart,oldMapEnd,NEW_OLD_MAP_SKY, 'old map sky stuff');
-
-  const forceStart='          forceKioskTextureOnlySky() {';
-  const forceEnd='          loadEnvfx(e) {';
-  const fa=text.indexOf(forceStart);
-  const fb=fa<0?-1:text.indexOf(forceEnd,fa);
-  if(fa<0||fb<0)throw new Error('could not find kiosk sky bit');
-  let force=text.slice(fa,fb);
-  const clear='            this.skyscape.objects = [];\n';
-  if(!force.includes(clear))throw new Error('kiosk sky clear line has moved');
-  force=force.replace(clear,'');
-  force=force.replace(forceStart,forceStart+'\n            if (this.world._pfpNoEnvfx) return;');
-  text=text.slice(0,fa)+force+text.slice(fb);
-
-  const loadStart='          loadEnvfx(e) {';
-  if(!text.includes(loadStart))throw new Error('could not find envfx loader');
-  text=text.replace(loadStart,loadStart+'\n            if (this.world._pfpNoEnvfx) return;');
-
-  const skyStart='            } else if (i.type === s.Skyscape) {';
-  const skyEnd='            return (\n              "StarFoxAdventuresDemo" === this.world.gameInfo.pathBase &&';
-  text=swapSection(text,skyStart,skyEnd,NEW_SKYSCAPE,'skyscape');
-
-  const oldX='              tn(x) && (await nn(p, h, this.gameInfo, t.dataFetcher, m, x)),';
-  const plainX='              await nn(p, h, this.gameInfo, t.dataFetcher, m, x),';
-  const newX='              await nn(p, h, this.gameInfo, t.dataFetcher, m, x, 577, 11 === this.mapNum),';
-  if(text.split(oldX).length-1!==3)throw new Error('old map sky calls have moved');
-  text=text.replace(oldX,plainX);
-  if(text.split(oldX).length-1!==2)throw new Error('krazoa sky calls have moved');
-  text=text.split(oldX).join(newX);
-
-  const oldH='            (tn(h) && (await nn(r, i, this.gameInfo, t.dataFetcher, l, h)),';
-  const newH='            (await nn(r, i, this.gameInfo, t.dataFetcher, l, h, 577, 52 === this.mapNum),';
-  if(!text.includes(oldH))throw new Error('early2 sky call has moved');
-  text=text.replace(oldH,newH);
-
-  const oldM='            (tn(m) && (await nn(h, l, this.gameInfo, t.dataFetcher, d, m)),';
-  const newM='            (await nn(h, l, this.gameInfo, t.dataFetcher, d, m, 577, 11 === this.mapNum),';
-  if(!text.includes(oldM))throw new Error('early4 sky call has moved');
-  text=text.replace(oldM,newM);
-  return text;
+function b64Bytes(text){
+  const clean=text.replace(/\s+/g,'');
+  const bin=atob(clean),out=new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++)out[i]=bin.charCodeAt(i);
+  return out;
 }
-
+async function ungzip(bytes){
+  if(typeof DecompressionStream!=='function')throw new Error('gzip decompression is unavailable in this browser');
+  return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
+}
+function tarTextFiles(bytes){
+  const out=new Map(),dec=textDecoder();
+  const readString=(off,len)=>{
+    let end=off;while(end<off+len&&bytes[end]!==0)end++;
+    return dec.decode(bytes.subarray(off,end));
+  };
+  let off=0;
+  while(off+512<=bytes.length){
+    let name=readString(off,100);
+    if(!name)break;
+    const prefix=readString(off+345,155);
+    if(prefix)name=prefix+'/'+name;
+    const sizeText=readString(off+124,12).trim().replace(/\0/g,'');
+    const size=parseInt(sizeText||'0',8)||0;
+    const type=bytes[off+156];
+    const dataOff=off+512;
+    name=name.replace(/^\.\//,'');
+    if(type===0||type===48)out.set(name,dec.decode(bytes.subarray(dataOff,dataOff+size)));
+    off=dataOff+Math.ceil(size/512)*512;
+  }
+  return out;
+}
+async function loadPayload(){
+  const parts=await Promise.all(PAYLOAD_PARTS.map(p=>fetchText(p+'?v=20260916b')));
+  const packed=b64Bytes(parts.join(''));
+  return tarTextFiles(await ungzip(packed));
+}
+function parsePatch(patch){
+  const lines=patch.replace(/\r\n/g,'\n').split('\n'),hunks=[];
+  let i=0;
+  while(i<lines.length){
+    const m=/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(lines[i]);
+    if(!m){i++;continue;}
+    const h={oldStart:Number(m[1]),newStart:Number(m[3]),lines:[]};
+    i++;
+    while(i<lines.length&&!lines[i].startsWith('@@ ')&&!lines[i].startsWith('--- ')&&!lines[i].startsWith('+++ ')){
+      const line=lines[i];
+      if(line.startsWith(' ')||line.startsWith('+')||line.startsWith('-'))h.lines.push(line);
+      i++;
+    }
+    hunks.push(h);
+  }
+  return hunks;
+}
+function hunkBlocks(h,leadTrim,tailTrim){
+  let first=0,last=h.lines.length;
+  while(leadTrim>0&&first<last&&h.lines[first][0]===' '){first++;leadTrim--;}
+  while(tailTrim>0&&last>first&&h.lines[last-1][0]===' '){last--;tailTrim--;}
+  const slice=h.lines.slice(first,last);
+  return {
+    old:slice.filter(x=>x[0]!=='+' ).map(x=>x.slice(1)),
+    neu:slice.filter(x=>x[0]!=='-' ).map(x=>x.slice(1))
+  };
+}
+function linesMatch(src,at,block){
+  if(at<0||at+block.length>src.length)return false;
+  for(let i=0;i<block.length;i++)if(src[at+i]!==block[i])return false;
+  return true;
+}
+function findBlock(src,block,expected){
+  if(!block.length)return Math.max(0,Math.min(src.length,expected));
+  const lo=Math.max(0,expected-1800),hi=Math.min(src.length-block.length,expected+1800);
+  for(let d=0;d<=1800;d++){
+    const a=expected-d,b=expected+d;
+    if(a>=lo&&linesMatch(src,a,block))return a;
+    if(d&&b<=hi&&linesMatch(src,b,block))return b;
+  }
+  const first=block[0];
+  for(let i=0;i<=src.length-block.length;i++)if(src[i]===first&&linesMatch(src,i,block))return i;
+  return -1;
+}
+function applyStablePatch(source,patch){
+  const src=source.replace(/\r\n/g,'\n').split('\n'),hunks=parsePatch(patch);
+  let delta=0,applied=0,already=0,skipped=0;
+  const misses=[];
+  for(let hi=0;hi<hunks.length;hi++){
+    const h=hunks[hi],expected=Math.max(0,h.oldStart-1+delta);
+    let done=false;
+    for(let fuzz=0;fuzz<=2&&!done;fuzz++){
+      const trims=[];
+      for(let a=0;a<=fuzz;a++)trims.push([a,fuzz-a]);
+      for(const [lead,tail] of trims){
+        const b=hunkBlocks(h,lead,tail);
+        if(!b.old.length&&!b.neu.length)continue;
+        let at=findBlock(src,b.old,expected);
+        if(at>=0){
+          src.splice(at,b.old.length,...b.neu);
+          delta+=b.neu.length-b.old.length;applied++;done=true;break;
+        }
+        at=findBlock(src,b.neu,expected);
+        if(at>=0){delta+=b.neu.length-b.old.length;already++;done=true;break;}
+      }
+    }
+    if(!done){skipped++;misses.push(hi+1);}
+  }
+  return {text:src.join('\n'),total:hunks.length,applied,already,skipped,misses};
+}
 function loadScript(src){
   return new Promise((resolve,reject)=>{
-    const s=document.createElement('script');
-    s.src=src;
-    s.onload=resolve;
-    s.onerror=()=>reject(new Error('could not load '+src));
-    document.head.appendChild(s);
+    const s=document.createElement('script');s.src=src;s.onload=resolve;s.onerror=()=>reject(new Error('could not load '+src));document.head.appendChild(s);
   });
 }
-
-async function boot(){
-  const r=await fetch(MAIN+'?web=20260911a',{cache:'no-store'});
-  if(!r.ok)throw new Error('could not load the main FoxPlanet file ('+r.status+')');
-  const original=await r.text();
-  const patched=original.includes('DP anims added + fixed map models')?original:patchMain(original);
-  (0,eval)(patched+'\n//# sourceURL='+MAIN);
-  for(const src of AFTER)await loadScript(src);
+function evalSource(text,label){(0,eval)(text+`\n//# sourceURL=${label}`);}
+function installCurrentKioskPatcher(){
+  const upgrade=()=>{
+    const api=window.PfpKioskCurrent;
+    if(!api||typeof api.installKioskIsoPatcherPanel!=='function')return;
+    const oldPanel=document.getElementById('kiosk-iso-sequence-patcher-panel');
+    if(!oldPanel||oldPanel.dataset.pfpCurrentPatcher==='1')return;
+    oldPanel.remove();
+    const panel=api.installKioskIsoPatcherPanel(document.body);
+    if(panel)panel.dataset.pfpCurrentPatcher='1';
+  };
+  new MutationObserver(upgrade).observe(document.documentElement,{childList:true,subtree:true});
+  upgrade();
 }
+async function boot(){
+  const [payload,original]=await Promise.all([loadPayload(),fetchText(MAIN+'?web=20260916b')]);
+  const patch=payload.get('stable-main.patch');
+  if(!patch)throw new Error('web sync payload is missing the desktop patch');
+  const merged=applyStablePatch(original,patch);
+  const markerCount=REQUIRED_MARKERS.filter(x=>merged.text.includes(x)).length;
+  console.info('[FoxPlanet web sync]',merged,'markers',markerCount+'/'+REQUIRED_MARKERS.length);
+  if(merged.applied+merged.already<55||markerCount<3){
+    console.warn('[FoxPlanet web sync] desktop merge did not validate; keeping previous web bundle');
+    evalSource(original,MAIN);
+  }else{
+    evalSource(merged.text,'Project-FoxPlanet-web-merged.js');
+  }
+  for(const src of AFTER)await loadScript(src);
 
+  const dpSeq=payload.get('pfp-dp-map-sequences.js');
+  const dpJson=payload.get('sequence-data/dp/dp-sequences.json');
+  if(dpSeq&&dpJson){
+    const url=URL.createObjectURL(new Blob([dpJson],{type:'application/json'}));
+    const patched=dpSeq.split('sequence-data/dp/dp-sequences.json').join(url);
+    evalSource(patched,'pfp-dp-map-sequences.js');
+  }else console.warn('[FoxPlanet] DP sequence payload is missing');
+
+  const kiosk=payload.get('pfp-kiosk-current.js');
+  if(kiosk){evalSource(kiosk,'pfp-kiosk-current.js');installCurrentKioskPatcher();}
+  else console.warn('[FoxPlanet] current kiosk patcher payload is missing');
+}
 boot().catch((e)=>{
   console.error('[FoxPlanet] web startup failed',e);
   const box=document.createElement('pre');
