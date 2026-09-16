@@ -2,7 +2,7 @@
 'use strict';
 
 const MAIN='main-6b7e7ae7257abae7800d-095-dpeye2.js';
-const PAYLOAD_PARTS=[...Array.from({length:9},(_,i)=>`web-sync/payload-part-${String(i).padStart(2,'0')}`),'web-sync/payload-part-09a','web-sync/payload-part-09b','web-sync/payload-part-10a','web-sync/payload-part-10b','web-sync/payload-part-11'];
+const PAYLOAD_PARTS=[...Array.from({length:9},(_,i)=>`web-sync/payload-part-${String(i).padStart(2,'0')}`),'web-sync/payload-part-09a','web-sync/payload-part-09b','web-sync/payload-part-10a0','web-sync/payload-part-10a1','web-sync/payload-part-10a200','web-sync/payload-part-10a201','web-sync/payload-part-10a202','web-sync/payload-part-10a203','web-sync/payload-part-10a21','web-sync/payload-part-10a22','web-sync/payload-part-10b','web-sync/payload-part-11'];
 const AFTER=[
   'web-gametext.js',
   'sfa-map-sequences.js',
