@@ -2,7 +2,15 @@
 'use strict';
 
 const MAIN='main-6b7e7ae7257abae7800d-095-dpeye2.js';
-const PAYLOAD_PARTS=[...Array.from({length:9},(_,i)=>`web-sync/payload-part-${String(i).padStart(2,'0')}`),'web-sync/payload-part-09a','web-sync/payload-part-09b','web-sync/payload-part-10a0','web-sync/payload-part-10a1','web-sync/payload-part-10a200','web-sync/payload-part-10a201','web-sync/payload-part-10a202','web-sync/payload-part-10a203','web-sync/payload-part-10a21','web-sync/payload-part-10a22','web-sync/payload-part-10b','web-sync/payload-part-11'];
+const DATA_PARTS=[
+  'assets/web-data/part-00','assets/web-data/part-01','assets/web-data/part-02',
+  'assets/web-data/part-03','assets/web-data/part-04','assets/web-data/part-05',
+  'assets/web-data/part-06','assets/web-data/part-07','assets/web-data/part-08',
+  'assets/web-data/part-09a','assets/web-data/part-09b','assets/web-data/part-10a0',
+  'assets/web-data/part-10a1','assets/web-data/part-10a200','assets/web-data/part-10a201',
+  'assets/web-data/part-10a202','assets/web-data/part-10a203','assets/web-data/part-10a21',
+  'assets/web-data/part-10a22','assets/web-data/part-10b','assets/web-data/part-11'
+];
 const AFTER=[
   'web-gametext.js',
   'sfa-map-sequences.js',
@@ -15,58 +23,44 @@ const AFTER=[
   'web-dp-audio.js',
   'section-headings.js'
 ];
-const REQUIRED_MARKERS=[
-  'pfpDPVertexGroups',
-  'PFP_DP_SKY_PRESETS',
-  '__pfpDPCurrentMapId',
-  '3249 === n'
-];
+const CHECKS=['pfpDPVertexGroups','PFP_DP_SKY_PRESETS','__pfpDPCurrentMapId','3249 === n'];
 
-function textDecoder(){return new TextDecoder('utf-8');}
-async function fetchText(url){
+function decoder(){return new TextDecoder('utf-8');}
+async function text(url){
   const r=await fetch(url,{cache:'no-store'});
-  if(!r.ok)throw new Error(`could not load ${url} (${r.status})`);
+  if(!r.ok)throw new Error('could not load '+url+' ('+r.status+')');
   return await r.text();
 }
-function b64Bytes(text){
-  const clean=text.replace(/\s+/g,'');
-  const bin=atob(clean),out=new Uint8Array(bin.length);
+function b64(data){
+  const bin=atob(data.replace(/\s+/g,'')),out=new Uint8Array(bin.length);
   for(let i=0;i<bin.length;i++)out[i]=bin.charCodeAt(i);
   return out;
 }
-async function ungzip(bytes){
-  if(typeof DecompressionStream!=='function')throw new Error('gzip decompression is unavailable in this browser');
+async function gunzip(bytes){
+  if(typeof DecompressionStream!=='function')throw new Error('gzip is not available in this browser');
   return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
 }
-function tarTextFiles(bytes){
-  const out=new Map(),dec=textDecoder();
-  const readString=(off,len)=>{
-    let end=off;while(end<off+len&&bytes[end]!==0)end++;
-    return dec.decode(bytes.subarray(off,end));
-  };
+function untar(bytes){
+  const out=new Map(),dec=decoder();
+  const str=(off,len)=>{let end=off;while(end<off+len&&bytes[end]!==0)end++;return dec.decode(bytes.subarray(off,end));};
   let off=0;
   while(off+512<=bytes.length){
-    let name=readString(off,100);
-    if(!name)break;
-    const prefix=readString(off+345,155);
-    if(prefix)name=prefix+'/'+name;
-    const sizeText=readString(off+124,12).trim().replace(/\0/g,'');
-    const size=parseInt(sizeText||'0',8)||0;
-    const type=bytes[off+156];
-    const dataOff=off+512;
+    let name=str(off,100);if(!name)break;
+    const prefix=str(off+345,155);if(prefix)name=prefix+'/'+name;
+    const size=parseInt(str(off+124,12).trim().replace(/\0/g,'')||'0',8)||0;
+    const type=bytes[off+156],dataOff=off+512;
     name=name.replace(/^\.\//,'');
     if(type===0||type===48)out.set(name,dec.decode(bytes.subarray(dataOff,dataOff+size)));
     off=dataOff+Math.ceil(size/512)*512;
   }
   return out;
 }
-async function loadPayload(){
-  const parts=await Promise.all(PAYLOAD_PARTS.map(p=>fetchText(p+'?v=20260916b')));
-  const packed=b64Bytes(parts.join(''));
-  return tarTextFiles(await ungzip(packed));
+async function loadData(){
+  const parts=await Promise.all(DATA_PARTS.map(p=>text(p+'?v=20260916d')));
+  return untar(await gunzip(b64(parts.join(''))));
 }
-function parsePatch(patch){
-  const lines=patch.replace(/\r\n/g,'\n').split('\n'),hunks=[];
+function hunks(patch){
+  const lines=patch.replace(/\r\n/g,'\n').split('\n'),out=[];
   let i=0;
   while(i<lines.length){
     const m=/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(lines[i]);
@@ -78,111 +72,94 @@ function parsePatch(patch){
       if(line.startsWith(' ')||line.startsWith('+')||line.startsWith('-'))h.lines.push(line);
       i++;
     }
-    hunks.push(h);
+    out.push(h);
   }
-  return hunks;
+  return out;
 }
-function hunkBlocks(h,leadTrim,tailTrim){
+function block(h,lead,tail){
   let first=0,last=h.lines.length;
-  while(leadTrim>0&&first<last&&h.lines[first][0]===' '){first++;leadTrim--;}
-  while(tailTrim>0&&last>first&&h.lines[last-1][0]===' '){last--;tailTrim--;}
-  const slice=h.lines.slice(first,last);
-  return {
-    old:slice.filter(x=>x[0]!=='+' ).map(x=>x.slice(1)),
-    neu:slice.filter(x=>x[0]!=='-' ).map(x=>x.slice(1))
-  };
+  while(lead>0&&first<last&&h.lines[first][0]===' '){first++;lead--;}
+  while(tail>0&&last>first&&h.lines[last-1][0]===' '){last--;tail--;}
+  const x=h.lines.slice(first,last);
+  return {old:x.filter(v=>v[0]!=='+').map(v=>v.slice(1)),neu:x.filter(v=>v[0]!=='-').map(v=>v.slice(1))};
 }
-function linesMatch(src,at,block){
-  if(at<0||at+block.length>src.length)return false;
-  for(let i=0;i<block.length;i++)if(src[at+i]!==block[i])return false;
+function match(src,at,b){
+  if(at<0||at+b.length>src.length)return false;
+  for(let i=0;i<b.length;i++)if(src[at+i]!==b[i])return false;
   return true;
 }
-function findBlock(src,block,expected){
-  if(!block.length)return Math.max(0,Math.min(src.length,expected));
-  const lo=Math.max(0,expected-1800),hi=Math.min(src.length-block.length,expected+1800);
+function find(src,b,expected){
+  if(!b.length)return Math.max(0,Math.min(src.length,expected));
+  const lo=Math.max(0,expected-1800),hi=Math.min(src.length-b.length,expected+1800);
   for(let d=0;d<=1800;d++){
-    const a=expected-d,b=expected+d;
-    if(a>=lo&&linesMatch(src,a,block))return a;
-    if(d&&b<=hi&&linesMatch(src,b,block))return b;
+    const a=expected-d,c=expected+d;
+    if(a>=lo&&match(src,a,b))return a;
+    if(d&&c<=hi&&match(src,c,b))return c;
   }
-  const first=block[0];
-  for(let i=0;i<=src.length-block.length;i++)if(src[i]===first&&linesMatch(src,i,block))return i;
+  for(let i=0;i<=src.length-b.length;i++)if(src[i]===b[0]&&match(src,i,b))return i;
   return -1;
 }
-function applyStablePatch(source,patch){
-  const src=source.replace(/\r\n/g,'\n').split('\n'),hunks=parsePatch(patch);
+function applyPatch(source,patch){
+  const src=source.replace(/\r\n/g,'\n').split('\n'),list=hunks(patch);
   let delta=0,applied=0,already=0,skipped=0;
-  const misses=[];
-  for(let hi=0;hi<hunks.length;hi++){
-    const h=hunks[hi],expected=Math.max(0,h.oldStart-1+delta);
+  for(const h of list){
+    const expected=Math.max(0,h.oldStart-1+delta);
     let done=false;
     for(let fuzz=0;fuzz<=2&&!done;fuzz++){
-      const trims=[];
-      for(let a=0;a<=fuzz;a++)trims.push([a,fuzz-a]);
-      for(const [lead,tail] of trims){
-        const b=hunkBlocks(h,lead,tail);
+      for(let lead=0;lead<=fuzz;lead++){
+        const b=block(h,lead,fuzz-lead);
         if(!b.old.length&&!b.neu.length)continue;
-        let at=findBlock(src,b.old,expected);
-        if(at>=0){
-          src.splice(at,b.old.length,...b.neu);
-          delta+=b.neu.length-b.old.length;applied++;done=true;break;
-        }
-        at=findBlock(src,b.neu,expected);
+        let at=find(src,b.old,expected);
+        if(at>=0){src.splice(at,b.old.length,...b.neu);delta+=b.neu.length-b.old.length;applied++;done=true;break;}
+        at=find(src,b.neu,expected);
         if(at>=0){delta+=b.neu.length-b.old.length;already++;done=true;break;}
       }
     }
-    if(!done){skipped++;misses.push(hi+1);}
+    if(!done)skipped++;
   }
-  return {text:src.join('\n'),total:hunks.length,applied,already,skipped,misses};
+  return {text:src.join('\n'),total:list.length,applied,already,skipped};
 }
-function loadScript(src){
-  return new Promise((resolve,reject)=>{
-    const s=document.createElement('script');s.src=src;s.onload=resolve;s.onerror=()=>reject(new Error('could not load '+src));document.head.appendChild(s);
+function script(src){
+  return new Promise((ok,fail)=>{
+    const s=document.createElement('script');s.src=src;s.onload=ok;s.onerror=()=>fail(new Error('could not load '+src));document.head.appendChild(s);
   });
 }
-function evalSource(text,label){(0,eval)(text+`\n//# sourceURL=${label}`);}
-function installCurrentKioskPatcher(){
-  const upgrade=()=>{
-    const api=window.PfpKioskCurrent;
-    if(!api||typeof api.installKioskIsoPatcherPanel!=='function')return;
-    const oldPanel=document.getElementById('kiosk-iso-sequence-patcher-panel');
-    if(!oldPanel||oldPanel.dataset.pfpCurrentPatcher==='1')return;
-    oldPanel.remove();
-    const panel=api.installKioskIsoPatcherPanel(document.body);
-    if(panel)panel.dataset.pfpCurrentPatcher='1';
-  };
-  new MutationObserver(upgrade).observe(document.documentElement,{childList:true,subtree:true});
-  upgrade();
+function run(code,name){(0,eval)(code+'\n//# sourceURL='+name);}
+function kioskPanel(){
+  const api=window.PfpKioskCurrent;
+  if(!api||typeof api.installKioskIsoPatcherPanel!=='function')return;
+  const old=document.getElementById('kiosk-iso-sequence-patcher-panel');
+  if(!old||old.dataset.pfpCurrentPatcher==='1')return;
+  old.remove();
+  const panel=api.installKioskIsoPatcherPanel(document.body);
+  if(panel)panel.dataset.pfpCurrentPatcher='1';
 }
 async function boot(){
-  const [payload,original]=await Promise.all([loadPayload(),fetchText(MAIN+'?web=20260916b')]);
-  const patch=payload.get('stable-main.patch');
-  if(!patch)throw new Error('web sync payload is missing the desktop patch');
-  const merged=applyStablePatch(original,patch);
-  const markerCount=REQUIRED_MARKERS.filter(x=>merged.text.includes(x)).length;
-  console.info('[FoxPlanet web sync]',merged,'markers',markerCount+'/'+REQUIRED_MARKERS.length);
-  if(merged.applied+merged.already<55||markerCount<3){
-    console.warn('[FoxPlanet web sync] desktop merge did not validate; keeping previous web bundle');
-    evalSource(original,MAIN);
-  }else{
-    evalSource(merged.text,'Project-FoxPlanet-web-merged.js');
-  }
-  for(const src of AFTER)await loadScript(src);
+  const [data,original]=await Promise.all([loadData(),text(MAIN+'?web=20260916d')]);
+  const patch=data.get('stable-main.patch');
+  if(!patch)throw new Error('missing web data');
+  const merged=applyPatch(original,patch);
+  const good=CHECKS.filter(x=>merged.text.includes(x)).length;
+  if(merged.applied+merged.already<55||good<3)run(original,MAIN);
+  else run(merged.text,'Project-FoxPlanet-web.js');
+  for(const src of AFTER)await script(src);
 
-  const dpSeq=payload.get('pfp-dp-map-sequences.js');
-  const dpJson=payload.get('sequence-data/dp/dp-sequences.json');
+  const dpSeq=data.get('pfp-dp-map-sequences.js');
+  const dpJson=data.get('sequence-data/dp/dp-sequences.json');
   if(dpSeq&&dpJson){
     const url=URL.createObjectURL(new Blob([dpJson],{type:'application/json'}));
-    const patched=dpSeq.split('sequence-data/dp/dp-sequences.json').join(url);
-    evalSource(patched,'pfp-dp-map-sequences.js');
-  }else console.warn('[FoxPlanet] DP sequence payload is missing');
+    run(dpSeq.split('sequence-data/dp/dp-sequences.json').join(url),'pfp-dp-map-sequences.js');
+  }
 
-  const kiosk=payload.get('pfp-kiosk-current.js');
-  if(kiosk){evalSource(kiosk,'pfp-kiosk-current.js');installCurrentKioskPatcher();}
-  else console.warn('[FoxPlanet] current kiosk patcher payload is missing');
+  const kiosk=data.get('pfp-kiosk-current.js');
+  if(kiosk){
+    run(kiosk,'pfp-kiosk-current.js');
+    new MutationObserver(kioskPanel).observe(document.documentElement,{childList:true,subtree:true});
+    kioskPanel();
+  }
 }
-boot().catch((e)=>{
-  console.error('[FoxPlanet] web startup failed',e);
+boot().catch(e=>{
+  console.error('[FoxPlanet]',e);
   const box=document.createElement('pre');
   box.textContent='FoxPlanet could not start. Try a hard refresh.\n\n'+String(e&&e.message||e);
   box.style.cssText='position:fixed;inset:20px;z-index:99999;background:#111;color:#eee;padding:16px;white-space:pre-wrap';
