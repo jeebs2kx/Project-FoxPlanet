@@ -5,15 +5,15 @@ function patchRuntime(rt){
   if(!rt||rt.__pfpWebSequenceFixes)return;
   rt.__pfpWebSequenceFixes=true;
 
-  // Keep the user's current culling choice online. The sequence player used to
-  // reload the whole map when it toggled this, causing a visible flash and
-  // replacing actor instances while a new sequence was still binding.
+  // Keep the user's current culling choice online. The desktop sequence player
+  // can safely rebuild its scene for this; doing that in the browser flashes the
+  // temporary/default map state between sequences.
   rt.syncBackfaceCulling=function(){
     this.sequenceCullWanted=!!window.__DP_ENABLE_CULL;
   };
 
-  // Do not restore/rebuild the map environment in the middle of a direct
-  // sequence-to-sequence switch. Restore normally when the player is stopped.
+  // Preserve the current map environment while one sequence is being replaced
+  // by another. A normal Stop still restores it exactly as before.
   const oldRestore=rt.restoreMapEnvironment;
   if(typeof oldRestore==='function')rt.restoreMapEnvironment=function(clearSnapshot){
     if(this.__pfpWebLoadingSequence&&!clearSnapshot)return;
@@ -25,17 +25,6 @@ function patchRuntime(rt){
     this.__pfpWebLoadingSequence=true;
     try{return await oldLoad.apply(this,arguments);}
     finally{this.__pfpWebLoadingSequence=false;}
-  };
-
-  // If a model instance was replaced during setup, restore its DP joint-key map
-  // before animation is applied so jaw/head tracks still reach the right joints.
-  const oldApplyActor=rt.applyActor;
-  if(typeof oldApplyActor==='function')rt.applyActor=function(actor,frame){
-    try{
-      const inst=actor&&actor.inst,mi=inst&&inst.modelInst;
-      if(mi&&!mi._pfpDPJointKeyMap&&typeof this.attachDPJointMap==='function')this.attachDPJointMap(actor);
-    }catch(_){ }
-    return oldApplyActor.call(this,actor,frame);
   };
 }
 
