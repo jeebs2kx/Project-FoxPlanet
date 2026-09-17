@@ -1,0 +1,81 @@
+--- a/main.js
++++ b/main.js
+@@ -19598,6 +19598,7 @@
+               (this.showAllObjects = !0),
+               (this.isDPMapScene = !1),
+               (this.mapNum = -1),
++              (window.__pfpSfaFenceEdgeFixActive = !1),
+               (this.dpMinimapMapId = -1),
+               (this.showMinimap = !0),
+               (this.textureHolder = {
+@@ -21149,11 +21150,15 @@
+                 getOrigin: () => [0, 0],
+               },
+               o = new sn(t, s, i);
+-            o.mapNum = -999;
++            (window.__pfpSfaFenceEdgeFixActive = !0), (o.mapNum = -999);
+             const l = await S.JU.create(this.gameInfo, t.dataFetcher, !0);
+             await l.loadSubdirs(["swapcircle"], t.dataFetcher);
+             const c = await b.ax.create(this.gameInfo, t.dataFetcher, i, l);
+-            return (await o.create(r, this.gameInfo, t.dataFetcher, c), o);
++            return (
++              await nn(o, i, this.gameInfo, t.dataFetcher, l, "swaphol"),
++              await o.create(r, this.gameInfo, t.dataFetcher, c),
++              o
++            );
+           }
+         }
+         const un = {
+@@ -21577,7 +21582,7 @@
+                 },
+               },
+               r = new sn(t, n, s);
+-            r.mapNum = this.id;
++            (window.__pfpSfaFenceEdgeFixActive = !0), (r.mapNum = this.id);
+             const o = await S.JU.create(v.Dx, t.dataFetcher, !1);
+             o.setModelVersion(g.o.DinosaurPlanet);
+             const l = await (async function (e, t, n) {
+@@ -21623,6 +21628,7 @@
+               n,
+               Promise.resolve(o),
+             );
++            await nn(r, s, v.Ij, t.dataFetcher, o, "swaphol");
+             await r.create(a, this.gameInfo, t.dataFetcher, c);
+             await pfpAttachOldSfaDpMusic(r, t.dataFetcher, 102, 0);
+             const h = u.vt();
+@@ -25621,6 +25627,7 @@
+               this.mb.setAlphaCompare(i.oH.ALWAYS, 0, i.O2.AND, i.oH.ALWAYS, 0);
+             t &&
+               !this.hasForcedMaskedTexture() &&
++              !this.shader.sfaMapAlphaCutoutFix &&
+               this.mb.setBlendMode(
+                 i.Nx.BLEND,
+                 i.dn.SRCALPHA,
+@@ -28184,10 +28191,14 @@
+           }
+           buildMapMaterial(e, t) {
+             return (
+-              this.isBuildingDPMapBlock() &&
+-                (e = Object.assign(Object.assign({}, e), {
+-                  dpMapBlockMaterialFix: !0,
+-                })),
++              this.isBuildingDPMapBlock()
++                ? (e = Object.assign(Object.assign({}, e), {
++                    dpMapBlockMaterialFix: !0,
++                  }))
++                : window.__pfpSfaFenceEdgeFixActive &&
++                  (e = Object.assign(Object.assign({}, e), {
++                    sfaMapAlphaCutoutFix: !0,
++                  })),
+               new _(this.cache, this, e, t)
+             );
+           }
+@@ -65149,7 +65160,7 @@
+                   <div><span class="landing-patch-bullet">•</span> Full GLB exports for SFA/Kiosk models, rigs + animations</div>
+                   <div><span class="landing-patch-bullet">•</span> Full Audio Player added</div>
+                   <div><span class="landing-patch-bullet">•</span> VR mode fixed. Tested on Quest</div>
+-                  <div><span class="landing-patch-bullet">•</span> Fixed up DP music on maps</div>
++                  <div><span class="landing-patch-bullet">•</span> ENVFX hooked to SFA + DP maps</div>
+                   <div><span class="landing-patch-bullet">•</span> Voxmaps, Framebuffer effects and new SFX tab added</div>
+                   <div><span class="landing-patch-bullet">•</span> Lots of various bug fixes</div>
+                 </div>
