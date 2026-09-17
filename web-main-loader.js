@@ -135,13 +135,22 @@ function kioskPanel(){
   if(panel)panel.dataset.pfpCurrentPatcher='1';
 }
 async function boot(){
-  const [data,original]=await Promise.all([loadData(),text(MAIN+'?web=20260916d')]);
+  const [data,original,mapPatch]=await Promise.all([
+    loadData(),
+    text(MAIN+'?web=20260917a'),
+    text('assets/web-data/sfa-maps.patch?v=20260917a')
+  ]);
   const patch=data.get('stable-main.patch');
   if(!patch)throw new Error('missing web data');
   const merged=applyPatch(original,patch);
   const good=CHECKS.filter(x=>merged.text.includes(x)).length;
-  if(merged.applied+merged.already<55||good<3)run(original,MAIN);
-  else run(merged.text,'Project-FoxPlanet-web.js');
+  if(merged.applied+merged.already<55||good<3){
+    run(original,MAIN);
+  }else{
+    const maps=applyPatch(merged.text,mapPatch);
+    if(maps.applied+maps.already<8)run(merged.text,'Project-FoxPlanet-web.js');
+    else run(maps.text,'Project-FoxPlanet-web.js');
+  }
   for(const src of AFTER)await script(src);
 
   const dpSeq=data.get('pfp-dp-map-sequences.js');
