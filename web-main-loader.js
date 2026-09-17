@@ -56,7 +56,7 @@ function untar(bytes){
   return out;
 }
 async function loadData(){
-  const parts=await Promise.all(DATA_PARTS.map(p=>text(p+'?v=20260916d')));
+  const parts=await Promise.all(DATA_PARTS.map(p=>text(p+'?v=20260917c')));
   return untar(await gunzip(b64(parts.join(''))));
 }
 function hunks(patch){
@@ -137,8 +137,8 @@ function kioskPanel(){
 async function boot(){
   const [data,original,mapPatch]=await Promise.all([
     loadData(),
-    text(MAIN+'?web=20260917a'),
-    text('assets/web-data/sfa-maps.patch?v=20260917a')
+    text(MAIN+'?web=20260917c'),
+    text('assets/web-data/sfa-maps.patch?v=20260917c')
   ]);
   const patch=data.get('stable-main.patch');
   if(!patch)throw new Error('missing web data');
@@ -148,8 +148,13 @@ async function boot(){
     run(original,MAIN);
   }else{
     const maps=applyPatch(merged.text,mapPatch);
-    if(maps.applied+maps.already<8)run(merged.text,'Project-FoxPlanet-web.js');
-    else run(maps.text,'Project-FoxPlanet-web.js');
+    const mapGood=
+      maps.text.includes('__pfpSfaFenceEdgeFixActive')&&
+      maps.text.includes('await nn(o, i, this.gameInfo, t.dataFetcher, l, "swaphol")')&&
+      maps.text.includes('await nn(r, s, v.Ij, t.dataFetcher, o, "swaphol")')&&
+      maps.text.includes('sfaMapAlphaCutoutFix');
+    if(mapGood)run(maps.text,'Project-FoxPlanet-web.js');
+    else run(merged.text,'Project-FoxPlanet-web.js');
   }
   for(const src of AFTER)await script(src);
 
