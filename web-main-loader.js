@@ -153,8 +153,9 @@ async function boot(){
       maps.text.includes('await nn(o, i, this.gameInfo, t.dataFetcher, l, "swaphol")')&&
       maps.text.includes('await nn(r, s, v.Ij, t.dataFetcher, o, "swaphol")')&&
       maps.text.includes('sfaMapAlphaCutoutFix');
-    if(mapGood)run(maps.text,'Project-FoxPlanet-web.js');
-    else run(merged.text,'Project-FoxPlanet-web.js');
+    let runtime=mapGood?maps.text:merged.text;
+    if(typeof window.__pfpApplyFinalParity==='function')runtime=window.__pfpApplyFinalParity(runtime);
+    run(runtime,'Project-FoxPlanet-web.js');
   }
   for(const src of AFTER)await script(src);
 
