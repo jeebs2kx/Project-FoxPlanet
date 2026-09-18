@@ -1,6 +1,14 @@
 (function(){
 'use strict';
 
+const SABRE_SPELLSTONE_ACTOR=0x0392;
+const SABRE_VFP_SPELLSTONE=0x03BE;
+const SABRE_ACTIVATED_SPELLSTONE_MODEL=0x015C;
+const SABRE_ACTIVATED_SPELLSTONE_BASE_TEXTURE=0x0CE1;
+const SABRE_ACTIVATED_SPELLSTONE_TEXTURE=0x0CE2;
+const SABRE_SPELLSTONE_SLOT_SEQUENCES=new Set([0x023A,0x03DF,0x041C,0x0420]);
+const SABRE_SPELLSTONE_FORCE_ACTIVE_SEQUENCES=new Set([0x0221]);
+
 function jawJoint(mi){
   if(!mi||!mi.model||!Array.isArray(mi.model.joints))return -1;
   const map=mi._pfpDPJointKeyMap,slot=Math.max(0,Number(mi._pfpDPModelSlot)||0);
@@ -64,26 +72,123 @@ function hookActor(actor,rt){
 }
 
 function patchRuntime(rt){
-  if(!rt||rt.__pfpWebSequenceFixesV2)return;
-  rt.__pfpWebSequenceFixesV2=true;
-  rt.syncBackfaceCulling=function(){
-    this.sequenceCullWanted=!!window.__DP_ENABLE_CULL;
+  if(!rt||rt.__pfpWebSequenceFixesV3)return;
+  rt.__pfpWebSequenceFixesV3=true;
+
+  if(rt.sequenceCullTarget===undefined)rt.sequenceCullTarget=null;
+  if(rt.sequenceCullReloading===undefined)rt.sequenceCullReloading=false;
+  if(rt.sequenceCullOwned===undefined)rt.sequenceCullOwned=false;
+  if(rt.sequenceCullRestore===undefined)rt.sequenceCullRestore=false;
+
+  rt.setBackfaceCullState=function(on){
+    const enabled=!!on;
+    window.__DP_ENABLE_CULL=enabled;
+    const state=window.__dpCullToggle;
+    if(state&&state.cb){state.cb.checked=enabled;state.last=enabled;}
   };
+
+  rt.queueBackfaceCull=function(on){
+    const target=!!on;
+    this.sequenceCullTarget=target;
+    this.setBackfaceCullState(target);
+    if(this.sequenceCullReloading)return;
+    const renderer=this.renderer;
+    if(!renderer||typeof renderer.reloadForTextureToggle!=='function'){this.sequenceCullTarget=null;return;}
+    this.sequenceCullReloading=true;
+    const run=async()=>{
+      try{
+        while(this.sequenceCullTarget!==null){
+          const next=this.sequenceCullTarget;
+          this.sequenceCullTarget=null;
+          this.setBackfaceCullState(next);
+          try{await renderer.reloadForTextureToggle();}
+          catch(e){if(typeof this.diag==='function')this.diag('backface-cull-reload-error',{enabled:next,error:String(e&&e.stack||e)});}
+        }
+      }finally{
+        this.sequenceCullReloading=false;
+        if(this.sequenceCullTarget!==null)this.queueBackfaceCull(this.sequenceCullTarget);
+      }
+    };
+    run();
+  };
+
+  rt.syncBackfaceCulling=function(force=false){
+    const active=!!(this.current&&this.playing&&!this.loading&&!this.dead);
+    if(active){
+      if(!this.sequenceCullOwned){
+        this.sequenceCullRestore=!!window.__DP_ENABLE_CULL;
+        this.sequenceCullOwned=true;
+      }
+      const actual=!!window.__DP_ENABLE_CULL;
+      if(!force&&this.sequenceCullWanted&&actual)return;
+      this.sequenceCullWanted=true;
+      this.queueBackfaceCull(true);
+      return;
+    }
+    if(!this.sequenceCullOwned)return;
+    const restore=!!this.sequenceCullRestore;
+    this.sequenceCullOwned=false;
+    this.sequenceCullWanted=restore;
+    this.queueBackfaceCull(restore);
+  };
+
+  rt.sequenceIdForActor=function(actor){
+    const tracked=actor&&actor.inst&&actor.inst._pfpSequenceTracked;
+    if(tracked&&Number.isInteger(Number(tracked.sequenceId)))return Number(tracked.sequenceId);
+    return this.current&&Number.isInteger(Number(this.current.sequenceId))?Number(this.current.sequenceId):-1;
+  };
+
+  rt.actorScn=function(actor){
+    const inst=actor&&actor.inst;
+    if(!actor||!actor.cast)return Number(inst&&inst._dpTypeNum)&0xFFFF;
+    return actor.cast.objID===0xFFFF?(Number(inst&&inst._dpTypeNum)&0xFFFF):(Number(actor.cast.objID)&0xFFFF);
+  };
+
+  const rawModelIndexAt=typeof rt.modelIndexAt==='function'?rt.modelIndexAt.bind(rt):null;
+  if(rawModelIndexAt){
+    rt.modelIndexAt=function(actor,frame){
+      const index=rawModelIndexAt(actor,frame);
+      const sequenceId=this.sequenceIdForActor(actor),scn=this.actorScn(actor);
+      if(scn===SABRE_SPELLSTONE_ACTOR&&SABRE_SPELLSTONE_FORCE_ACTIVE_SEQUENCES.has(sequenceId))return 1;
+      return index;
+    };
+  }
+
+  rt.applySabreSpellstoneTexture=function(actor,frame){
+    const inst=actor&&actor.inst;if(!inst)return;
+    const sequenceId=this.sequenceIdForActor(actor),scn=this.actorScn(actor);
+    let orange=scn===SABRE_VFP_SPELLSTONE;
+    if(scn===SABRE_SPELLSTONE_ACTOR){
+      if(SABRE_SPELLSTONE_FORCE_ACTIVE_SEQUENCES.has(sequenceId))orange=true;
+      else if(SABRE_SPELLSTONE_SLOT_SEQUENCES.has(sequenceId)){
+        const modelId=Number(inst._pfpModelId==null?(inst.modelInst&&inst.modelInst._pfpModelId):inst._pfpModelId);
+        const modelIndex=typeof this.modelIndexAt==='function'?this.modelIndexAt(actor,frame):(actor.saved&&actor.saved.modelSlot);
+        orange=modelId===SABRE_ACTIVATED_SPELLSTONE_MODEL||modelIndex===1;
+      }
+    }
+    let slots=Array.isArray(inst._pfpSequenceTextureSlots)?inst._pfpSequenceTextureSlots.filter(x=>!x||!x._pfpSabreSpellstone):[];
+    if(orange)slots.push({sourceTextureId:SABRE_ACTIVATED_SPELLSTONE_BASE_TEXTURE,textureOverrideId:SABRE_ACTIVATED_SPELLSTONE_TEXTURE,_pfpSabreSpellstone:true});
+    if(slots.length)inst._pfpSequenceTextureSlots=slots;else delete inst._pfpSequenceTextureSlots;
+  };
+
   const oldRestore=rt.restoreMapEnvironment;
   if(typeof oldRestore==='function')rt.restoreMapEnvironment=function(clearSnapshot){
     if(this.__pfpWebLoadingSequence&&!clearSnapshot)return;
     return oldRestore.apply(this,arguments);
   };
+
   const oldLoad=rt.load;
   if(typeof oldLoad==='function')rt.load=async function(){
     this.__pfpWebLoadingSequence=true;
     try{return await oldLoad.apply(this,arguments);}
     finally{this.__pfpWebLoadingSequence=false;}
   };
+
   const oldApplyActor=rt.applyActor;
   if(typeof oldApplyActor==='function')rt.applyActor=function(actor,frame){
     const result=oldApplyActor.call(this,actor,frame);
-    try{hookActor(actor,this);}catch(_){ }
+    try{this.applySabreSpellstoneTexture(actor,frame);}catch(_){}
+    try{hookActor(actor,this);}catch(_){}
     return result;
   };
 }
