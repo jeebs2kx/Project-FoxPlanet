@@ -1,0 +1,56 @@
+--- a/main.js
++++ b/main.js
+@@ -6862,17 +6862,48 @@
+-            (this.skyddraw.beginDraw(o.gfxRenderCache),
+-              this.skyddraw.begin(l.uB.DRAW_QUADS),
+-              this.skyddraw.position3f32(-1, -1, -1),
+-              this.skyddraw.texCoord2f32(l.cg.TEX0, 1, M),
+-              this.skyddraw.position3f32(-1, 1, -1),
+-              this.skyddraw.texCoord2f32(l.cg.TEX0, 1, E),
+-              this.skyddraw.position3f32(1, 1, -1),
+-              this.skyddraw.texCoord2f32(l.cg.TEX0, 1, E),
+-              this.skyddraw.position3f32(1, -1, -1),
+-              this.skyddraw.texCoord2f32(l.cg.TEX0, 1, M),
+-              this.skyddraw.end());
++            this.skyddraw.beginDraw(o.gfxRenderCache);
++            this.skyddraw.begin(l.uB.DRAW_QUADS);
++            if (y.viewerInput.isVR) {
++              const vrSkyRows = 24;
++              const vrSkyCols = 12;
++              const wm = y.viewerInput.camera.worldMatrix;
++              const pm = y.viewerInput.camera.projectionMatrix;
++              const invX = 1 / pm[0];
++              const invY = 1 / pm[5];
++              const leftSlope = (pm[8] - 1) * invX;
++              const rightSlope = (pm[8] + 1) * invX;
++              const bottomSlope = (pm[9] - 1) * invY;
++              const topSlope = (pm[9] + 1) * invY;
++              const skyV = (sx, sy) => {
++                const lx = leftSlope + (rightSlope - leftSlope) * ((sx + 1) * 0.5);
++                const ly = bottomSlope + (topSlope - bottomSlope) * ((sy + 1) * 0.5);
++                const wx = wm[0] * lx + wm[4] * ly - wm[8];
++                const wy = wm[1] * lx + wm[5] * ly - wm[9];
++                const wz = wm[2] * lx + wm[6] * ly - wm[10];
++                const elev = Math.atan2(wy, Math.hypot(wx, wz));
++                return (0.5 * T.height - 6 + (3 * T.height * elev) / Math.PI) / T.height;
++              };
++              for (let row = 0; row < vrSkyRows; row++) {
++                const y0 = -1 + 2 * row / vrSkyRows;
++                const y1 = -1 + 2 * (row + 1) / vrSkyRows;
++                for (let col = 0; col < vrSkyCols; col++) {
++                  const x0 = -1 + 2 * col / vrSkyCols;
++                  const x1 = -1 + 2 * (col + 1) / vrSkyCols;
++                  this.skyddraw.position3f32(x0, y0, -1); this.skyddraw.texCoord2f32(l.cg.TEX0, 1, skyV(x0, y0));
++                  this.skyddraw.position3f32(x0, y1, -1); this.skyddraw.texCoord2f32(l.cg.TEX0, 1, skyV(x0, y1));
++                  this.skyddraw.position3f32(x1, y1, -1); this.skyddraw.texCoord2f32(l.cg.TEX0, 1, skyV(x1, y1));
++                  this.skyddraw.position3f32(x1, y0, -1); this.skyddraw.texCoord2f32(l.cg.TEX0, 1, skyV(x1, y0));
++                }
++              }
++            } else {
++              this.skyddraw.position3f32(-1, -1, -1); this.skyddraw.texCoord2f32(l.cg.TEX0, 1, M);
++              this.skyddraw.position3f32(-1, 1, -1); this.skyddraw.texCoord2f32(l.cg.TEX0, 1, E);
++              this.skyddraw.position3f32(1, 1, -1); this.skyddraw.texCoord2f32(l.cg.TEX0, 1, E);
++              this.skyddraw.position3f32(1, -1, -1); this.skyddraw.texCoord2f32(l.cg.TEX0, 1, M);
++            }
++            this.skyddraw.end();
+             const B = this.skyddraw.endDrawAndMakeRenderInst(o);
