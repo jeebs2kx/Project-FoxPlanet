@@ -1,0 +1,125 @@
+--- a/main.js
++++ b/main.js
+@@ -6624,6 +6624,7 @@
+               (this.dpStarDdraw = new o.l()),
++              (this.dpCelestialDdraws = Array.from({ length: 4 }, () => new o.l())),
+               (this.dpPuffDdraws = Array.from({ length: 8 }, () => new o.l())),
+@@ -6645,6 +6646,7 @@
+               (this.dpStarTexture = null),
++              (this.dpCelestialTextures = { sun: null, moon: null, glow: null }),
+               (this.dpStarTriangles = (() => {
+@@ -6679,6 +6681,11 @@
+               })()));
++            for (const e of this.dpCelestialDdraws) {
++              e.setVtxDesc(l.cg.POS, !0);
++              e.setVtxDesc(l.cg.CLR0, !0);
++              e.setVtxDesc(l.cg.TEX0, !0);
++            }
+             for (const e of this.dpPuffDdraws) {
+@@ -6939,6 +6946,87 @@
+             const dpStarInsts = [];
++            const dpCelestialInsts = [];
++            if (isDP && this.world.envfxMan.dpDay) {
++              const dpCelestialTemplate = o.pushTemplateRenderInst();
++              (0, d.$7)(dpCelestialTemplate, y.viewerInput);
++              const texFetcher = this.world.resColl.texFetcher;
++              if (texFetcher && "function" == typeof texFetcher.getDPTextureByTextableID) {
++                if (!this.dpCelestialTextures.sun) this.dpCelestialTextures.sun = texFetcher.getDPTextureByTextableID(this.world.renderCache, 0x20d);
++                if (!this.dpCelestialTextures.moon) this.dpCelestialTextures.moon = texFetcher.getDPTextureByTextableID(this.world.renderCache, 0x20e);
++                if (!this.dpCelestialTextures.glow) this.dpCelestialTextures.glow = texFetcher.getDPTextureByTextableID(this.world.renderCache, 0x20f);
++              }
++              const slot = Math.max(0, Math.min(7, this.world.envfxMan.timeOfDay | 0));
++              const daySeconds = ((slot * 3 + 1.5) * 3600) % 86400;
++              const wm = cameraWorld;
++              const toViewCelestial = (wx, wy, wz) => [
++                wx * wm[0] + wy * wm[1] + wz * wm[2],
++                wx * wm[4] + wy * wm[5] + wz * wm[6],
++                wx * wm[8] + wy * wm[9] + wz * wm[10],
++              ];
++              const angle = (v) => v * Math.PI / 32768;
++              const roll = angle(this.world.envfxMan.dpDay.roll);
++              const makeCenter = (phase) => {
++                const yaw = angle(32676 * phase);
++                const x0 = 9200 * Math.sin(yaw);
++                const z0 = 9200 * Math.cos(yaw);
++                return toViewCelestial(x0 * Math.cos(roll), x0 * Math.sin(roll), z0);
++              };
++              const fade = (phase) => {
++                if (phase <= 0 || phase >= 1) return 0;
++                if (phase < 0.1) return Math.round(2550 * phase);
++                if (phase > 0.9) return Math.round(2550 * (1 - phase));
++                return 255;
++              };
++              const drawCelestial = (dd, tex, center, halfSize, alpha, color) => {
++                if (!tex || alpha <= 0) return;
++                const x0 = center[0] - halfSize, x1 = center[0] + halfSize;
++                const y0 = center[1] - halfSize, y1 = center[1] + halfSize;
++                const z = center[2];
++                dd.beginDraw(o.gfxRenderCache);
++                dd.begin(l.uB.DRAW_QUADS);
++                dd.position3f32(x0,y0,z); dd.color4rgba8(l.cg.CLR0,color[0],color[1],color[2],alpha); dd.texCoord2f32(l.cg.TEX0,0,1);
++                dd.position3f32(x0,y1,z); dd.color4rgba8(l.cg.CLR0,color[0],color[1],color[2],alpha); dd.texCoord2f32(l.cg.TEX0,0,0);
++                dd.position3f32(x1,y1,z); dd.color4rgba8(l.cg.CLR0,color[0],color[1],color[2],alpha); dd.texCoord2f32(l.cg.TEX0,1,0);
++                dd.position3f32(x1,y0,z); dd.color4rgba8(l.cg.CLR0,color[0],color[1],color[2],alpha); dd.texCoord2f32(l.cg.TEX0,1,1);
++                dd.end();
++                const inst = dd.endDrawAndMakeRenderInst(o);
++                g.m_TextureMapping[0].gfxTexture = tex.gfxTexture;
++                g.m_TextureMapping[0].gfxSampler = tex.gfxSampler;
++                g.m_TextureMapping[0].width = tex.width;
++                g.m_TextureMapping[0].height = tex.height;
++                g.m_TextureMapping[0].lodBias = 0;
++                s.D_(g.u_TexMtx[0]);
++                x.clear();
++                (0,p.g)(o,inst,this.materialHelperDPClouds,g,x);
++                dpCelestialInsts.push(inst);
++              };
++              const sunPhase = Math.max(0, Math.min(1, (daySeconds - 18000) / 57600));
++              const sunAlpha = daySeconds >= 18000 && daySeconds <= 75600 ? fade(sunPhase) : 0;
++              if (sunAlpha > 0) {
++                const center = makeCenter(sunPhase);
++                let heightPhase = (daySeconds - 18000) / 28800;
++                heightPhase = Math.max(0, Math.min(2, heightPhase));
++                if (heightPhase > 1) heightPhase = 2 - heightPhase;
++                const scale = 1 - 0.55 * heightPhase;
++                const tint = Math.min(255, Math.max(0, Math.round((32676 * sunPhase) / 64)));
++                drawCelestial(this.dpCelestialDdraws[1], this.dpCelestialTextures.sun, center, 1000 * scale, sunAlpha, [255,255,255]);
++                drawCelestial(this.dpCelestialDdraws[0], this.dpCelestialTextures.glow, center, 2000, sunAlpha, [255,Math.round(tint / 2.5 + 150),tint]);
++              }
++              let moonSeconds = daySeconds >= 75600 ? daySeconds - 75600 : daySeconds + 10800;
++              const moonPhase = Math.max(0, Math.min(1, moonSeconds / 28800));
++              const moonAlpha = daySeconds >= 75600 || daySeconds < 18000 ? fade(moonPhase) : 0;
++              if (moonAlpha > 0) {
++                const center = makeCenter(moonPhase);
++                let heightPhase = moonSeconds / 14400;
++                heightPhase = Math.max(0, Math.min(2, heightPhase));
++                if (heightPhase > 1) heightPhase = 2 - heightPhase;
++                const scale = 1 - 0.55 * heightPhase;
++                const tint = Math.min(255, Math.max(0, Math.round((32676 * moonPhase) / 64)));
++                drawCelestial(this.dpCelestialDdraws[3], this.dpCelestialTextures.moon, center, 800 * scale, moonAlpha, [255,255,255]);
++              }
++              o.popTemplateRenderInst();
++            }
+             const dpMinic = this.world.envfxMan.dpMinic;
+@@ -7102,6 +7190,7 @@
+                   for (const inst of dpStarInsts) inst.drawOnPass(o.gfxRenderCache, e);
++                  for (const inst of dpCelestialInsts) inst.drawOnPass(o.gfxRenderCache, e);
+                   for (const inst of dpHorizonInsts) inst.drawOnPass(o.gfxRenderCache, e);
+@@ -7147,6 +7236,7 @@
+             this.dpStarDdraw.destroy(e);
++            for (const t of this.dpCelestialDdraws) t.destroy(e);
+             for (const t of this.dpPuffDdraws) t.destroy(e);
+@@ -8848,6 +8938,7 @@
+               (this.dpMinic = null),
++              (this.dpDay = null),
+               (this.timeOfDay = 4),
+@@ -9039,8 +9130,13 @@
+                   s = n.getUint16(80),
+-                  i = ((60 * t + s) % 1440 + 1440) % 1440;
++                  i = ((60 * t + s) % 1440 + 1440) % 1440,
++                  rollMode = n.getUint16(84),
++                  tiltMode = n.getUint8(93),
++                  tiltScale = tiltMode === 0 ? 0.8 : tiltMode === 1 ? 1 : tiltMode === 2 ? 0.8 : tiltMode === 3 ? 0.55 : 1,
++                  rollBase = [2000,10000,12000,14000][rollMode] || 10000;
+                 this.timeOfDay = Math.max(0, Math.min(7, Math.floor(i / 180)));
++                this.dpDay = { roll: tiltScale * rollBase };
+               }
