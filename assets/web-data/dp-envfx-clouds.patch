@@ -1,0 +1,295 @@
+--- a/main.js
++++ b/main.js
+@@ -6622,9 +6622,19 @@
+           constructor(e) {
+             ((this.world = e),
+               (this.skyddraw = new o.l()),
++              (this.dpCloudDdraw = new o.l()),
++              (this.dpPuffDdraws = Array.from({ length: 8 }, () => new o.l())),
+               this.skyddraw.setVtxDesc(l.cg.POS, !0),
+               this.skyddraw.setVtxDesc(l.cg.CLR0, !0),
+-              this.skyddraw.setVtxDesc(l.cg.TEX0, !0));
++              this.skyddraw.setVtxDesc(l.cg.TEX0, !0),
++              this.dpCloudDdraw.setVtxDesc(l.cg.POS, !0),
++              this.dpCloudDdraw.setVtxDesc(l.cg.CLR0, !0),
++              this.dpCloudDdraw.setVtxDesc(l.cg.TEX0, !0));
++            for (const e of this.dpPuffDdraws) {
++              e.setVtxDesc(l.cg.POS, !0);
++              e.setVtxDesc(l.cg.CLR0, !0);
++              e.setVtxDesc(l.cg.TEX0, !0);
++            }
+             const t = new h.I();
+             (t.setTexCoordGen(
+               l.gw.TEXCOORD0,
+@@ -6670,7 +6680,7 @@
+               dpSkyMat.setCullMode(l.Ac.NONE),
+               dpSkyMat.setUsePnMtxIdx(!1),
+               (this.materialHelperDPSkyGradient = new d.kg(dpSkyMat.finish("dp-atmosphere-gradient"))));
+-            const n = (e, t) => {
++            const n = (e, t, z = !0) => {
+               const n = new h.I();
+               (n.setTexCoordGen(
+                 l.gw.TEXCOORD0,
+@@ -6753,7 +6763,7 @@
+                   l.dn.SRCALPHA,
+                   l.dn.INVSRCALPHA,
+                 ),
+-                n.setZMode(!0, l.oH.LEQUAL, !1),
++                n.setZMode(z, l.oH.LEQUAL, !1),
+                 n.setCullMode(l.Ac.NONE),
+                 n.setUsePnMtxIdx(!1));
+               return new d.kg(n.finish(t));
+@@ -6762,6 +6772,11 @@
+               (this.materialHelperSkyscapeVertex = n(
+                 !0,
+                 "skyscape-vertex-alpha",
++              )),
++              (this.materialHelperDPClouds = n(
++                !0,
++                "dp-minic-clouds",
++                !1,
+               )));
+           }
+           renderAtmosphere(e, t, n, o, h, y) {
+@@ -6854,16 +6869,101 @@
+             }
+             this.skyddraw.end();
+             const B = this.skyddraw.endDrawAndMakeRenderInst(o);
+-            (x.clear(),
+-              (0, p.g)(o, B, dpGradient ? this.materialHelperDPSkyGradient : this.materialHelperSky, g, x),
+-              o.popTemplateRenderInst(),
+-              n.pushPass((e) => {
+-                (e.setDebugName("Atmosphere"),
+-                  e.attachRenderTargetID(r.jY.Color0, h),
+-                  e.exec((e) => {
+-                    B.drawOnPass(o.gfxRenderCache, e);
+-                  }));
+-              }));
++            x.clear();
++            (0, p.g)(o, B, dpGradient ? this.materialHelperDPSkyGradient : this.materialHelperSky, g, x);
++            const dpCloudInsts = [];
++            const dpMinic = this.world.envfxMan.dpMinic;
++            if (dpMinic && dpMinic.opacity > 0) {
++              const cloudLevel = Math.max(0, Math.min(255, Math.round(255 * dpMinic.opacity)));
++              const alpha = 188;
++              const camera = y.viewerInput.camera;
++              const wm = camera.worldMatrix;
++              const yaw = Math.atan2(wm[8], wm[10]);
++              const pitch = I;
++              const width = Math.max(1, y.viewerInput.backbufferWidth);
++              const height = Math.max(1, y.viewerInput.backbufferHeight);
++              const screenAspect = width / height;
++              const vfov = camera.fovY;
++              const hfov = 2 * Math.atan(Math.tan(vfov * 0.5) * screenAspect);
++              const tanHalfX = Math.tan(hfov * 0.5);
++              const tanHalfY = Math.tan(vfov * 0.5);
++              const drift = (performance.now() / 1000) * dpMinic.speed * dpMinic.direction * 0.0025;
++              const wrapAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
++              if (dpMinic.overlay) {
++                const cloudHeight = 1400;
++                const cloudScale = 2800;
++                const maxCloudDistance = 10000;
++                const minVisibleElev = Math.atan(cloudHeight / maxCloudDistance);
++                const cutoffY = Math.tan(minVisibleElev - pitch) / Math.max(0.001, tanHalfY);
++                const skyBottom = Math.max(-1, Math.min(1, cutoffY));
++                if (skyBottom < 1) {
++                  const cols = 64;
++                  const rows = 72;
++                  const featherElev = 0.025;
++                  const cloudUV = (sx, sy) => {
++                    const elev = pitch + Math.atan(sy * tanHalfY);
++                    if (elev < minVisibleElev - 0.0005) return null;
++                    const az = -yaw + Math.atan(sx * tanHalfX);
++                    const dist = cloudHeight / Math.tan(Math.max(minVisibleElev, elev));
++                    const scrollX = drift;
++                    const scrollZ = drift * 0.28;
++                    const edgeT = Math.max(0, Math.min(1, (elev - minVisibleElev) / featherElev));
++                    const edgeAlpha = edgeT * edgeT * (3 - 2 * edgeT);
++                    return [
++                      Math.sin(az) * dist / cloudScale + scrollX,
++                      Math.cos(az) * dist / cloudScale + scrollZ,
++                      edgeAlpha,
++                    ];
++                  };
++                  this.dpCloudDdraw.beginDraw(o.gfxRenderCache);
++                  this.dpCloudDdraw.begin(l.uB.DRAW_QUADS);
++                  for (let row = 0; row < rows; row++) {
++                    const f0 = row / rows;
++                    const f1 = (row + 1) / rows;
++                    const y0 = skyBottom + (1 - skyBottom) * f0;
++                    const y1 = skyBottom + (1 - skyBottom) * f1;
++                    for (let col = 0; col < cols; col++) {
++                      const x0 = -1 + 2 * col / cols;
++                      const x1 = -1 + 2 * (col + 1) / cols;
++                      const uv00 = cloudUV(x0, y0);
++                      const uv01 = cloudUV(x0, y1);
++                      const uv11 = cloudUV(x1, y1);
++                      const uv10 = cloudUV(x1, y0);
++                      if (!uv00 || !uv01 || !uv11 || !uv10) continue;
++                      const a00 = Math.round(alpha * uv00[2]);
++                      const a01 = Math.round(alpha * uv01[2]);
++                      const a11 = Math.round(alpha * uv11[2]);
++                      const a10 = Math.round(alpha * uv10[2]);
++                      if (a00 === 0 && a01 === 0 && a11 === 0 && a10 === 0) continue;
++                      this.dpCloudDdraw.position3f32(x0,y0,-1); this.dpCloudDdraw.color4rgba8(l.cg.CLR0,cloudLevel,cloudLevel,cloudLevel,a00); this.dpCloudDdraw.texCoord2f32(l.cg.TEX0,uv00[0],uv00[1]);
++                      this.dpCloudDdraw.position3f32(x0,y1,-1); this.dpCloudDdraw.color4rgba8(l.cg.CLR0,cloudLevel,cloudLevel,cloudLevel,a01); this.dpCloudDdraw.texCoord2f32(l.cg.TEX0,uv01[0],uv01[1]);
++                      this.dpCloudDdraw.position3f32(x1,y1,-1); this.dpCloudDdraw.color4rgba8(l.cg.CLR0,cloudLevel,cloudLevel,cloudLevel,a11); this.dpCloudDdraw.texCoord2f32(l.cg.TEX0,uv11[0],uv11[1]);
++                      this.dpCloudDdraw.position3f32(x1,y0,-1); this.dpCloudDdraw.color4rgba8(l.cg.CLR0,cloudLevel,cloudLevel,cloudLevel,a10); this.dpCloudDdraw.texCoord2f32(l.cg.TEX0,uv10[0],uv10[1]);
++                    }
++                  }
++                  this.dpCloudDdraw.end();
++                  const inst = this.dpCloudDdraw.endDrawAndMakeRenderInst(o);
++                  g.m_TextureMapping[0].gfxTexture = dpMinic.overlay.gfxTexture;
++                  g.m_TextureMapping[0].gfxSampler = dpMinic.overlay.gfxSampler;
++                  g.m_TextureMapping[0].width = dpMinic.overlay.width;
++                  g.m_TextureMapping[0].height = dpMinic.overlay.height;
++                  g.m_TextureMapping[0].lodBias = 0;
++                  s.D_(g.u_TexMtx[0]);
++                  x.clear();
++                  (0, p.g)(o, inst, this.materialHelperDPClouds, g, x);
++                  dpCloudInsts.push(inst);
++                }
++              }
++            }
++            o.popTemplateRenderInst();
++            n.pushPass((e) => {
++              (e.setDebugName("Atmosphere"),
++                e.attachRenderTargetID(r.jY.Color0, h),
++                e.exec((e) => {
++                  B.drawOnPass(o.gfxRenderCache, e);
++                  for (const inst of dpCloudInsts) inst.drawOnPass(o.gfxRenderCache, e);
++                }));
++            });
+           }
+           addSkyRenderInsts(e, t, n, s) {
+             const skyObjects = this.world.envfxMan.skyscape.objects;
+@@ -6903,6 +7003,8 @@
+           }
+           destroy(e) {
+             this.skyddraw.destroy(e);
++            this.dpCloudDdraw.destroy(e);
++            for (const t of this.dpPuffDdraws) t.destroy(e);
+           }
+         }
+       },
+@@ -8601,6 +8703,7 @@
+               (this.atmosphere = new u()),
+               (this.skyscape = new p()),
+               (this.cloudActionObjects = []),
++              (this.dpMinic = null),
+               (this.timeOfDay = 4),
+               (this.ambienceIdx = 0),
+               (this.enableAmbientLighting = !0),
+@@ -8836,32 +8939,65 @@
+                             t);
+               }
+             } else if (i.type === s.Skyscape) {
+-              for (const e of this.skyscape.objects)
+-                try {
+-                  e.destroy(this.world.context.device);
+-                } catch (e) {}
+-              this.skyscape.objects = [];
+-              this.cloudActionObjects = [];
+-              const e = [0, 1576, 1890, 2147],
+-                t = [0, 1578, 2140, 2145, 2147],
+-                s = [0, 1575, 1577, 1886, 1525],
+-                i = n.getUint8(93),
+-                r = n.getUint8(91),
+-                o = n.getUint8(90),
+-                l = (e) => {
+-                  if (!e) return;
++              const isDP = this.world.gameInfo.pathBase.toLowerCase().includes("dinosaurplanet");
++              if (isDP) {
++                this.dpMinic = null;
++                const flags = n.getUint8(88), mode = n.getUint8(89);
++                if (0 === (flags & 0x20) && 0 !== (flags & 2) && 0 !== (mode & 1)) {
++                  const texFetcher = this.world.resColl.texFetcher;
++                  const getTextable = (id) => {
++                    if ("function" != typeof texFetcher.getDPTextureByTextableID) return null;
++                    return texFetcher.getDPTextureByTextableID(this.world.renderCache, id);
++                  };
++                  const overlayIndex = n.getUint8(93);
++                  const overlay = overlayIndex < 9 ? getTextable(0x11c + overlayIndex) : null;
++                  const cloudBank = n.getUint8(91);
++                  const cloudBases = [0xfb, 0x103, 0x139, 0x39a];
++                  const puffs = [];
++                  if (cloudBank > 0 && cloudBank <= cloudBases.length) {
++                    const base = cloudBases[cloudBank - 1];
++                    for (let q = 0; q < 8; q++) puffs.push(getTextable(base + q));
++                  }
++                  this.dpMinic = {
++                    index: e,
++                    opacity: Math.max(0, Math.min(1, n.getFloat32(4) / 255)),
++                    speed: n.getFloat32(8) / 3,
++                    direction: 0 !== (mode & 4) ? -1 : 1,
++                    overlayIndex,
++                    cloudBank,
++                    overlay,
++                    puffs,
++                  };
++                }
++              } else {
++                this.dpMinic = null;
++                for (const e of this.skyscape.objects)
+                   try {
+-                    const t = this.world.objectMan.createObjectInstance(
+-                      e,
+-                      new DataView(new ArrayBuffer(128)),
+-                      a.vt(),
+-                    );
+-                    t &&
+-                      ((t.cullRadius = 999999),
+-                      this.skyscape.objects.push(t));
++                    e.destroy(this.world.context.device);
+                   } catch (e) {}
+-                };
+-              (l(s[i] || 0), l(e[r] || 0), l(t[o] || 0));
++                this.skyscape.objects = [];
++                this.cloudActionObjects = [];
++                const e = [0, 1576, 1890, 2147],
++                  t = [0, 1578, 2140, 2145, 2147],
++                  s = [0, 1575, 1577, 1886, 1525],
++                  i = n.getUint8(93),
++                  r = n.getUint8(91),
++                  o = n.getUint8(90),
++                  l = (e) => {
++                    if (!e) return;
++                    try {
++                      const t = this.world.objectMan.createObjectInstance(
++                        e,
++                        new DataView(new ArrayBuffer(128)),
++                        a.vt(),
++                      );
++                      t &&
++                        ((t.cullRadius = 999999),
++                        this.skyscape.objects.push(t));
++                    } catch (e) {}
++                  };
++                (l(s[i] || 0), l(e[r] || 0), l(t[o] || 0));
++              }
+             }
+             return (
+               "StarFoxAdventuresDemo" === this.world.gameInfo.pathBase &&
+@@ -17630,11 +17766,11 @@
+           "dp_15":{time:0,atmosphere:4,skyscape:3,env:0 },
+           "dp_16":{time:0,atmosphere:4,skyscape:2,env:0 },
+           "dp_18":{time:7,atmosphere:43,skyscape:36,env:43 },
+-          "dp_19":{time:3,atmosphere:79,skyscape:85,env:85 },
++          "dp_19":{time:2,atmosphere:79,skyscape:78,env:79 },
+           "dp_20":{time:1,atmosphere:4,skyscape:2,env:0 },
+           "dp_21":{time:0,atmosphere:43,skyscape:47,env:47 },
+           "dp_22":{time:0,atmosphere:19,skyscape:3,env:0 },
+-          "dp_23":{time:4,atmosphere:79,skyscape:89,env:89 },
++          "dp_23":{time:5,atmosphere:97,skyscape:95,env:94 },
+           "dp_24":{time:4,atmosphere:97,skyscape:95,env:100 },
+           "dp_25":{time:5,atmosphere:79,skyscape:89,env:93 },
+           "dp_26":{time:4,atmosphere:55,skyscape:53,env:52 },
+@@ -17646,7 +17782,7 @@
+           "dp_32":{time:1,atmosphere:4,skyscape:3,env:0 },
+           "dp_33":{time:1,atmosphere:4,skyscape:2,env:0 },
+           "dp_34":{time:1,atmosphere:4,skyscape:3,env:0 },
+-          "dp_35":{time:3,atmosphere:43,skyscape:40,env:44 },
++          "dp_35":{time:5,atmosphere:97,skyscape:95,env:100 },
+           "dp_37":{time:3,atmosphere:55,skyscape:53,env:56 },
+           "dp_38":{time:2,atmosphere:79,skyscape:78,env:79 },
+           "dp_39":{time:1,atmosphere:4,skyscape:2,env:0 },
