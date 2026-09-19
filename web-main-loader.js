@@ -142,7 +142,7 @@ async function boot(){
     text('assets/web-data/dp-envfx-clouds.patch?v=20260919a'),
     text('assets/web-data/dp-recent-updates.patch.gz.b64?v=20260919b'),
     text('assets/web-data/dp-horizontal-3d-sky.patch.gz.b64?v=20260919d'),
-    text('assets/web-data/dp-stars.patch?v=20260919e')
+    text('assets/web-data/dp-stars.patch?v=20260919f')
   ]);
   const patch=data.get('stable-main.patch');
   if(!patch)throw new Error('missing web data');
@@ -192,10 +192,12 @@ async function boot(){
           runtime=dp3DSky.text;
           const dpStars=applyPatch(runtime,dpStarsPatch);
           const dpStarsGood=
-            dpStars.applied+dpStars.already===dpStars.total&&
             dpStars.text.includes('this.dpStarDdraw = new o.l()')&&
+            dpStars.text.includes('this.dpStarDdraw.setVtxDesc(l.cg.POS, !0)')&&
+            dpStars.text.includes('(this.dpStarTriangles = (() => {')&&
             dpStars.text.includes('getDPTextureByTextableID(this.world.renderCache, 0xdf)')&&
             dpStars.text.includes('const slot = Math.max(0, Math.min(7, this.world.envfxMan.timeOfDay | 0))')&&
+            dpStars.text.includes('dpStarInsts.push(inst);')&&
             dpStars.text.includes('for (const inst of dpStarInsts) inst.drawOnPass(o.gfxRenderCache, e);');
           if(dpStarsGood)runtime=dpStars.text;
           else console.warn('[FoxPlanet] DP stars update did not apply cleanly');
