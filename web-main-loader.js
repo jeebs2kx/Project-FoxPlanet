@@ -135,13 +135,14 @@ function kioskPanel(){
   if(panel)panel.dataset.pfpCurrentPatcher='1';
 }
 async function boot(){
-  const [data,original,mapPatch,dpPatch,dpRecentPacked,dp3DSkyPacked]=await Promise.all([
+  const [data,original,mapPatch,dpPatch,dpRecentPacked,dp3DSkyPacked,dpStarsPatch]=await Promise.all([
     loadData(),
     text(MAIN+'?web=20260917c'),
     text('assets/web-data/sfa-maps.patch?v=20260917c'),
     text('assets/web-data/dp-envfx-clouds.patch?v=20260919a'),
     text('assets/web-data/dp-recent-updates.patch.gz.b64?v=20260919b'),
-    text('assets/web-data/dp-horizontal-3d-sky.patch.gz.b64?v=20260919d')
+    text('assets/web-data/dp-horizontal-3d-sky.patch.gz.b64?v=20260919d'),
+    text('assets/web-data/dp-stars.patch?v=20260919e')
   ]);
   const patch=data.get('stable-main.patch');
   if(!patch)throw new Error('missing web data');
@@ -187,8 +188,18 @@ async function boot(){
           dp3DSky.text.includes('const tiles = 16;')&&
           dp3DSky.text.includes('const fadeStart = radius * 0.78;')&&
           dp3DSky.text.includes('const segmentAngle = Math.PI * 2 / 32;');
-        if(dp3DSkyGood)runtime=dp3DSky.text;
-        else console.warn('[FoxPlanet] DP 3D sky update did not apply cleanly');
+        if(dp3DSkyGood){
+          runtime=dp3DSky.text;
+          const dpStars=applyPatch(runtime,dpStarsPatch);
+          const dpStarsGood=
+            dpStars.applied+dpStars.already===dpStars.total&&
+            dpStars.text.includes('this.dpStarDdraw = new o.l()')&&
+            dpStars.text.includes('getDPTextureByTextableID(this.world.renderCache, 0xdf)')&&
+            dpStars.text.includes('const slot = Math.max(0, Math.min(7, this.world.envfxMan.timeOfDay | 0))')&&
+            dpStars.text.includes('for (const inst of dpStarInsts) inst.drawOnPass(o.gfxRenderCache, e);');
+          if(dpStarsGood)runtime=dpStars.text;
+          else console.warn('[FoxPlanet] DP stars update did not apply cleanly');
+        }else console.warn('[FoxPlanet] DP 3D sky update did not apply cleanly');
       }else console.warn('[FoxPlanet] recent DP update did not apply cleanly');
     }else console.warn('[FoxPlanet] DP ENVFX update did not apply cleanly');
     if(typeof window.__pfpApplyFinalParity==='function')runtime=window.__pfpApplyFinalParity(runtime);
