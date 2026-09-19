@@ -138,7 +138,7 @@ function kioskPanel(){
   if(panel)panel.dataset.pfpCurrentPatcher='1';
 }
 async function boot(){
-  const [data,original,mapPatch,dpPatch,dpRecentPacked,dp3DSkyPacked,dpStarsPatch,dpSunMoonPatch]=await Promise.all([
+  const [data,original,mapPatch,dpPatch,dpRecentPacked,dp3DSkyPacked,dpStarsPatch,dpSunMoonPatch,vrAtmospherePatch]=await Promise.all([
     loadData(),
     text(MAIN+'?web=20260917c'),
     text('assets/web-data/sfa-maps.patch?v=20260917c'),
@@ -146,7 +146,8 @@ async function boot(){
     text('assets/web-data/dp-recent-updates.patch.gz.b64?v=20260919b'),
     text('assets/web-data/dp-horizontal-3d-sky.patch.gz.b64?v=20260919d'),
     text('assets/web-data/dp-stars.patch?v=20260919g'),
-    text('assets/web-data/dp-sunmoon.patch?v=20260919g')
+    text('assets/web-data/dp-sunmoon.patch?v=20260919g'),
+    text('assets/web-data/vr-atmosphere.patch?v=20260919h')
   ]);
   const patch=data.get('stable-main.patch');
   if(!patch)throw new Error('missing web data');
@@ -230,6 +231,15 @@ async function boot(){
         }else console.warn('[FoxPlanet] DP 3D sky update did not apply cleanly');
       }else console.warn('[FoxPlanet] recent DP update did not apply cleanly');
     }else console.warn('[FoxPlanet] DP ENVFX update did not apply cleanly');
+    const vrAtmosphere=applyPatch(runtime,vrAtmospherePatch);
+    const vrAtmosphereGood=
+      validJS(vrAtmosphere.text)&&
+      vrAtmosphere.text.includes('const vrSkyRows = 24;')&&
+      vrAtmosphere.text.includes('const vrSkyCols = 12;')&&
+      vrAtmosphere.text.includes('const skyV = (sx, sy) => {')&&
+      vrAtmosphere.text.includes('if (y.viewerInput.isVR) {');
+    if(vrAtmosphereGood)runtime=vrAtmosphere.text;
+    else console.warn('[FoxPlanet] VR atmosphere update did not apply cleanly');
     if(typeof window.__pfpApplyFinalParity==='function')runtime=window.__pfpApplyFinalParity(runtime);
     run(runtime,'Project-FoxPlanet-web.js');
   }
