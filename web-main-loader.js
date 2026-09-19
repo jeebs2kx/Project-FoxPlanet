@@ -124,6 +124,9 @@ function script(src){
     const s=document.createElement('script');s.src=src;s.onload=ok;s.onerror=()=>fail(new Error('could not load '+src));document.head.appendChild(s);
   });
 }
+function validJS(code){
+  try{new Function(code);return true;}catch(_){return false;}
+}
 function run(code,name){(0,eval)(code+'\n//# sourceURL='+name);}
 function kioskPanel(){
   const api=window.PfpKioskCurrent;
@@ -135,14 +138,15 @@ function kioskPanel(){
   if(panel)panel.dataset.pfpCurrentPatcher='1';
 }
 async function boot(){
-  const [data,original,mapPatch,dpPatch,dpRecentPacked,dp3DSkyPacked,dpStarsPatch]=await Promise.all([
+  const [data,original,mapPatch,dpPatch,dpRecentPacked,dp3DSkyPacked,dpStarsPatch,dpSunMoonPatch]=await Promise.all([
     loadData(),
     text(MAIN+'?web=20260917c'),
     text('assets/web-data/sfa-maps.patch?v=20260917c'),
     text('assets/web-data/dp-envfx-clouds.patch?v=20260919a'),
     text('assets/web-data/dp-recent-updates.patch.gz.b64?v=20260919b'),
     text('assets/web-data/dp-horizontal-3d-sky.patch.gz.b64?v=20260919d'),
-    text('assets/web-data/dp-stars.patch?v=20260919f')
+    text('assets/web-data/dp-stars.patch?v=20260919g'),
+    text('assets/web-data/dp-sunmoon.patch?v=20260919g')
   ]);
   const patch=data.get('stable-main.patch');
   if(!patch)throw new Error('missing web data');
@@ -191,16 +195,38 @@ async function boot(){
         if(dp3DSkyGood){
           runtime=dp3DSky.text;
           const dpStars=applyPatch(runtime,dpStarsPatch);
+          let starRuntime=dpStars.text;
+          if(!validJS(starRuntime)){
+            const bad='return out;\n              })()));';
+            const fixed='return out;\n              })());';
+            if(starRuntime.includes(bad)){
+              const retry=starRuntime.replace(bad,fixed);
+              if(validJS(retry))starRuntime=retry;
+            }
+          }
           const dpStarsGood=
-            dpStars.text.includes('this.dpStarDdraw = new o.l()')&&
-            dpStars.text.includes('this.dpStarDdraw.setVtxDesc(l.cg.POS, !0)')&&
-            dpStars.text.includes('(this.dpStarTriangles = (() => {')&&
-            dpStars.text.includes('getDPTextureByTextableID(this.world.renderCache, 0xdf)')&&
-            dpStars.text.includes('const slot = Math.max(0, Math.min(7, this.world.envfxMan.timeOfDay | 0))')&&
-            dpStars.text.includes('dpStarInsts.push(inst);')&&
-            dpStars.text.includes('for (const inst of dpStarInsts) inst.drawOnPass(o.gfxRenderCache, e);');
-          if(dpStarsGood)runtime=dpStars.text;
-          else console.warn('[FoxPlanet] DP stars update did not apply cleanly');
+            validJS(starRuntime)&&
+            starRuntime.includes('this.dpStarDdraw = new o.l()')&&
+            starRuntime.includes('this.dpStarDdraw.setVtxDesc(l.cg.POS, !0)')&&
+            starRuntime.includes('(this.dpStarTriangles = (() => {')&&
+            starRuntime.includes('getDPTextureByTextableID(this.world.renderCache, 0xdf)')&&
+            starRuntime.includes('const slot = Math.max(0, Math.min(7, this.world.envfxMan.timeOfDay | 0))')&&
+            starRuntime.includes('dpStarInsts.push(inst);')&&
+            starRuntime.includes('for (const inst of dpStarInsts) inst.drawOnPass(o.gfxRenderCache, e);');
+          if(dpStarsGood){
+            runtime=starRuntime;
+            const dpSunMoon=applyPatch(runtime,dpSunMoonPatch);
+            const dpSunMoonGood=
+              validJS(dpSunMoon.text)&&
+              dpSunMoon.text.includes('this.dpCelestialDdraws = Array.from({ length: 4 }')&&
+              dpSunMoon.text.includes('getDPTextureByTextableID(this.world.renderCache, 0x20d)')&&
+              dpSunMoon.text.includes('getDPTextureByTextableID(this.world.renderCache, 0x20e)')&&
+              dpSunMoon.text.includes('getDPTextureByTextableID(this.world.renderCache, 0x20f)')&&
+              dpSunMoon.text.includes('for (const inst of dpCelestialInsts) inst.drawOnPass(o.gfxRenderCache, e);')&&
+              dpSunMoon.text.includes('this.dpDay = { roll: tiltScale * rollBase };');
+            if(dpSunMoonGood)runtime=dpSunMoon.text;
+            else console.warn('[FoxPlanet] DP sun/moon update did not apply cleanly');
+          }else console.warn('[FoxPlanet] DP stars update did not apply cleanly');
         }else console.warn('[FoxPlanet] DP 3D sky update did not apply cleanly');
       }else console.warn('[FoxPlanet] recent DP update did not apply cleanly');
     }else console.warn('[FoxPlanet] DP ENVFX update did not apply cleanly');
