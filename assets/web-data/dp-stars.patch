@@ -1,0 +1,144 @@
+--- a/main.js
++++ b/main.js
+@@ -6622,8 +6622,9 @@
+           constructor(e) {
+             ((this.world = e),
+               (this.skyddraw = new o.l()),
+               (this.dpCloudDdraw = new o.l()),
++              (this.dpStarDdraw = new o.l()),
+               (this.dpPuffDdraws = Array.from({ length: 8 }, () => new o.l())),
+               (this.dpHorizonDdraws = Array.from({ length: 16 }, () => new o.l())),
+               (this.dpCloudGridX = new Float32Array(65)),
+               (this.dpCloudSinAz = new Float32Array(65)),
+@@ -6639,8 +6640,46 @@
+               this.skyddraw.setVtxDesc(l.cg.TEX0, !0),
+               this.dpCloudDdraw.setVtxDesc(l.cg.POS, !0),
+               this.dpCloudDdraw.setVtxDesc(l.cg.CLR0, !0),
+               this.dpCloudDdraw.setVtxDesc(l.cg.TEX0, !0),
++              this.dpStarDdraw.setVtxDesc(l.cg.POS, !0),
++              this.dpStarDdraw.setVtxDesc(l.cg.CLR0, !0),
++              this.dpStarDdraw.setVtxDesc(l.cg.TEX0, !0),
++              (this.dpStarTexture = null),
++              (this.dpStarTriangles = (() => {
++                const offsets = [
++                  0,0,-3,7,-3,3,-2,1,-1,-2,2,-3,-2,-8,1,-9,-12,0,-10,2,-6,4,-4,-1,-3,3,-2,-4,3,3,3,1,3,-1,7,7,8,-6,-6,-11,-2,-11,1,-10,5,-2,-12,4,-13,2,-10,1,-6,0,-4,1,-13,-5,-10,-8,-7,-6,-5,-5,3,1,2,-6,-1,7,3,8,5,6,7,2,9,4,8,6,7,7,9,9,13,10,15,5,-1,13,-6,0,13,-4,0,-14,-21,1,-15,-10,0,10,0,-2,3,12,4,-3,6,0,4,-20,6,-14,-19,-4,-9,10,-9,4,6,-7,6,7,-12,-7,-2,7,2,-7,12,7,6,-17,6,7,9,-4,9,10,19,4
++                ];
++                const clusters = [
++                  [0,0,1,.5,600],[10000,1,7,.5,500],[10000,16000,15,.5,400],[7000,32000,21,.5,400],[8000,-17536,28,.5,250],
++                  [2000,8000,12,1,650],[2000,24383,12,1,650],[2000,-24770,12,1,650],[2000,-8387,12,1,650]
++                ];
++                const turn = (a) => ((((a + 32768) & 65535) - 32768) * Math.PI / 32768);
++                const rotate = (v, roll, pitch, yaw) => {
++                  let x=v[0], y=v[1], z=v[2], c=Math.cos(turn(roll)), q=Math.sin(turn(roll));
++                  let nx=x*c-y*q, ny=x*q+y*c; x=nx; y=ny;
++                  c=Math.cos(turn(pitch)); q=Math.sin(turn(pitch));
++                  ny=y*c-z*q; let nz=y*q+z*c; y=ny; z=nz;
++                  c=Math.cos(turn(yaw)); q=Math.sin(turn(yaw));
++                  nx=x*c+z*q; nz=-x*q+z*c; return [nx,y,nz];
++                };
++                let oi=0, seed=0x5a17, out=[];
++                const rnd=(n)=>{ seed=(Math.imul(seed,1664525)+1013904223)>>>0; return Math.floor((seed/4294967296)*n); };
++                for(let ci=0;ci<clusters.length;ci++){
++                  const [baseRoll,yaw,count,scale,spread]=clusters[ci];
++                  for(let j=0;j<count;j++){
++                    let roll,pitch;
++                    if(ci<5){ roll=baseRoll+spread*offsets[oi++]; pitch=spread*offsets[oi++]; }
++                    else { roll=baseRoll+spread*rnd(21); pitch=spread*(20-rnd(41)); }
++                    out.push([
++                      rotate([-20*scale,2000,-25*scale],roll,pitch,yaw),
++                      rotate([20*scale,2000,0],roll,pitch,yaw),
++                      rotate([-20*scale,2000,25*scale],roll,pitch,yaw)
++                    ]);
++                  }
++                }
++                return out;
++              })()));
+             for (const e of this.dpPuffDdraws) {
+               e.setVtxDesc(l.cg.POS, !0);
+               e.setVtxDesc(l.cg.CLR0, !0);
+               e.setVtxDesc(l.cg.TEX0, !0);
+@@ -6898,8 +6937,9 @@
+             (0, p.g)(o, B, dpGradient ? this.materialHelperDPSkyGradient : this.materialHelperSky, g, x);
+             o.popTemplateRenderInst();
+             const dpCloudInsts = [];
+             const dpHorizonInsts = [];
++            const dpStarInsts = [];
+             const dpMinic = this.world.envfxMan.dpMinic;
+             if (dpMinic && dpMinic.opacity > 0) {
+               const dpTemplate = o.pushTemplateRenderInst();
+               (0, d.$7)(dpTemplate, y.viewerInput);
+@@ -6915,8 +6955,54 @@
+                 wx * wm[4] + wy * wm[5] + wz * wm[6],
+                 wx * wm[8] + wy * wm[9] + wz * wm[10],
+               ];
+               const drift = (performance.now() / 1000) * dpMinic.speed * dpMinic.direction * 0.0025;
++              if (!this.dpStarTexture) {
++                const texFetcher = this.world.resColl.texFetcher;
++                if (texFetcher && "function" == typeof texFetcher.getDPTextureByTextableID)
++                  this.dpStarTexture = texFetcher.getDPTextureByTextableID(this.world.renderCache, 0xdf);
++              }
++              if (this.dpStarTexture) {
++                const slot = Math.max(0, Math.min(7, this.world.envfxMan.timeOfDay | 0));
++                const daySeconds = ((slot * 3 + 1.5) * 3600) % 86400;
++                let starAlpha = 0;
++                if (daySeconds >= 75600 || daySeconds < 18000) {
++                  const nightTime = daySeconds >= 75600 ? (daySeconds - 75600) + 18000 : 18000 - daySeconds;
++                  starAlpha = nightTime > 4000 ? 255 : Math.round(255 * nightTime / 4000);
++                } else {
++                  const untilNight = 75600 - daySeconds;
++                  if (untilNight <= 12000) starAlpha = Math.round(255 - 255 * untilNight / 12000);
++                }
++                if (slot === 2) starAlpha = Math.max(starAlpha, 200);
++                if (starAlpha > 0) {
++                  const frame = Math.floor(performance.now() / 90);
++                  this.dpStarDdraw.beginDraw(o.gfxRenderCache);
++                  this.dpStarDdraw.begin(l.uB.DRAW_TRIANGLES);
++                  for (let si=0;si<this.dpStarTriangles.length;si++) {
++                    const tri=this.dpStarTriangles[si];
++                    const q0=toView(tri[0][0],tri[0][1],tri[0][2]);
++                    const q1=toView(tri[1][0],tri[1][1],tri[1][2]);
++                    const q2=toView(tri[2][0],tri[2][1],tri[2][2]);
++                    const hash=(Math.imul((frame+1)^(si*374761393),668265263)>>>0);
++                    const twinkle=0.48+0.52*((hash&255)/255);
++                    const alpha=Math.max(0,Math.min(255,Math.round(starAlpha*twinkle)));
++                    this.dpStarDdraw.position3f32(q0[0],q0[1],q0[2]); this.dpStarDdraw.color4rgba8(l.cg.CLR0,255,255,255,alpha); this.dpStarDdraw.texCoord2f32(l.cg.TEX0,0,0);
++                    this.dpStarDdraw.position3f32(q1[0],q1[1],q1[2]); this.dpStarDdraw.color4rgba8(l.cg.CLR0,255,255,255,alpha); this.dpStarDdraw.texCoord2f32(l.cg.TEX0,7/15,1);
++                    this.dpStarDdraw.position3f32(q2[0],q2[1],q2[2]); this.dpStarDdraw.color4rgba8(l.cg.CLR0,255,255,255,alpha); this.dpStarDdraw.texCoord2f32(l.cg.TEX0,1,0);
++                  }
++                  this.dpStarDdraw.end();
++                  const inst=this.dpStarDdraw.endDrawAndMakeRenderInst(o);
++                  g.m_TextureMapping[0].gfxTexture=this.dpStarTexture.gfxTexture;
++                  g.m_TextureMapping[0].gfxSampler=this.dpStarTexture.gfxSampler;
++                  g.m_TextureMapping[0].width=this.dpStarTexture.width;
++                  g.m_TextureMapping[0].height=this.dpStarTexture.height;
++                  g.m_TextureMapping[0].lodBias=0;
++                  s.D_(g.u_TexMtx[0]);
++                  x.clear();
++                  (0,p.g)(o,inst,this.materialHelperDPClouds,g,x);
++                  dpStarInsts.push(inst);
++                }
++              }
+               if (dpMinic.horizon && dpMinic.horizon.length === 16) {
+                 const radius = 4000;
+                 const bottom = -140;
+                 const top = 410;
+@@ -7014,8 +7100,9 @@
+               (e.setDebugName("Atmosphere"),
+                 e.attachRenderTargetID(r.jY.Color0, h),
+                 e.exec((e) => {
+                   B.drawOnPass(o.gfxRenderCache, e);
++                  for (const inst of dpStarInsts) inst.drawOnPass(o.gfxRenderCache, e);
+                   for (const inst of dpHorizonInsts) inst.drawOnPass(o.gfxRenderCache, e);
+                   for (const inst of dpCloudInsts) inst.drawOnPass(o.gfxRenderCache, e);
+                 }));
+             });
+@@ -7058,8 +7145,9 @@
+           }
+           destroy(e) {
+             this.skyddraw.destroy(e);
+             this.dpCloudDdraw.destroy(e);
++            this.dpStarDdraw.destroy(e);
+             for (const t of this.dpPuffDdraws) t.destroy(e);
+             for (const t of this.dpHorizonDdraws) t.destroy(e);
+           }
+         }
