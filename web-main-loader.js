@@ -135,11 +135,12 @@ function kioskPanel(){
   if(panel)panel.dataset.pfpCurrentPatcher='1';
 }
 async function boot(){
-  const [data,original,mapPatch,dpPatch]=await Promise.all([
+  const [data,original,mapPatch,dpPatch,dpRecentPacked]=await Promise.all([
     loadData(),
     text(MAIN+'?web=20260917c'),
     text('assets/web-data/sfa-maps.patch?v=20260917c'),
-    text('assets/web-data/dp-envfx-clouds.patch?v=20260919a')
+    text('assets/web-data/dp-envfx-clouds.patch?v=20260919a'),
+    text('assets/web-data/dp-recent-updates.patch.gz.b64?v=20260919b')
   ]);
   const patch=data.get('stable-main.patch');
   if(!patch)throw new Error('missing web data');
@@ -162,8 +163,21 @@ async function boot(){
       dp.text.includes('"dp_19":{time:2,atmosphere:79,skyscape:78,env:79 }')&&
       dp.text.includes('"dp_23":{time:5,atmosphere:97,skyscape:95,env:94 }')&&
       dp.text.includes('"dp_35":{time:5,atmosphere:97,skyscape:95,env:100 }');
-    if(dpGood)runtime=dp.text;
-    else console.warn('[FoxPlanet] DP ENVFX update did not apply cleanly');
+    if(dpGood){
+      runtime=dp.text;
+      const dpRecentPatch=decoder().decode(await gunzip(b64(dpRecentPacked)));
+      const recent=applyPatch(runtime,dpRecentPatch);
+      const recentGood=
+        recent.applied+recent.already===recent.total&&
+        recent.text.includes('dpHorizonDdraws = Array.from({ length: 16 }')&&
+        recent.text.includes('const rows = Math.abs(roll) < 0.0001 ? 44 : 72;')&&
+        recent.text.includes('const PFP_DP_NATIVE_ENVFX = Object.freeze({')&&
+        recent.text.includes('"dp_6":{time:4,atmosphere:97,skyscape:95,env:94 }')&&
+        recent.text.includes('"dp_18":{time:1,atmosphere:43,skyscape:36,env:43 }')&&
+        recent.text.includes('if (!o.open) { o.raf = null; return; }');
+      if(recentGood)runtime=recent.text;
+      else console.warn('[FoxPlanet] recent DP update did not apply cleanly');
+    }else console.warn('[FoxPlanet] DP ENVFX update did not apply cleanly');
     if(typeof window.__pfpApplyFinalParity==='function')runtime=window.__pfpApplyFinalParity(runtime);
     run(runtime,'Project-FoxPlanet-web.js');
   }
