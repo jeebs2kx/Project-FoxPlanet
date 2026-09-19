@@ -135,10 +135,11 @@ function kioskPanel(){
   if(panel)panel.dataset.pfpCurrentPatcher='1';
 }
 async function boot(){
-  const [data,original,mapPatch]=await Promise.all([
+  const [data,original,mapPatch,dpPatch]=await Promise.all([
     loadData(),
     text(MAIN+'?web=20260917c'),
-    text('assets/web-data/sfa-maps.patch?v=20260917c')
+    text('assets/web-data/sfa-maps.patch?v=20260917c'),
+    text('assets/web-data/dp-envfx-clouds.patch?v=20260919a')
   ]);
   const patch=data.get('stable-main.patch');
   if(!patch)throw new Error('missing web data');
@@ -154,6 +155,15 @@ async function boot(){
       maps.text.includes('await nn(r, s, v.Ij, t.dataFetcher, o, "swaphol")')&&
       maps.text.includes('sfaMapAlphaCutoutFix');
     let runtime=mapGood?maps.text:merged.text;
+    const dp=applyPatch(runtime,dpPatch);
+    const dpGood=
+      dp.applied+dp.already===dp.total&&
+      dp.text.includes('dp-minic-clouds')&&
+      dp.text.includes('"dp_19":{time:2,atmosphere:79,skyscape:78,env:79 }')&&
+      dp.text.includes('"dp_23":{time:5,atmosphere:97,skyscape:95,env:94 }')&&
+      dp.text.includes('"dp_35":{time:5,atmosphere:97,skyscape:95,env:100 }');
+    if(dpGood)runtime=dp.text;
+    else console.warn('[FoxPlanet] DP ENVFX update did not apply cleanly');
     if(typeof window.__pfpApplyFinalParity==='function')runtime=window.__pfpApplyFinalParity(runtime);
     run(runtime,'Project-FoxPlanet-web.js');
   }
