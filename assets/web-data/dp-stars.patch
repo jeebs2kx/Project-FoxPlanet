@@ -1,19 +1,10 @@
 --- a/main.js
 +++ b/main.js
 @@ -6622,8 +6622,9 @@
-           constructor(e) {
-             ((this.world = e),
-               (this.skyddraw = new o.l()),
                (this.dpCloudDdraw = new o.l()),
 +              (this.dpStarDdraw = new o.l()),
                (this.dpPuffDdraws = Array.from({ length: 8 }, () => new o.l())),
-               (this.dpHorizonDdraws = Array.from({ length: 16 }, () => new o.l())),
-               (this.dpCloudGridX = new Float32Array(65)),
-               (this.dpCloudSinAz = new Float32Array(65)),
 @@ -6639,8 +6640,46 @@
-               this.skyddraw.setVtxDesc(l.cg.TEX0, !0),
-               this.dpCloudDdraw.setVtxDesc(l.cg.POS, !0),
-               this.dpCloudDdraw.setVtxDesc(l.cg.CLR0, !0),
                this.dpCloudDdraw.setVtxDesc(l.cg.TEX0, !0),
 +              this.dpStarDdraw.setVtxDesc(l.cg.POS, !0),
 +              this.dpStarDdraw.setVtxDesc(l.cg.CLR0, !0),
@@ -54,23 +45,11 @@
 +                return out;
 +              })()));
              for (const e of this.dpPuffDdraws) {
-               e.setVtxDesc(l.cg.POS, !0);
-               e.setVtxDesc(l.cg.CLR0, !0);
-               e.setVtxDesc(l.cg.TEX0, !0);
 @@ -6898,8 +6937,9 @@
-             (0, p.g)(o, B, dpGradient ? this.materialHelperDPSkyGradient : this.materialHelperSky, g, x);
-             o.popTemplateRenderInst();
-             const dpCloudInsts = [];
              const dpHorizonInsts = [];
 +            const dpStarInsts = [];
              const dpMinic = this.world.envfxMan.dpMinic;
-             if (dpMinic && dpMinic.opacity > 0) {
-               const dpTemplate = o.pushTemplateRenderInst();
-               (0, d.$7)(dpTemplate, y.viewerInput);
 @@ -6915,8 +6955,54 @@
-                 wx * wm[4] + wy * wm[5] + wz * wm[6],
-                 wx * wm[8] + wy * wm[9] + wz * wm[10],
-               ];
                const drift = (performance.now() / 1000) * dpMinic.speed * dpMinic.direction * 0.0025;
 +              if (!this.dpStarTexture) {
 +                const texFetcher = this.world.resColl.texFetcher;
@@ -119,26 +98,11 @@
 +                }
 +              }
                if (dpMinic.horizon && dpMinic.horizon.length === 16) {
-                 const radius = 4000;
-                 const bottom = -140;
-                 const top = 410;
 @@ -7014,8 +7100,9 @@
-               (e.setDebugName("Atmosphere"),
-                 e.attachRenderTargetID(r.jY.Color0, h),
-                 e.exec((e) => {
                    B.drawOnPass(o.gfxRenderCache, e);
 +                  for (const inst of dpStarInsts) inst.drawOnPass(o.gfxRenderCache, e);
                    for (const inst of dpHorizonInsts) inst.drawOnPass(o.gfxRenderCache, e);
-                   for (const inst of dpCloudInsts) inst.drawOnPass(o.gfxRenderCache, e);
-                 }));
-             });
 @@ -7058,8 +7145,9 @@
-           }
-           destroy(e) {
-             this.skyddraw.destroy(e);
              this.dpCloudDdraw.destroy(e);
 +            this.dpStarDdraw.destroy(e);
              for (const t of this.dpPuffDdraws) t.destroy(e);
-             for (const t of this.dpHorizonDdraws) t.destroy(e);
-           }
-         }
