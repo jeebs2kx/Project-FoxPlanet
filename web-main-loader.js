@@ -141,7 +141,7 @@ async function boot(){
     text('assets/web-data/sfa-maps.patch?v=20260917c'),
     text('assets/web-data/dp-envfx-clouds.patch?v=20260919a'),
     text('assets/web-data/dp-recent-updates.patch.gz.b64?v=20260919b'),
-    text('assets/web-data/dp-horizontal-3d-sky.patch.gz.b64?v=20260919c')
+    text('assets/web-data/dp-horizontal-3d-sky.patch.gz.b64?v=20260919d')
   ]);
   const patch=data.get('stable-main.patch');
   if(!patch)throw new Error('missing web data');
