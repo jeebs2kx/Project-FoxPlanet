@@ -135,12 +135,13 @@ function kioskPanel(){
   if(panel)panel.dataset.pfpCurrentPatcher='1';
 }
 async function boot(){
-  const [data,original,mapPatch,dpPatch,dpRecentPacked]=await Promise.all([
+  const [data,original,mapPatch,dpPatch,dpRecentPacked,dp3DSkyPacked]=await Promise.all([
     loadData(),
     text(MAIN+'?web=20260917c'),
     text('assets/web-data/sfa-maps.patch?v=20260917c'),
     text('assets/web-data/dp-envfx-clouds.patch?v=20260919a'),
-    text('assets/web-data/dp-recent-updates.patch.gz.b64?v=20260919b')
+    text('assets/web-data/dp-recent-updates.patch.gz.b64?v=20260919b'),
+    text('assets/web-data/dp-horizontal-3d-sky.patch.gz.b64?v=20260919c')
   ]);
   const patch=data.get('stable-main.patch');
   if(!patch)throw new Error('missing web data');
@@ -175,8 +176,20 @@ async function boot(){
         recent.text.includes('"dp_6":{time:4,atmosphere:97,skyscape:95,env:94 }')&&
         recent.text.includes('"dp_18":{time:1,atmosphere:43,skyscape:36,env:43 }')&&
         recent.text.includes('if (!o.open) { o.raf = null; return; }');
-      if(recentGood)runtime=recent.text;
-      else console.warn('[FoxPlanet] recent DP update did not apply cleanly');
+      if(recentGood){
+        runtime=recent.text;
+        const dp3DSkyPatch=decoder().decode(await gunzip(b64(dp3DSkyPacked)));
+        const dp3DSky=applyPatch(runtime,dp3DSkyPatch);
+        const dp3DSkyGood=
+          dp3DSky.applied+dp3DSky.already===dp3DSky.total&&
+          dp3DSky.text.includes('const cloudHeight = 1500;')&&
+          dp3DSky.text.includes('const radius = 32000;')&&
+          dp3DSky.text.includes('const tiles = 16;')&&
+          dp3DSky.text.includes('const fadeStart = radius * 0.78;')&&
+          dp3DSky.text.includes('const segmentAngle = Math.PI * 2 / 32;');
+        if(dp3DSkyGood)runtime=dp3DSky.text;
+        else console.warn('[FoxPlanet] DP 3D sky update did not apply cleanly');
+      }else console.warn('[FoxPlanet] recent DP update did not apply cleanly');
     }else console.warn('[FoxPlanet] DP ENVFX update did not apply cleanly');
     if(typeof window.__pfpApplyFinalParity==='function')runtime=window.__pfpApplyFinalParity(runtime);
     run(runtime,'Project-FoxPlanet-web.js');
