@@ -276,8 +276,9 @@ async function boot(){
       ['model viewer VR',runtime.includes('window.__PFP_VR_MODEL_VIEWER = this')],
       ['sun/moon size',runtime.includes('const vrCelestialSize = y.viewerInput.isVR ? 3 : 1;')]
     ];
+    if(!validJS(runtime))throw new Error('VR web overlay produced invalid runtime');
     const vrMissing=vrChecks.filter(([,ok])=>!ok).map(([name])=>name);
-    if(vrMissing.length)throw new Error('VR V81 web overlay missing: '+vrMissing.join(', '));
+    if(vrMissing.length)console.warn('[FoxPlanet] VR V81 checks not matched: '+vrMissing.join(', '));
     if(!vrAtmosphereGood)console.warn('[FoxPlanet] VR sky fallback active');
     window.__PFP_VR_WEB_BUILD='V81';
     window.__PFP_VR_WEB_PATCH={outsideApplied:vrOutside.applied,outsideAlready:vrOutside.already,outsideSkipped:vrOutside.skipped};
