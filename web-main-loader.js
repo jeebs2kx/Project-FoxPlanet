@@ -287,9 +287,44 @@ async function boot(){
     if(validJS(controllerRuntime))runtime=controllerRuntime;
     else console.warn('[FoxPlanet] VR controller update skipped');
 
-    const settingsRuntime=replaceVRRegion(runtime,'        class se extends H {','        class ie {',vrSettings);
-    if(validJS(settingsRuntime))runtime=settingsRuntime;
-    else console.warn('[FoxPlanet] VR settings update skipped');
+    const vrSettingsNeedle='              this.contents.appendChild(this.scaleSlider.elem));';
+    if(runtime.includes(vrSettingsNeedle)){
+      const vrSettingsExtras=vrSettingsNeedle+'\n'+
+        '            const pfpVRParams = new URLSearchParams(window.location.search);\n'+
+        '            const pfpArmsRequested = "1" === pfpVRParams.get("PFPVRARMS");\n'+
+        '            window.__PFP_VR_EXPERIMENTAL_ARMS = pfpArmsRequested;\n'+
+        '            this.experimentalArmsCheckBox = new K("Sabre/Krystal arms (Experimental)");\n'+
+        '            this.experimentalArmsCheckBox.setChecked(pfpArmsRequested);\n'+
+        '            this.experimentalArmsCheckBox.onchanged = () => { window.__PFP_VR_EXPERIMENTAL_ARMS = this.experimentalArmsCheckBox.checked; };\n'+
+        '            this.contents.appendChild(this.experimentalArmsCheckBox.elem);\n'+
+        '            const pfpGroundRequested = "1" === pfpVRParams.get("PFPVRGROUND");\n'+
+        '            window.__PFP_VR_GROUNDED = pfpGroundRequested;\n'+
+        '            this.groundedWalkCheckBox = new K("Grounded walking (Experimental)");\n'+
+        '            this.groundedWalkCheckBox.setChecked(pfpGroundRequested);\n'+
+        '            this.groundedWalkCheckBox.onchanged = () => {\n'+
+        '              window.__PFP_VR_GROUNDED = this.groundedWalkCheckBox.checked;\n'+
+        '              const c = this.viewer && this.viewer.xrCameraController;\n'+
+        '              if(c){ c._pfpGroundVelocity=0; c._pfpGroundMoonJump=!1; c._pfpGroundOnGround=!1; c._pfpGroundRawHeadY=null; c._pfpGroundLastTime=0; c._pfpNoGroundSince=0; c._pfpGroundHadFloor=!1; if(this.groundedWalkCheckBox.checked)c._pfpForceWarlockSnap=!0; }\n'+
+        '            };\n'+
+        '            this.contents.appendChild(this.groundedWalkCheckBox.elem);\n'+
+        '            const pfpObjectsParam = pfpVRParams.get("PFPVROBJECTS");\n'+
+        '            const pfpObjectsRequested = null === pfpObjectsParam ? !1 : "1" === pfpObjectsParam;\n'+
+        '            window.__PFP_VR_MAP_OBJECTS = pfpObjectsRequested;\n'+
+        '            this.mapObjectsCheckBox = new K("Objects on maps (Experimental)");\n'+
+        '            this.mapObjectsCheckBox.setChecked(pfpObjectsRequested);\n'+
+        '            this.mapObjectsCheckBox.onchanged = () => { window.__PFP_VR_MAP_OBJECTS = this.mapObjectsCheckBox.checked; };\n'+
+        '            this.contents.appendChild(this.mapObjectsCheckBox.elem);\n'+
+        '            this.mapObjectsWarning = document.createElement("div");\n'+
+        '            this.mapObjectsWarning.textContent = "Expect lower VR framerate on most maps.";\n'+
+        '            this.mapObjectsWarning.style.fontSize = "11px";\n'+
+        '            this.mapObjectsWarning.style.lineHeight = "14px";\n'+
+        '            this.mapObjectsWarning.style.opacity = "0.65";\n'+
+        '            this.mapObjectsWarning.style.margin = "-1px 0 3px 0";\n'+
+        '            this.contents.appendChild(this.mapObjectsWarning);';
+      const vrSettingsRuntime=runtime.replace(vrSettingsNeedle,vrSettingsExtras);
+      if(validJS(vrSettingsRuntime))runtime=vrSettingsRuntime;
+      else console.warn('[FoxPlanet] VR settings options skipped');
+    }else console.warn('[FoxPlanet] VR settings target not found');
 
     const vrBeforeOutside=runtime;
     const vrOutside=applyPatch(runtime,vrOutsidePatch,8);
