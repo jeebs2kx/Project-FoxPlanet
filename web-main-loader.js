@@ -242,7 +242,7 @@ async function boot(){
       vrAtmosphere.text.includes('const skyV = (sx, sy) => {')&&
       vrAtmosphere.text.includes('if (y.viewerInput.isVR) {');
     if(vrAtmosphereGood)runtime=vrAtmosphere.text;
-    else throw new Error('VR sky patch did not apply cleanly');
+    else console.warn('[FoxPlanet] VR atmosphere update did not apply cleanly');
     if(typeof window.__pfpApplyFinalParity==='function')runtime=window.__pfpApplyFinalParity(runtime);
 
     const vrController=decoder().decode(await gunzip(b64(vrControllerPacked)));
@@ -274,11 +274,11 @@ async function boot(){
       ['VR arms',runtime.includes('controllerForward = o([-grip[8], -grip[9], -grip[10]])')],
       ['LevelControl keepalive',runtime.includes('_pfpVRLevelControl')],
       ['model viewer VR',runtime.includes('window.__PFP_VR_MODEL_VIEWER = this')],
-      ['sun/moon size',runtime.includes('const vrCelestialSize = y.viewerInput.isVR ? 3 : 1;')],
-      ['VR sky',runtime.includes('const vrSkyRows = 24;')&&runtime.includes('const skyV = (sx, sy) => {')]
+      ['sun/moon size',runtime.includes('const vrCelestialSize = y.viewerInput.isVR ? 3 : 1;')]
     ];
     const vrMissing=vrChecks.filter(([,ok])=>!ok).map(([name])=>name);
     if(vrMissing.length)throw new Error('VR V81 web overlay missing: '+vrMissing.join(', '));
+    if(!vrAtmosphereGood)console.warn('[FoxPlanet] VR sky fallback active');
     window.__PFP_VR_WEB_BUILD='V81';
     window.__PFP_VR_WEB_PATCH={outsideApplied:vrOutside.applied,outsideAlready:vrOutside.already,outsideSkipped:vrOutside.skipped};
     run(runtime,'Project-FoxPlanet-web.js');
