@@ -251,8 +251,33 @@ async function boot(){
 
     const replaceVRRegion=(source,startMark,endMark,replacement)=>{
       const start=source.indexOf(startMark);
-      const end=start<0?-1:source.indexOf(endMark,start);
-      if(start<0||end<0||end<=start)throw new Error('VR V81 region not found: '+startMark.trim());
+      if(start<0)throw new Error('VR V81 region not found: '+startMark.trim());
+      const open=source.indexOf('{',start);
+      if(open<0)throw new Error('VR V81 region brace not found: '+startMark.trim());
+      let depth=0,quote='',escape=!1,lineComment=!1,blockComment=!1,end=-1;
+      for(let i=open;i<source.length;i++){
+        const ch=source[i],next=source[i+1];
+        if(lineComment){
+          if(ch==='\n')lineComment=!1;
+          continue;
+        }
+        if(blockComment){
+          if(ch==='*'&&next==='/'){blockComment=!1;i++;}
+          continue;
+        }
+        if(quote){
+          if(escape){escape=!1;continue;}
+          if(ch==='\\'){escape=!0;continue;}
+          if(ch===quote)quote='';
+          continue;
+        }
+        if(ch==='/'&&next==='/'){lineComment=!0;i++;continue;}
+        if(ch==='/'&&next==='*'){blockComment=!0;i++;continue;}
+        if(ch==='"'||ch==="'"||ch==='\`'){quote=ch;continue;}
+        if(ch==='{')depth++;
+        else if(ch==='}'&&--depth===0){end=i+1;break;}
+      }
+      if(end<=start)throw new Error('VR V81 region end not found: '+startMark.trim());
       return source.slice(0,start)+replacement+source.slice(end);
     };
 
