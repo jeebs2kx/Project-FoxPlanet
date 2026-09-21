@@ -261,6 +261,14 @@ async function boot(){
 
     const vrOutside=applyPatch(runtime,vrOutsidePatch,8);
     runtime=vrOutside.text;
+    runtime=runtime.replace(
+      '            window.__PFP_VR_IS_SFA = !1;\n              (this.dpUsingVanillaObjects = !1),',
+      '              (window.__PFP_VR_IS_SFA = !1),\n              (this.dpUsingVanillaObjects = !1),'
+    );
+    runtime=runtime.replace(
+      '            window.__PFP_VR_IS_SFA = !0;\n                    (e.style.borderRadius = "2px"));',
+      '                    (window.__PFP_VR_IS_SFA = !0),\n                    (e.style.borderRadius = "2px"));'
+    );
 
     const vrChecks=[
       ['world scale 30',runtime.includes('(this.worldScale = 30)')],
