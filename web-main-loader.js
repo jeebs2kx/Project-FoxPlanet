@@ -256,19 +256,37 @@ async function boot(){
       return source.slice(0,start)+replacement+source.slice(end);
     };
 
-    runtime=replaceVRRegion(runtime,'        class k {','        class A {',vrController);
-    runtime=replaceVRRegion(runtime,'        class se extends H {','        class ie {',vrSettings);
+    const vrBase=runtime;
 
+    const controllerRuntime=replaceVRRegion(runtime,'        class k {','        class A {',vrController);
+    if(validJS(controllerRuntime))runtime=controllerRuntime;
+    else console.warn('[FoxPlanet] VR controller update skipped');
+
+    const settingsRuntime=replaceVRRegion(runtime,'        class se extends H {','        class ie {',vrSettings);
+    if(validJS(settingsRuntime))runtime=settingsRuntime;
+    else console.warn('[FoxPlanet] VR settings update skipped');
+
+    const vrBeforeOutside=runtime;
     const vrOutside=applyPatch(runtime,vrOutsidePatch,8);
-    runtime=vrOutside.text;
-    runtime=runtime.replace(
+    let vrOutsideRuntime=vrOutside.text;
+    vrOutsideRuntime=vrOutsideRuntime.replace(
       '            window.__PFP_VR_IS_SFA = !1;\n              (this.dpUsingVanillaObjects = !1),',
       '              (window.__PFP_VR_IS_SFA = !1),\n              (this.dpUsingVanillaObjects = !1),'
     );
-    runtime=runtime.replace(
+    vrOutsideRuntime=vrOutsideRuntime.replace(
       '            window.__PFP_VR_IS_SFA = !0;\n                    (e.style.borderRadius = "2px"));',
       '                    (window.__PFP_VR_IS_SFA = !0),\n                    (e.style.borderRadius = "2px"));'
     );
+    if(validJS(vrOutsideRuntime))runtime=vrOutsideRuntime;
+    else {
+      runtime=vrBeforeOutside;
+      console.warn('[FoxPlanet] VR outside update skipped');
+    }
+
+    if(!validJS(runtime)){
+      runtime=vrBase;
+      console.warn('[FoxPlanet] VR web update skipped');
+    }
 
     const vrChecks=[
       ['world scale 30',runtime.includes('(this.worldScale = 30)')],
@@ -284,7 +302,6 @@ async function boot(){
       ['model viewer VR',runtime.includes('window.__PFP_VR_MODEL_VIEWER = this')],
       ['sun/moon size',runtime.includes('const vrCelestialSize = y.viewerInput.isVR ? 3 : 1;')]
     ];
-    if(!validJS(runtime))throw new Error('VR web overlay produced invalid runtime');
     const vrMissing=vrChecks.filter(([,ok])=>!ok).map(([name])=>name);
     if(vrMissing.length)console.warn('[FoxPlanet] VR V81 checks not matched: '+vrMissing.join(', '));
     if(!vrAtmosphereGood)console.warn('[FoxPlanet] VR sky fallback active');
