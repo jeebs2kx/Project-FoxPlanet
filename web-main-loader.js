@@ -138,7 +138,7 @@ function kioskPanel(){
   if(panel)panel.dataset.pfpCurrentPatcher='1';
 }
 async function boot(){
-  const [data,original,mapPatch,dpPatch,dpRecentPacked,dp3DSkyPacked,dpStarsPatch,dpSunMoonPatch,vrControllerPacked,vrSettingsPacked,vrOutsidePacked,vrSkyPacked]=await Promise.all([
+  const [data,original,mapPatch,dpPatch,dpRecentPacked,dp3DSkyPacked,dpStarsPatch,dpSunMoonPatch,vrControllerPacked,vrSettingsPacked,vrOutsidePacked,vrAtmospherePatch]=await Promise.all([
     loadData(),
     text(MAIN+'?web=20260917c'),
     text('assets/web-data/sfa-maps.patch?v=20260917c'),
@@ -150,7 +150,7 @@ async function boot(){
     text('assets/web-data/vr-controller-v81.txt.gz.b64?v=20260921e'),
     text('assets/web-data/vr-settings-v81.txt.gz.b64?v=20260921e'),
     text('assets/web-data/vr-v56-v81-outside.patch.gz.b64?v=20260921e'),
-    text('assets/web-data/vr-sky-v81.txt.gz.b64?v=20260921e')
+    text('assets/web-data/vr-atmosphere.patch?v=20260921f')
   ]);
   const patch=data.get('stable-main.patch');
   if(!patch)throw new Error('missing web data');
@@ -234,6 +234,15 @@ async function boot(){
         }else console.warn('[FoxPlanet] DP 3D sky update did not apply cleanly');
       }else console.warn('[FoxPlanet] recent DP update did not apply cleanly');
     }else console.warn('[FoxPlanet] DP ENVFX update did not apply cleanly');
+    const vrAtmosphere=applyPatch(runtime,vrAtmospherePatch,8);
+    const vrAtmosphereGood=
+      validJS(vrAtmosphere.text)&&
+      vrAtmosphere.text.includes('const vrSkyRows = 24;')&&
+      vrAtmosphere.text.includes('const vrSkyCols = 12;')&&
+      vrAtmosphere.text.includes('const skyV = (sx, sy) => {')&&
+      vrAtmosphere.text.includes('if (y.viewerInput.isVR) {');
+    if(vrAtmosphereGood)runtime=vrAtmosphere.text;
+    else throw new Error('VR sky patch did not apply cleanly');
     if(typeof window.__pfpApplyFinalParity==='function')runtime=window.__pfpApplyFinalParity(runtime);
 
     const vrController=decoder().decode(await gunzip(b64(vrControllerPacked)));
@@ -252,10 +261,6 @@ async function boot(){
 
     const vrOutside=applyPatch(runtime,vrOutsidePatch,8);
     runtime=vrOutside.text;
-
-    const vrSky=decoder().decode(await gunzip(b64(vrSkyPacked)));
-    runtime=replaceVRRegion(runtime,'      6183(e, t, n) {','      8267(e, t, n) {',vrSky);
-    if(!validJS(runtime))throw new Error('VR V81 sky module produced invalid runtime');
 
     const vrChecks=[
       ['world scale 30',runtime.includes('(this.worldScale = 30)')],
