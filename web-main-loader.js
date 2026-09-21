@@ -138,7 +138,7 @@ function kioskPanel(){
   if(panel)panel.dataset.pfpCurrentPatcher='1';
 }
 async function boot(){
-  const [data,original,mapPatch,dpPatch,dpRecentPacked,dp3DSkyPacked,dpStarsPatch,dpSunMoonPatch,vrControllerPacked,vrSettingsPacked,vrOutsidePacked,vrAtmospherePatch]=await Promise.all([
+  const [data,original,mapPatch,dpPatch,dpRecentPacked,dp3DSkyPacked,dpStarsPatch,dpSunMoonPatch,vrControllerPacked,vrSettingsPacked,vrOutsidePacked,vrAtmospherePatch,vrSkyPacked]=await Promise.all([
     loadData(),
     text(MAIN+'?web=20260917c'),
     text('assets/web-data/sfa-maps.patch?v=20260917c'),
@@ -150,7 +150,8 @@ async function boot(){
     text('assets/web-data/vr-controller-v81.txt.gz.b64?v=20260921e'),
     text('assets/web-data/vr-settings-v81.txt.gz.b64?v=20260921e'),
     text('assets/web-data/vr-v56-v81-outside.patch.gz.b64?v=20260921e'),
-    text('assets/web-data/vr-atmosphere.patch?v=20260921f')
+    text('assets/web-data/vr-atmosphere.patch?v=20260921f'),
+    text('assets/web-data/vr-sky-v81.txt.gz.b64?v=20260921e')
   ]);
   const patch=data.get('stable-main.patch');
   if(!patch)throw new Error('missing web data');
@@ -246,8 +247,8 @@ async function boot(){
     if(typeof window.__pfpApplyFinalParity==='function')runtime=window.__pfpApplyFinalParity(runtime);
 
     const vrController=decoder().decode(await gunzip(b64(vrControllerPacked)));
-    const vrSettings=decoder().decode(await gunzip(b64(vrSettingsPacked)));
     const vrOutsidePatch=decoder().decode(await gunzip(b64(vrOutsidePacked)));
+    const vrSky=decoder().decode(await gunzip(b64(vrSkyPacked)));
 
     const replaceVRRegion=(source,startMark,endMark,replacement)=>{
       const start=source.indexOf(startMark);
@@ -287,6 +288,31 @@ async function boot(){
     if(validJS(controllerRuntime))runtime=controllerRuntime;
     else console.warn('[FoxPlanet] VR controller update skipped');
 
+    const vrBeforeOutside=runtime;
+    const vrOutside=applyPatch(runtime,vrOutsidePatch,8);
+    let vrOutsideRuntime=vrOutside.text;
+    vrOutsideRuntime=vrOutsideRuntime.replace(
+      '            window.__PFP_VR_IS_SFA = !1;\n              (this.dpUsingVanillaObjects = !1),',
+      '              (window.__PFP_VR_IS_SFA = !1),\n              (this.dpUsingVanillaObjects = !1),'
+    );
+    vrOutsideRuntime=vrOutsideRuntime.replace(
+      '            window.__PFP_VR_IS_SFA = !0;\n                    (e.style.borderRadius = "2px"));',
+      '                    (window.__PFP_VR_IS_SFA = !0),\n                    (e.style.borderRadius = "2px"));'
+    );
+    if(validJS(vrOutsideRuntime))runtime=vrOutsideRuntime;
+    else {
+      runtime=vrBeforeOutside;
+      console.warn('[FoxPlanet] VR outside update skipped');
+    }
+
+    try {
+      const vrSkyRuntime=replaceVRRegion(runtime,'      6183(e, t, n) {','      8267(e, t, n) {',vrSky);
+      if(validJS(vrSkyRuntime))runtime=vrSkyRuntime;
+      else console.warn('[FoxPlanet] VR sky update skipped');
+    } catch (_) {
+      console.warn('[FoxPlanet] VR sky region not found');
+    }
+
     const vrSettingsNeedle='              this.contents.appendChild(this.scaleSlider.elem));';
     if(runtime.includes(vrSettingsNeedle)){
       const vrSettingsExtras=vrSettingsNeedle+'\n'+
@@ -325,23 +351,6 @@ async function boot(){
       if(validJS(vrSettingsRuntime))runtime=vrSettingsRuntime;
       else console.warn('[FoxPlanet] VR settings options skipped');
     }else console.warn('[FoxPlanet] VR settings target not found');
-
-    const vrBeforeOutside=runtime;
-    const vrOutside=applyPatch(runtime,vrOutsidePatch,8);
-    let vrOutsideRuntime=vrOutside.text;
-    vrOutsideRuntime=vrOutsideRuntime.replace(
-      '            window.__PFP_VR_IS_SFA = !1;\n              (this.dpUsingVanillaObjects = !1),',
-      '              (window.__PFP_VR_IS_SFA = !1),\n              (this.dpUsingVanillaObjects = !1),'
-    );
-    vrOutsideRuntime=vrOutsideRuntime.replace(
-      '            window.__PFP_VR_IS_SFA = !0;\n                    (e.style.borderRadius = "2px"));',
-      '                    (window.__PFP_VR_IS_SFA = !0),\n                    (e.style.borderRadius = "2px"));'
-    );
-    if(validJS(vrOutsideRuntime))runtime=vrOutsideRuntime;
-    else {
-      runtime=vrBeforeOutside;
-      console.warn('[FoxPlanet] VR outside update skipped');
-    }
 
     if(!validJS(runtime)){
       runtime=vrBase;
