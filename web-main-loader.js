@@ -99,13 +99,13 @@ function find(src,b,expected){
   for(let i=0;i<=src.length-b.length;i++)if(src[i]===b[0]&&match(src,i,b))return i;
   return -1;
 }
-function applyPatch(source,patch){
+function applyPatch(source,patch,maxFuzz=2){
   const src=source.replace(/\r\n/g,'\n').split('\n'),list=hunks(patch);
   let delta=0,applied=0,already=0,skipped=0;
   for(const h of list){
     const expected=Math.max(0,h.oldStart-1+delta);
     let done=false;
-    for(let fuzz=0;fuzz<=2&&!done;fuzz++){
+    for(let fuzz=0;fuzz<=maxFuzz&&!done;fuzz++){
       for(let lead=0;lead<=fuzz;lead++){
         const b=block(h,lead,fuzz-lead);
         if(!b.old.length&&!b.neu.length)continue;
@@ -138,7 +138,7 @@ function kioskPanel(){
   if(panel)panel.dataset.pfpCurrentPatcher='1';
 }
 async function boot(){
-  const [data,original,mapPatch,dpPatch,dpRecentPacked,dp3DSkyPacked,dpStarsPatch,dpSunMoonPatch,vrAtmospherePatch]=await Promise.all([
+  const [data,original,mapPatch,dpPatch,dpRecentPacked,dp3DSkyPacked,dpStarsPatch,dpSunMoonPatch,vrControllerPacked,vrSettingsPacked,vrOutsidePacked,vrSkyPacked]=await Promise.all([
     loadData(),
     text(MAIN+'?web=20260917c'),
     text('assets/web-data/sfa-maps.patch?v=20260917c'),
@@ -147,7 +147,10 @@ async function boot(){
     text('assets/web-data/dp-horizontal-3d-sky.patch.gz.b64?v=20260919d'),
     text('assets/web-data/dp-stars.patch?v=20260919g'),
     text('assets/web-data/dp-sunmoon.patch?v=20260919g'),
-    text('assets/web-data/vr-atmosphere.patch?v=20260919h')
+    text('assets/web-data/vr-controller-v81.txt.gz.b64?v=20260921e'),
+    text('assets/web-data/vr-settings-v81.txt.gz.b64?v=20260921e'),
+    text('assets/web-data/vr-v56-v81-outside.patch.gz.b64?v=20260921e'),
+    text('assets/web-data/vr-sky-v81.txt.gz.b64?v=20260921e')
   ]);
   const patch=data.get('stable-main.patch');
   if(!patch)throw new Error('missing web data');
@@ -231,16 +234,48 @@ async function boot(){
         }else console.warn('[FoxPlanet] DP 3D sky update did not apply cleanly');
       }else console.warn('[FoxPlanet] recent DP update did not apply cleanly');
     }else console.warn('[FoxPlanet] DP ENVFX update did not apply cleanly');
-    const vrAtmosphere=applyPatch(runtime,vrAtmospherePatch);
-    const vrAtmosphereGood=
-      validJS(vrAtmosphere.text)&&
-      vrAtmosphere.text.includes('const vrSkyRows = 24;')&&
-      vrAtmosphere.text.includes('const vrSkyCols = 12;')&&
-      vrAtmosphere.text.includes('const skyV = (sx, sy) => {')&&
-      vrAtmosphere.text.includes('if (y.viewerInput.isVR) {');
-    if(vrAtmosphereGood)runtime=vrAtmosphere.text;
-    else console.warn('[FoxPlanet] VR atmosphere update did not apply cleanly');
     if(typeof window.__pfpApplyFinalParity==='function')runtime=window.__pfpApplyFinalParity(runtime);
+
+    const vrController=decoder().decode(await gunzip(b64(vrControllerPacked)));
+    const vrSettings=decoder().decode(await gunzip(b64(vrSettingsPacked)));
+    const vrOutsidePatch=decoder().decode(await gunzip(b64(vrOutsidePacked)));
+
+    const replaceVRRegion=(source,startMark,endMark,replacement)=>{
+      const start=source.indexOf(startMark);
+      const end=start<0?-1:source.indexOf(endMark,start);
+      if(start<0||end<0||end<=start)throw new Error('VR V81 region not found: '+startMark.trim());
+      return source.slice(0,start)+replacement+source.slice(end);
+    };
+
+    runtime=replaceVRRegion(runtime,'        class k {','        class A {',vrController);
+    runtime=replaceVRRegion(runtime,'        class se extends H {','        class ie {',vrSettings);
+
+    const vrOutside=applyPatch(runtime,vrOutsidePatch,8);
+    runtime=vrOutside.text;
+
+    const vrSky=decoder().decode(await gunzip(b64(vrSkyPacked)));
+    runtime=replaceVRRegion(runtime,'      6183(e, t, n) {','      8267(e, t, n) {',vrSky);
+    if(!validJS(runtime))throw new Error('VR V81 sky module produced invalid runtime');
+
+    const vrChecks=[
+      ['world scale 30',runtime.includes('(this.worldScale = 30)')],
+      ['teleport distance',runtime.includes('const pfpTeleportDistance = 7.5 * this.worldScale')],
+      ['moon jump launch',runtime.includes('this._pfpGroundVelocity = 7.5 * this.worldScale')],
+      ['moon jump gravity',runtime.includes('this._pfpGroundVelocity -= (this._pfpGroundMoonJump ? 6.75 : 8.0) * this.worldScale * pfpDt')],
+      ['SFA/Kiosk grounded rules',runtime.includes('function pfpVRIsSFAFinalKioskDesc(e)')],
+      ['fall recovery',runtime.includes('this._pfpNoGroundSince')],
+      ['objects option',runtime.includes('Objects on maps (Experimental)')],
+      ['objects warning',runtime.includes('Expect lower VR framerate on most maps.')],
+      ['VR arms',runtime.includes('controllerForward = o([-grip[8], -grip[9], -grip[10]])')],
+      ['LevelControl keepalive',runtime.includes('_pfpVRLevelControl')],
+      ['model viewer VR',runtime.includes('window.__PFP_VR_MODEL_VIEWER = this')],
+      ['sun/moon size',runtime.includes('const vrCelestialSize = y.viewerInput.isVR ? 3 : 1;')],
+      ['VR sky',runtime.includes('const vrSkyRows = 24;')&&runtime.includes('const skyV = (sx, sy) => {')]
+    ];
+    const vrMissing=vrChecks.filter(([,ok])=>!ok).map(([name])=>name);
+    if(vrMissing.length)throw new Error('VR V81 web overlay missing: '+vrMissing.join(', '));
+    window.__PFP_VR_WEB_BUILD='V81';
+    window.__PFP_VR_WEB_PATCH={outsideApplied:vrOutside.applied,outsideAlready:vrOutside.already,outsideSkipped:vrOutside.skipped};
     run(runtime,'Project-FoxPlanet-web.js');
   }
   for(const src of AFTER)await script(src);
