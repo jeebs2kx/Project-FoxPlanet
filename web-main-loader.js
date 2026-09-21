@@ -234,7 +234,7 @@ async function boot(){
         }else console.warn('[FoxPlanet] DP 3D sky update did not apply cleanly');
       }else console.warn('[FoxPlanet] recent DP update did not apply cleanly');
     }else console.warn('[FoxPlanet] DP ENVFX update did not apply cleanly');
-    const vrAtmosphere=applyPatch(runtime,vrAtmospherePatch,8);
+    const vrAtmosphere=applyPatch(runtime,vrAtmospherePatch);
     const vrAtmosphereGood=
       validJS(vrAtmosphere.text)&&
       vrAtmosphere.text.includes('const vrSkyRows = 24;')&&
