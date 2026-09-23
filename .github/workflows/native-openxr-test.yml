@@ -1,0 +1,47 @@
+name: Build native OpenXR test
+
+on:
+  push:
+    branches:
+      - native-openxr-v1-test
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch OpenXR SDK
+        shell: pwsh
+        run: |
+          git clone --recursive --depth 1 https://github.com/KhronosGroup/OpenXR-SDK-Source.git openxr
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake -S openxr -B build -G "Visual Studio 17 2022" -A x64 -DBUILD_TESTS=ON -DBUILD_CONFORMANCE_TESTS=OFF -DBUILD_API_LAYERS=OFF -DDYNAMIC_LOADER=ON -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+
+      - name: Build
+        shell: pwsh
+        run: |
+          cmake --build build --config Release --target hello_xr
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force package | Out-Null
+          $exe = Get-ChildItem build -Recurse -Filter hello_xr.exe | Select-Object -First 1
+          if (-not $exe) { throw "hello_xr.exe not found" }
+          Copy-Item $exe.FullName "package\Project FoxPlanet VR Native Test.exe"
+          $loader = Get-ChildItem build -Recurse -Filter openxr_loader.dll | Select-Object -First 1
+          if ($loader) { Copy-Item $loader.FullName package\openxr_loader.dll }
+          Copy-Item NATIVE_VR_TEST_README.txt package\README.txt
+          Set-Content -Path "package\Launch Native VR Test.bat" -Value '@echo off
+          "Project FoxPlanet VR Native Test.exe" -g D3D11 -ff Hmd -vc Stereo
+          pause' -Encoding ASCII
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Project_FoxPlanet_Native_OpenXR_V1
+          path: package
