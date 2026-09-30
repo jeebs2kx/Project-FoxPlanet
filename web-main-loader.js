@@ -1,38 +1,26 @@
 (function(){
 'use strict';
 
-const MAIN='main-6b7e7ae7257abae7800d-095-dpeye2.js';
-const DATA_PARTS=[
-  'assets/web-data/part-00','assets/web-data/part-01','assets/web-data/part-02',
-  'assets/web-data/part-03','assets/web-data/part-04','assets/web-data/part-05',
-  'assets/web-data/part-06','assets/web-data/part-07','assets/web-data/part-08',
-  'assets/web-data/part-09a','assets/web-data/part-09b','assets/web-data/part-10a0',
-  'assets/web-data/part-10a1','assets/web-data/part-10a200','assets/web-data/part-10a201',
-  'assets/web-data/part-10a202','assets/web-data/part-10a203','assets/web-data/part-10a21',
-  'assets/web-data/part-10a22','assets/web-data/part-10b','assets/web-data/part-11'
-];
+const PARTS=Array.from({length:61},(_,i)=>'assets/web-v144/part-'+String(i).padStart(2,'0'));
 const AFTER=[
-  'web-gametext.js',
-  'sfa-map-sequences.js',
-  'audio-hub.js',
+  'web-gametext.js?v=7',
   'web-local-data.js',
   'web-saved-gamedata.js?v=6',
   'web-mount.js',
   'web-layout.js?v=3',
   'web-ui.js?v=2',
   'web-dp-audio.js',
-  'section-headings.js'
+  'web-dp-sequence-fixes.js?v=3'
 ];
-const CHECKS=['pfpDPVertexGroups','PFP_DP_SKY_PRESETS','__pfpDPCurrentMapId','3249 === n'];
 
-function decoder(){return new TextDecoder('utf-8');}
+const dec=new TextDecoder('utf-8');
 async function text(url){
   const r=await fetch(url,{cache:'no-store'});
   if(!r.ok)throw new Error('could not load '+url+' ('+r.status+')');
-  return await r.text();
+  return r.text();
 }
-function b64(data){
-  const bin=atob(data.replace(/\s+/g,'')),out=new Uint8Array(bin.length);
+function b64(s){
+  const bin=atob(s.replace(/\s+/g,'')),out=new Uint8Array(bin.length);
   for(let i=0;i<bin.length;i++)out[i]=bin.charCodeAt(i);
   return out;
 }
@@ -41,7 +29,7 @@ async function gunzip(bytes){
   return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
 }
 function untar(bytes){
-  const out=new Map(),dec=decoder();
+  const out=new Map();
   const str=(off,len)=>{let end=off;while(end<off+len&&bytes[end]!==0)end++;return dec.decode(bytes.subarray(off,end));};
   let off=0;
   while(off+512<=bytes.length){
@@ -55,344 +43,68 @@ function untar(bytes){
   }
   return out;
 }
-async function loadData(){
-  const parts=await Promise.all(DATA_PARTS.map(p=>text(p+'?v=20260917c')));
-  return untar(await gunzip(b64(parts.join(''))));
-}
-function hunks(patch){
-  const lines=patch.replace(/\r\n/g,'\n').split('\n'),out=[];
-  let i=0;
-  while(i<lines.length){
-    const m=/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(lines[i]);
-    if(!m){i++;continue;}
-    const h={oldStart:Number(m[1]),newStart:Number(m[3]),lines:[]};
-    i++;
-    while(i<lines.length&&!lines[i].startsWith('@@ ')&&!lines[i].startsWith('--- ')&&!lines[i].startsWith('+++ ')){
-      const line=lines[i];
-      if(line.startsWith(' ')||line.startsWith('+')||line.startsWith('-'))h.lines.push(line);
-      i++;
-    }
-    out.push(h);
-  }
-  return out;
-}
-function block(h,lead,tail){
-  let first=0,last=h.lines.length;
-  while(lead>0&&first<last&&h.lines[first][0]===' '){first++;lead--;}
-  while(tail>0&&last>first&&h.lines[last-1][0]===' '){last--;tail--;}
-  const x=h.lines.slice(first,last);
-  return {old:x.filter(v=>v[0]!=='+').map(v=>v.slice(1)),neu:x.filter(v=>v[0]!=='-').map(v=>v.slice(1))};
-}
-function match(src,at,b){
-  if(at<0||at+b.length>src.length)return false;
-  for(let i=0;i<b.length;i++)if(src[at+i]!==b[i])return false;
-  return true;
-}
-function find(src,b,expected){
-  if(!b.length)return Math.max(0,Math.min(src.length,expected));
-  const lo=Math.max(0,expected-1800),hi=Math.min(src.length-b.length,expected+1800);
-  for(let d=0;d<=1800;d++){
-    const a=expected-d,c=expected+d;
-    if(a>=lo&&match(src,a,b))return a;
-    if(d&&c<=hi&&match(src,c,b))return c;
-  }
-  for(let i=0;i<=src.length-b.length;i++)if(src[i]===b[0]&&match(src,i,b))return i;
-  return -1;
-}
-function applyPatch(source,patch,maxFuzz=2){
-  const src=source.replace(/\r\n/g,'\n').split('\n'),list=hunks(patch);
-  let delta=0,applied=0,already=0,skipped=0;
-  for(const h of list){
-    const expected=Math.max(0,h.oldStart-1+delta);
-    let done=false;
-    for(let fuzz=0;fuzz<=maxFuzz&&!done;fuzz++){
-      for(let lead=0;lead<=fuzz;lead++){
-        const b=block(h,lead,fuzz-lead);
-        if(!b.old.length&&!b.neu.length)continue;
-        let at=find(src,b.old,expected);
-        if(at>=0){src.splice(at,b.old.length,...b.neu);delta+=b.neu.length-b.old.length;applied++;done=true;break;}
-        at=find(src,b.neu,expected);
-        if(at>=0){delta+=b.neu.length-b.old.length;already++;done=true;break;}
-      }
-    }
-    if(!done)skipped++;
-  }
-  return {text:src.join('\n'),total:list.length,applied,already,skipped};
+function run(src,name){
+  (0,eval)(src+'\n//# sourceURL='+name);
 }
 function script(src){
   return new Promise((ok,fail)=>{
-    const s=document.createElement('script');s.src=src;s.onload=ok;s.onerror=()=>fail(new Error('could not load '+src));document.head.appendChild(s);
+    const s=document.createElement('script');
+    s.src=src;s.onload=ok;s.onerror=()=>fail(new Error('could not load '+src));
+    document.head.appendChild(s);
   });
 }
-function validJS(code){
-  try{new Function(code);return true;}catch(_){return false;}
+function addStyle(css){
+  const old=document.getElementById('pfp-section-headings-v6-css');
+  if(old)old.remove();
+  const s=document.createElement('style');
+  s.id='pfp-section-headings-v6-css';
+  s.textContent=css;
+  document.head.appendChild(s);
 }
-function run(code,name){(0,eval)(code+'\n//# sourceURL='+name);}
 function kioskPanel(){
-  const api=window.PfpKioskCurrent;
-  if(!api||typeof api.installKioskIsoPatcherPanel!=='function')return;
   const old=document.getElementById('kiosk-iso-sequence-patcher-panel');
   if(!old||old.dataset.pfpCurrentPatcher==='1')return;
   old.remove();
-  const panel=api.installKioskIsoPatcherPanel(document.body);
+  const panel=window.PfpKioskCurrent&&window.PfpKioskCurrent.installKioskIsoPatcherPanel?window.PfpKioskCurrent.installKioskIsoPatcherPanel(document.body):null;
   if(panel)panel.dataset.pfpCurrentPatcher='1';
 }
 async function boot(){
-  const [data,original,mapPatch,dpPatch,dpRecentPacked,dp3DSkyPacked,dpStarsPatch,dpSunMoonPatch,vrControllerPacked,vrSettingsPacked,vrOutsidePacked,vrAtmospherePatch,vrSkyPacked]=await Promise.all([
-    loadData(),
-    text(MAIN+'?web=20260917c'),
-    text('assets/web-data/sfa-maps.patch?v=20260917c'),
-    text('assets/web-data/dp-envfx-clouds.patch?v=20260919a'),
-    text('assets/web-data/dp-recent-updates.patch.gz.b64?v=20260919b'),
-    text('assets/web-data/dp-horizontal-3d-sky.patch.gz.b64?v=20260919d'),
-    text('assets/web-data/dp-stars.patch?v=20260919g'),
-    text('assets/web-data/dp-sunmoon.patch?v=20260919g'),
-    text('assets/web-data/vr-controller-v81.txt.gz.b64?v=20260921e'),
-    text('assets/web-data/vr-settings-v81.txt.gz.b64?v=20260921e'),
-    text('assets/web-data/vr-v56-v81-outside.patch.gz.b64?v=20260921e'),
-    text('assets/web-data/vr-atmosphere.patch?v=20260921f'),
-    text('assets/web-data/vr-sky-v81.txt.gz.b64?v=20260921e')
-  ]);
-  const patch=data.get('stable-main.patch');
-  if(!patch)throw new Error('missing web data');
-  const merged=applyPatch(original,patch);
-  const good=CHECKS.filter(x=>merged.text.includes(x)).length;
-  if(merged.applied+merged.already<55||good<3){
-    run(original,MAIN);
-  }else{
-    const maps=applyPatch(merged.text,mapPatch);
-    const mapGood=
-      maps.text.includes('__pfpSfaFenceEdgeFixActive')&&
-      maps.text.includes('await nn(o, i, this.gameInfo, t.dataFetcher, l, "swaphol")')&&
-      maps.text.includes('await nn(r, s, v.Ij, t.dataFetcher, o, "swaphol")')&&
-      maps.text.includes('sfaMapAlphaCutoutFix');
-    let runtime=mapGood?maps.text:merged.text;
-    const dp=applyPatch(runtime,dpPatch);
-    const dpGood=
-      dp.applied+dp.already===dp.total&&
-      dp.text.includes('dp-minic-clouds')&&
-      dp.text.includes('"dp_19":{time:2,atmosphere:79,skyscape:78,env:79 }')&&
-      dp.text.includes('"dp_23":{time:5,atmosphere:97,skyscape:95,env:94 }')&&
-      dp.text.includes('"dp_35":{time:5,atmosphere:97,skyscape:95,env:100 }');
-    if(dpGood){
-      runtime=dp.text;
-      const dpRecentPatch=decoder().decode(await gunzip(b64(dpRecentPacked)));
-      const recent=applyPatch(runtime,dpRecentPatch);
-      const recentGood=
-        recent.applied+recent.already===recent.total&&
-        recent.text.includes('dpHorizonDdraws = Array.from({ length: 16 }')&&
-        recent.text.includes('const rows = Math.abs(roll) < 0.0001 ? 44 : 72;')&&
-        recent.text.includes('const PFP_DP_NATIVE_ENVFX = Object.freeze({')&&
-        recent.text.includes('"dp_6":{time:4,atmosphere:97,skyscape:95,env:94 }')&&
-        recent.text.includes('"dp_18":{time:1,atmosphere:43,skyscape:36,env:43 }')&&
-        recent.text.includes('if (!o.open) { o.raf = null; return; }');
-      if(recentGood){
-        runtime=recent.text;
-        const dp3DSkyPatch=decoder().decode(await gunzip(b64(dp3DSkyPacked)));
-        const dp3DSky=applyPatch(runtime,dp3DSkyPatch);
-        const dp3DSkyGood=
-          dp3DSky.applied+dp3DSky.already===dp3DSky.total&&
-          dp3DSky.text.includes('const cloudHeight = 1500;')&&
-          dp3DSky.text.includes('const radius = 32000;')&&
-          dp3DSky.text.includes('const tiles = 16;')&&
-          dp3DSky.text.includes('const fadeStart = radius * 0.78;')&&
-          dp3DSky.text.includes('const segmentAngle = Math.PI * 2 / 32;');
-        if(dp3DSkyGood){
-          runtime=dp3DSky.text;
-          const dpStars=applyPatch(runtime,dpStarsPatch);
-          let starRuntime=dpStars.text;
-          if(!validJS(starRuntime)){
-            const bad='return out;\n              })()));';
-            const fixed='return out;\n              })());';
-            if(starRuntime.includes(bad)){
-              const retry=starRuntime.replace(bad,fixed);
-              if(validJS(retry))starRuntime=retry;
-            }
-          }
-          const dpStarsGood=
-            validJS(starRuntime)&&
-            starRuntime.includes('this.dpStarDdraw = new o.l()')&&
-            starRuntime.includes('this.dpStarDdraw.setVtxDesc(l.cg.POS, !0)')&&
-            starRuntime.includes('(this.dpStarTriangles = (() => {')&&
-            starRuntime.includes('getDPTextureByTextableID(this.world.renderCache, 0xdf)')&&
-            starRuntime.includes('const slot = Math.max(0, Math.min(7, this.world.envfxMan.timeOfDay | 0))')&&
-            starRuntime.includes('dpStarInsts.push(inst);')&&
-            starRuntime.includes('for (const inst of dpStarInsts) inst.drawOnPass(o.gfxRenderCache, e);');
-          if(dpStarsGood){
-            runtime=starRuntime;
-            const dpSunMoon=applyPatch(runtime,dpSunMoonPatch);
-            const dpSunMoonGood=
-              validJS(dpSunMoon.text)&&
-              dpSunMoon.text.includes('this.dpCelestialDdraws = Array.from({ length: 4 }')&&
-              dpSunMoon.text.includes('getDPTextureByTextableID(this.world.renderCache, 0x20d)')&&
-              dpSunMoon.text.includes('getDPTextureByTextableID(this.world.renderCache, 0x20e)')&&
-              dpSunMoon.text.includes('getDPTextureByTextableID(this.world.renderCache, 0x20f)')&&
-              dpSunMoon.text.includes('for (const inst of dpCelestialInsts) inst.drawOnPass(o.gfxRenderCache, e);')&&
-              dpSunMoon.text.includes('this.dpDay = { roll: tiltScale * rollBase };');
-            if(dpSunMoonGood)runtime=dpSunMoon.text;
-            else console.warn('[FoxPlanet] DP sun/moon update did not apply cleanly');
-          }else console.warn('[FoxPlanet] DP stars update did not apply cleanly');
-        }else console.warn('[FoxPlanet] DP 3D sky update did not apply cleanly');
-      }else console.warn('[FoxPlanet] recent DP update did not apply cleanly');
-    }else console.warn('[FoxPlanet] DP ENVFX update did not apply cleanly');
-    const vrAtmosphere=applyPatch(runtime,vrAtmospherePatch);
-    const vrAtmosphereGood=
-      validJS(vrAtmosphere.text)&&
-      vrAtmosphere.text.includes('const vrSkyRows = 24;')&&
-      vrAtmosphere.text.includes('const vrSkyCols = 12;')&&
-      vrAtmosphere.text.includes('const skyV = (sx, sy) => {')&&
-      vrAtmosphere.text.includes('if (y.viewerInput.isVR) {');
-    if(vrAtmosphereGood)runtime=vrAtmosphere.text;
-    else console.warn('[FoxPlanet] VR atmosphere update did not apply cleanly');
-    if(typeof window.__pfpApplyFinalParity==='function')runtime=window.__pfpApplyFinalParity(runtime);
+  const joined=(await Promise.all(PARTS.map(p=>text(p+'?v=20260930a')))).join('');
+  const data=untar(await gunzip(b64(joined)));
+  const early=data.get('pfp-updated-early-converter.js');
+  const main=data.get('main-6b7e7ae7257abae7800d-095-dpeye2.js');
+  if(!early||!main)throw new Error('V144 runtime data is incomplete');
+  run(early,'pfp-updated-early-converter.js');
+  run(main,'main-6b7e7ae7257abae7800d-095-dpeye2.js');
 
-    const vrController=decoder().decode(await gunzip(b64(vrControllerPacked)));
-    const vrOutsidePatch=decoder().decode(await gunzip(b64(vrOutsidePacked)));
-    const vrSky=decoder().decode(await gunzip(b64(vrSkyPacked)));
-
-    const replaceVRRegion=(source,startMark,endMark,replacement)=>{
-      const start=source.indexOf(startMark);
-      if(start<0)throw new Error('VR V81 region not found: '+startMark.trim());
-      const open=source.indexOf('{',start);
-      if(open<0)throw new Error('VR V81 region brace not found: '+startMark.trim());
-      let depth=0,quote='',escape=!1,lineComment=!1,blockComment=!1,end=-1;
-      for(let i=open;i<source.length;i++){
-        const ch=source[i],next=source[i+1];
-        if(lineComment){
-          if(ch==='\n')lineComment=!1;
-          continue;
-        }
-        if(blockComment){
-          if(ch==='*'&&next==='/'){blockComment=!1;i++;}
-          continue;
-        }
-        if(quote){
-          if(escape){escape=!1;continue;}
-          if(ch==='\\'){escape=!0;continue;}
-          if(ch===quote)quote='';
-          continue;
-        }
-        if(ch==='/'&&next==='/'){lineComment=!0;i++;continue;}
-        if(ch==='/'&&next==='*'){blockComment=!0;i++;continue;}
-        if(ch==='"'||ch==="'"||ch==='\`'){quote=ch;continue;}
-        if(ch==='{')depth++;
-        else if(ch==='}'&&--depth===0){end=i+1;break;}
-      }
-      if(end<=start)throw new Error('VR V81 region end not found: '+startMark.trim());
-      return source.slice(0,start)+replacement+source.slice(end);
-    };
-
-    const vrBase=runtime;
-
-    const controllerRuntime=replaceVRRegion(runtime,'        class k {','        class A {',vrController);
-    if(validJS(controllerRuntime))runtime=controllerRuntime;
-    else console.warn('[FoxPlanet] VR controller update skipped');
-
-    const vrBeforeOutside=runtime;
-    const vrOutside=applyPatch(runtime,vrOutsidePatch,8);
-    let vrOutsideRuntime=vrOutside.text;
-    vrOutsideRuntime=vrOutsideRuntime.replace(
-      '            window.__PFP_VR_IS_SFA = !1;\n              (this.dpUsingVanillaObjects = !1),',
-      '              (window.__PFP_VR_IS_SFA = !1),\n              (this.dpUsingVanillaObjects = !1),'
-    );
-    vrOutsideRuntime=vrOutsideRuntime.replace(
-      '            window.__PFP_VR_IS_SFA = !0;\n                    (e.style.borderRadius = "2px"));',
-      '                    (window.__PFP_VR_IS_SFA = !0),\n                    (e.style.borderRadius = "2px"));'
-    );
-    if(validJS(vrOutsideRuntime))runtime=vrOutsideRuntime;
-    else {
-      runtime=vrBeforeOutside;
-      console.warn('[FoxPlanet] VR outside update skipped');
-    }
-
-    try {
-      const vrSkyRuntime=replaceVRRegion(runtime,'      6183(e, t, n) {','      8267(e, t, n) {',vrSky);
-      if(validJS(vrSkyRuntime))runtime=vrSkyRuntime;
-      else console.warn('[FoxPlanet] VR sky update skipped');
-    } catch (_) {
-      console.warn('[FoxPlanet] VR sky region not found');
-    }
-
-    const vrSettingsNeedle='              this.contents.appendChild(this.scaleSlider.elem));';
-    if(runtime.includes(vrSettingsNeedle)){
-      const vrSettingsExtras=vrSettingsNeedle+'\n'+
-        '            const pfpVRParams = new URLSearchParams(window.location.search);\n'+
-        '            const pfpArmsRequested = "1" === pfpVRParams.get("PFPVRARMS");\n'+
-        '            window.__PFP_VR_EXPERIMENTAL_ARMS = pfpArmsRequested;\n'+
-        '            this.experimentalArmsCheckBox = new K("Sabre/Krystal arms (Experimental)");\n'+
-        '            this.experimentalArmsCheckBox.setChecked(pfpArmsRequested);\n'+
-        '            this.experimentalArmsCheckBox.onchanged = () => { window.__PFP_VR_EXPERIMENTAL_ARMS = this.experimentalArmsCheckBox.checked; };\n'+
-        '            this.contents.appendChild(this.experimentalArmsCheckBox.elem);\n'+
-        '            const pfpGroundRequested = "1" === pfpVRParams.get("PFPVRGROUND");\n'+
-        '            window.__PFP_VR_GROUNDED = pfpGroundRequested;\n'+
-        '            this.groundedWalkCheckBox = new K("Grounded walking (Experimental)");\n'+
-        '            this.groundedWalkCheckBox.setChecked(pfpGroundRequested);\n'+
-        '            this.groundedWalkCheckBox.onchanged = () => {\n'+
-        '              window.__PFP_VR_GROUNDED = this.groundedWalkCheckBox.checked;\n'+
-        '              const c = this.viewer && this.viewer.xrCameraController;\n'+
-        '              if(c){ c._pfpGroundVelocity=0; c._pfpGroundMoonJump=!1; c._pfpGroundOnGround=!1; c._pfpGroundRawHeadY=null; c._pfpGroundLastTime=0; c._pfpNoGroundSince=0; c._pfpGroundHadFloor=!1; if(this.groundedWalkCheckBox.checked)c._pfpForceWarlockSnap=!0; }\n'+
-        '            };\n'+
-        '            this.contents.appendChild(this.groundedWalkCheckBox.elem);\n'+
-        '            const pfpObjectsParam = pfpVRParams.get("PFPVROBJECTS");\n'+
-        '            const pfpObjectsRequested = null === pfpObjectsParam ? !1 : "1" === pfpObjectsParam;\n'+
-        '            window.__PFP_VR_MAP_OBJECTS = pfpObjectsRequested;\n'+
-        '            this.mapObjectsCheckBox = new K("Objects on maps (Experimental)");\n'+
-        '            this.mapObjectsCheckBox.setChecked(pfpObjectsRequested);\n'+
-        '            this.mapObjectsCheckBox.onchanged = () => { window.__PFP_VR_MAP_OBJECTS = this.mapObjectsCheckBox.checked; };\n'+
-        '            this.contents.appendChild(this.mapObjectsCheckBox.elem);\n'+
-        '            this.mapObjectsWarning = document.createElement("div");\n'+
-        '            this.mapObjectsWarning.textContent = "Expect lower VR framerate on most maps.";\n'+
-        '            this.mapObjectsWarning.style.fontSize = "11px";\n'+
-        '            this.mapObjectsWarning.style.lineHeight = "14px";\n'+
-        '            this.mapObjectsWarning.style.opacity = "0.65";\n'+
-        '            this.mapObjectsWarning.style.margin = "-1px 0 3px 0";\n'+
-        '            this.contents.appendChild(this.mapObjectsWarning);';
-      const vrSettingsRuntime=runtime.replace(vrSettingsNeedle,vrSettingsExtras);
-      if(validJS(vrSettingsRuntime))runtime=vrSettingsRuntime;
-      else console.warn('[FoxPlanet] VR settings options skipped');
-    }else console.warn('[FoxPlanet] VR settings target not found');
-
-    if(!validJS(runtime)){
-      runtime=vrBase;
-      console.warn('[FoxPlanet] VR web update skipped');
-    }
-
-    const vrChecks=[
-      ['world scale 30',runtime.includes('(this.worldScale = 30)')],
-      ['teleport distance',runtime.includes('const pfpTeleportDistance = 7.5 * this.worldScale')],
-      ['moon jump launch',runtime.includes('this._pfpGroundVelocity = 7.5 * this.worldScale')],
-      ['moon jump gravity',runtime.includes('this._pfpGroundVelocity -= (this._pfpGroundMoonJump ? 6.75 : 8.0) * this.worldScale * pfpDt')],
-      ['SFA/Kiosk grounded rules',runtime.includes('function pfpVRIsSFAFinalKioskDesc(e)')],
-      ['fall recovery',runtime.includes('this._pfpNoGroundSince')],
-      ['objects option',runtime.includes('Objects on maps (Experimental)')],
-      ['objects warning',runtime.includes('Expect lower VR framerate on most maps.')],
-      ['VR arms',runtime.includes('controllerForward = o([-grip[8], -grip[9], -grip[10]])')],
-      ['LevelControl keepalive',runtime.includes('_pfpVRLevelControl')],
-      ['model viewer VR',runtime.includes('window.__PFP_VR_MODEL_VIEWER = this')],
-      ['sun/moon size',runtime.includes('const vrCelestialSize = y.viewerInput.isVR ? 3 : 1;')]
-    ];
-    const vrMissing=vrChecks.filter(([,ok])=>!ok).map(([name])=>name);
-    if(vrMissing.length)console.warn('[FoxPlanet] VR V81 checks not matched: '+vrMissing.join(', '));
-    if(!vrAtmosphereGood)console.warn('[FoxPlanet] VR sky fallback active');
-    window.__PFP_VR_WEB_BUILD='V81';
-    window.__PFP_VR_WEB_PATCH={outsideApplied:vrOutside.applied,outsideAlready:vrOutside.already,outsideSkipped:vrOutside.skipped};
-    run(runtime,'Project-FoxPlanet-web.js');
-  }
-  for(const src of AFTER)await script(src);
-
+  const gameText=data.get('pfp-sfa-gametext.js');
+  const sfaSeq=data.get('pfp-sfa-map-sequences.js');
   const dpSeq=data.get('pfp-dp-map-sequences.js');
-  const dpJson=data.get('sequence-data/dp/dp-sequences.json');
+  const dpJson=data.get('dp-sequences.json');
+  const audio=data.get('pfp-audio-hub.js');
+  const css=data.get('pfp-section-headings-v6.css');
+  const headings=data.get('pfp-section-headings-v6.js');
+  const kiosk=data.get('pfp-kiosk-current.js');
+
+  if(gameText)run(gameText,'pfp-sfa-gametext.js');
+  if(sfaSeq)run(sfaSeq,'pfp-sfa-map-sequences.js');
   if(dpSeq&&dpJson){
     const url=URL.createObjectURL(new Blob([dpJson],{type:'application/json'}));
     run(dpSeq.split('sequence-data/dp/dp-sequences.json').join(url),'pfp-dp-map-sequences.js');
-  }
+  }else if(dpSeq)run(dpSeq,'pfp-dp-map-sequences.js');
+  if(audio)run(audio,'pfp-audio-hub.js');
+  if(css)addStyle(css);
+  if(headings)run(headings,'pfp-section-headings-v6.js');
 
-  const kiosk=data.get('pfp-kiosk-current.js');
+  for(const src of AFTER)await script(src);
+
   if(kiosk){
     run(kiosk,'pfp-kiosk-current.js');
     new MutationObserver(kioskPanel).observe(document.documentElement,{childList:true,subtree:true});
     kioskPanel();
   }
+  window.__PFP_WEB_RUNTIME='V144';
+  window.dispatchEvent(new CustomEvent('pfp-runtime-v144-ready'));
 }
 boot().catch(e=>{
   console.error('[FoxPlanet]',e);
