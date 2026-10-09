@@ -4,7 +4,7 @@
 const PARTS=Array.from({length:7},(_,i)=>'assets/rt-097/part-'+String(i).padStart(2,'0'));
 const AFTER=[
   'web-gametext.js?v=7',
-  'web-local-data.js?v=097b',
+  'web-local-data.js?v=097c',
   'web-saved-gamedata.js?v=6',
   'web-mount.js',
   'web-layout.js?v=3',

@@ -361,7 +361,10 @@
         var a=start+t.getUint32(0,false), b=start+t.getUint32(8,false);
         if(a<start+8*(n+1)||b>end||b-a<5) return null;
         var fp=await this.reader.read(DP_FILES[binName][0]+a+5,b-a-5);
-        var fo=await inflateRaw(fp); this.cache.set(key,fo); return fo;
+        var fo=await inflateRaw(fp);
+        // the game fills this in after loading the first frame
+        if(frame===0&&n>1&&fo.byteLength>=14)new DataView(fo).setUint16(12,(n<<8)&0xFFFF,false);
+        this.cache.set(key,fo); return fo;
       }
       if(start+5>=end) return null;
       var packed=await this.reader.read(DP_FILES[binName][0]+start+5,end-start-5);
@@ -405,6 +408,109 @@
       input.addEventListener('cancel', function () { input.remove(); resolve([]); }, { once:true });
       input.click();
     });
+  }
+
+  function dataBuffer(data) {
+    if (!data) return null;
+    if (typeof data.copyToBuffer === 'function') return data.copyToBuffer(0, data.byteLength);
+    if (data.arrayBuffer instanceof ArrayBuffer) {
+      var start=Number(data.byteOffset||0), end=start+Number(data.byteLength||data.arrayBuffer.byteLength);
+      return data.arrayBuffer.slice(start,end);
+    }
+    return null;
+  }
+
+  async function installDpTextureFrames() {
+    var f=getFetcher();
+    if(!f||typeof f.fetchData!=='function'||f.__pfpDpTextureFrames)return false;
+    f.__pfpDpTextureFrames=true;
+    var fetchBase=f.fetchData.bind(f), tabCache=new Map(), frameCache=new Map();
+
+    async function getTab(bank) {
+      if(tabCache.has(bank))return tabCache.get(bank);
+      var name=bank==='tex0'?'TEX0.tab':'TEX1.tab';
+      var data=await fetchBase('dinosaurplanet/'+name,{allow404:true}).catch(function(){return null;});
+      var buf=dataBuffer(data), view=buf?new DataView(buf):null;
+      tabCache.set(bank,view);
+      return view;
+    }
+
+    async function getInfo(bank,index) {
+      var tab=await getTab(bank), off=index*4;
+      if(!tab||off+8>tab.byteLength)return null;
+      var a=tab.getUint32(off,false), b=tab.getUint32(off+4,false);
+      if(a===0xFFFFFFFF||b===0xFFFFFFFF)return null;
+      var frames=(a>>>24)&255, start=a&0x00FFFFFF, end=b&0x00FFFFFF;
+      if(!frames||start>=end)return null;
+      return {frames:frames,start:start,end:end};
+    }
+
+    async function inflatePacked(bytes) {
+      var util=window.__PFPVoxUtil;
+      if(util&&typeof util.inflateDPRarezip==='function') {
+        try {
+          var dv=await util.inflateDPRarezip(bytes);
+          return dv.buffer.slice(dv.byteOffset,dv.byteOffset+dv.byteLength);
+        } catch (_) {}
+      }
+      if(typeof DecompressionStream!=='function'||bytes.byteLength<6)return null;
+      try {
+        var stream=new Blob([bytes.subarray(5)]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+        return await new Response(stream).arrayBuffer();
+      } catch (_) { return null; }
+    }
+
+    async function makeFrame(bank,index,frame,info) {
+      var cacheKey=bank+':'+index+':'+frame;
+      if(frameCache.has(cacheKey))return frameCache.get(cacheKey);
+      var binName=bank==='tex0'?'TEX0.bin':'TEX1.bin', begin, finish;
+      if(info.frames>1) {
+        if(frame<0||frame>=info.frames)return null;
+        var tableSize=8*(info.frames+1);
+        var tableData=await fetchBase('dinosaurplanet/'+binName,{allow404:true,rangeStart:info.start,rangeSize:tableSize}).catch(function(){return null;});
+        var tableBuf=dataBuffer(tableData);
+        if(!tableBuf||tableBuf.byteLength<tableSize)return null;
+        var table=new DataView(tableBuf), relStart=table.getUint32(frame*8,false), relEnd=table.getUint32((frame+1)*8,false);
+        begin=info.start+relStart; finish=info.start+relEnd;
+        if(begin<info.start+tableSize||finish>info.end||finish-begin<5)return null;
+      } else {
+        if(frame!==0)return null;
+        begin=info.start; finish=info.end;
+      }
+      var packedData=await fetchBase('dinosaurplanet/'+binName,{allow404:true,rangeStart:begin,rangeSize:finish-begin}).catch(function(){return null;});
+      var packed=dataBuffer(packedData);
+      if(!packed||packed.byteLength<5)return null;
+      var out=await inflatePacked(new Uint8Array(packed));
+      if(!out)return null;
+      if(frame===0&&info.frames>1&&out.byteLength>=14)new DataView(out).setUint16(12,(info.frames<<8)&0xFFFF,false);
+      frameCache.set(cacheKey,out);
+      return out;
+    }
+
+    f.fetchData=async function(path,opts) {
+      var p=cleanPath(path), m=p.match(/^dinosaurplanet\/uncompressed_textures\/(tex0|tex)_(\d+)(?:_f(\d+))?\.bin$/i);
+      var data=await fetchBase(path,opts);
+      if(!m)return data;
+      var bank=m[1].toLowerCase(), index=Number(m[2]), frame=m[3]===undefined?0:Number(m[3]);
+      var info=await getInfo(bank,index).catch(function(){return null;});
+      if(!info)return data;
+
+      if(m[3]!==undefined) {
+        if(data&&data.byteLength)return data;
+        var made=await makeFrame(bank,index,frame,info);
+        return made?makeSlice(made,p,opts||{}):data;
+      }
+
+      if(data&&data.byteLength&&info.frames>1&&(!opts||(opts.rangeStart===undefined&&opts.rangeSize===undefined))) {
+        var base=dataBuffer(data);
+        if(base&&base.byteLength>=14) {
+          new DataView(base).setUint16(12,(info.frames<<8)&0xFFFF,false);
+          return new LocalSlice(base,0,base.byteLength,p);
+        }
+      }
+      return data;
+    };
+    return true;
   }
 
   function button(text, fn, cls) {
@@ -603,6 +709,7 @@ body[data-landing="1"] #landing-version .landing-patch-wide { margin-top:1px !im
   }
 
   function installUi() {
+    installDpTextureFrames().catch(function(){});
     installWebUiCss();
     if (STATIC_WEB) {
       document.querySelectorAll('button').forEach(function (b) {
