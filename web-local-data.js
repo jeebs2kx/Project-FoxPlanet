@@ -246,8 +246,17 @@
 
   async function inflateRaw(buffer) {
     if (typeof DecompressionStream !== 'function') throw new Error('This browser cannot unpack the Dinosaur Planet files. Chrome or Edge should work.');
-    var stream = new Blob([buffer]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-    return new Response(stream).arrayBuffer();
+    try {
+      var stream = new Blob([buffer]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+      return await new Response(stream).arrayBuffer();
+    } catch (err) {
+      // newer Chrome won't take padding after the end of the data, the viewer's own inflate will
+      var util = window.__PFPVoxUtil;
+      if (!util || !util.inflateDPRarezip) throw err;
+      var src = new Uint8Array(buffer), u = new Uint8Array(src.length + 5); u.set(src, 5);
+      var dv = await util.inflateDPRarezip(u);
+      return dv.buffer.slice(dv.byteOffset, dv.byteOffset + dv.byteLength);
+    }
   }
 
   var DP_FILES = {
@@ -338,12 +347,22 @@
       for(var i=0;i+4<=dv.byteLength;i+=4){var v=dv.getUint32(i,false); if(v===0xFFFFFFFF) break; out.push({frames:(v>>>24)&255, offset:v&0x00FFFFFF});}
       this.tabCache.set(key,out); return out;
     }
-    async unpackTexture(bank, index) {
-      var key='t:'+bank+':'+index; if(this.cache.has(key)) return this.cache.get(key);
+    async unpackTexture(bank, index, frame) {
+      frame=frame|0;
+      var key='t:'+bank+':'+index+(frame?':f'+frame:''); if(this.cache.has(key)) return this.cache.get(key);
       var tabName=bank==='tex0'?'TEX0.tab':'TEX1.tab', binName=bank==='tex0'?'TEX0.bin':'TEX1.bin';
       var e=await this.texEntries(tabName); if(index<0||index+1>=e.length) return null;
       var start=e[index].offset, end=e[index+1].offset; if(start>=end||end>DP_FILES[binName][1]) return null;
-      if(e[index].frames>1) start += 8*(e[index].frames+1);
+      var n=e[index].frames;
+      if(n>1||frame>0){
+        // animated textures: (offset, size) per frame at the start, like the desktop import
+        if(n<2||frame>=n||start+8*(n+1)>end) return null;
+        var t=new DataView(await this.reader.read(DP_FILES[binName][0]+start+frame*8,12));
+        var a=start+t.getUint32(0,false), b=start+t.getUint32(8,false);
+        if(a<start+8*(n+1)||b>end||b-a<5) return null;
+        var fp=await this.reader.read(DP_FILES[binName][0]+a+5,b-a-5);
+        var fo=await inflateRaw(fp); this.cache.set(key,fo); return fo;
+      }
       if(start+5>=end) return null;
       var packed=await this.reader.read(DP_FILES[binName][0]+start+5,end-start-5);
       var out=await inflateRaw(packed); this.cache.set(key,out); return out;
@@ -357,7 +376,7 @@
       else {
         var m=name.match(/^uncompressed_blocks\/(\d+)\.bin$/i); if(m) buf=await this.unpackBlock(Number(m[1]));
         if(!m){m=name.match(/^uncompressed_models\/(\d+)\.bin$/i); if(m) buf=await this.unpackModel(Number(m[1]));}
-        if(!m){m=name.match(/^uncompressed_textures\/(tex0|tex)_(\d+)\.bin$/i); if(m) buf=await this.unpackTexture(m[1].toLowerCase(),Number(m[2]));}
+        if(!m){m=name.match(/^uncompressed_textures\/(tex0|tex)_(\d+)(?:_f(\d+))?\.bin$/i); if(m) buf=await this.unpackTexture(m[1].toLowerCase(),Number(m[2]),m[3]?Number(m[3]):0);}
       }
       if(buf===null) return null;
       return makeSlice(buf,p,opts||{});
@@ -606,3 +625,4 @@ body[data-landing="1"] #landing-version .landing-patch-wide { margin-top:1px !im
   window.addEventListener('load',function(){setTimeout(installUi,50);setTimeout(installUi,500);});
   setInterval(installUi,1500);
 })();
+
