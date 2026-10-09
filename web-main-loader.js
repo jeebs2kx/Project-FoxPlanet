@@ -1,7 +1,7 @@
 (function(){
 'use strict';
 
-const PARTS=Array.from({length:61},(_,i)=>'assets/web-v144/part-'+String(i).padStart(2,'0'));
+const PARTS=Array.from({length:7},(_,i)=>'assets/rt-097/part-'+String(i).padStart(2,'0'));
 const AFTER=[
   'web-gametext.js?v=7',
   'web-local-data.js',
@@ -9,8 +9,7 @@ const AFTER=[
   'web-mount.js',
   'web-layout.js?v=3',
   'web-ui.js?v=2',
-  'web-dp-audio.js',
-  'web-dp-sequence-fixes.js?v=3'
+  'web-dp-audio.js'
 ];
 
 const dec=new TextDecoder('utf-8');
@@ -69,12 +68,13 @@ function kioskPanel(){
   if(panel)panel.dataset.pfpCurrentPatcher='1';
 }
 async function boot(){
-  const joined=(await Promise.all(PARTS.map(p=>text(p+'?v=20260930a')))).join('');
+  const joined=(await Promise.all(PARTS.map(p=>text(p+'?v=097')))).join('');
   const data=untar(await gunzip(b64(joined)));
   const early=data.get('pfp-updated-early-converter.js');
   const main=data.get('main-6b7e7ae7257abae7800d-095-dpeye2.js');
-  if(!early||!main)throw new Error('V144 runtime data is incomplete');
+  if(!early||!main)throw new Error('runtime data is incomplete');
   run(early,'pfp-updated-early-converter.js');
+  if(data.get('pfp-gl-state.js'))run(data.get('pfp-gl-state.js'),'pfp-gl-state.js');
   run(main,'main-6b7e7ae7257abae7800d-095-dpeye2.js');
 
   const gameText=data.get('pfp-sfa-gametext.js');
@@ -92,6 +92,10 @@ async function boot(){
     const url=URL.createObjectURL(new Blob([dpJson],{type:'application/json'}));
     run(dpSeq.split('sequence-data/dp/dp-sequences.json').join(url),'pfp-dp-map-sequences.js');
   }else if(dpSeq)run(dpSeq,'pfp-dp-map-sequences.js');
+  // map fog, effects and VR bits, same order as the desktop
+  for(const f of ['pfp-env-fog.js','pfp-dp-partfx-data.js','pfp-dp-fx.js','pfp-sfa-fx.js','pfp-dp-bridge.js','pfp-dp-disguise.js','pfp-vr-arms.js','pfp-vr-sequences.js']){
+    const src=data.get(f);if(src)run(src,f);
+  }
   if(audio)run(audio,'pfp-audio-hub.js');
   if(css)addStyle(css);
   if(headings)run(headings,'pfp-section-headings-v6.js');
@@ -103,8 +107,8 @@ async function boot(){
     new MutationObserver(kioskPanel).observe(document.documentElement,{childList:true,subtree:true});
     kioskPanel();
   }
-  window.__PFP_WEB_RUNTIME='V144';
-  window.dispatchEvent(new CustomEvent('pfp-runtime-v144-ready'));
+  window.__PFP_WEB_RUNTIME='097';
+  window.dispatchEvent(new CustomEvent('pfp-runtime-ready'));
 }
 boot().catch(e=>{
   console.error('[FoxPlanet]',e);

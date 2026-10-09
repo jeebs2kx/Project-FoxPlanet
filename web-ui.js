@@ -27,9 +27,9 @@ function installDesktopDpMapMappings(){
       exact['dp_'+mapNum]={sequenceId:Number(pref.sequenceId),actionId:Number(pref.actionId)||0};
     localStorage.setItem(DP_MAP_STORAGE,JSON.stringify(exact));
     localStorage.setItem(DP_MAP_MIGRATION,'1');
-    console.info('[FoxPlanet R20] exact desktop DP map music mappings installed');
+    console.info('[FoxPlanet] exact desktop DP map music mappings installed');
     return true;
-  }catch(e){console.warn('[FoxPlanet R20] DP music mapping install',e);return false;}
+  }catch(e){console.warn('[FoxPlanet] DP music mapping install',e);return false;}
 }
 
 function currentScene(){try{return window.main&&window.main.viewer&&window.main.viewer.scene||null;}catch(_){return null;}}
@@ -41,7 +41,7 @@ function routeDpMapNum(){
 function stopSceneDpMusic(scene){
   try{
     if(scene&&scene.isDPMapScene&&scene.dpNativeMusic&&typeof scene.dpNativeMusic.stop==='function')scene.dpNativeMusic.stop();
-  }catch(e){console.warn('[FoxPlanet R20] DP music transition stop',e);}
+  }catch(e){console.warn('[FoxPlanet] DP music transition stop',e);}
 }
 
 // the web scheduler used to mess with a few layered tracks, so leave it alone here
@@ -73,7 +73,7 @@ function syncCurrentDpMusic(){
     }
     if(action&&Array.from(action.options||[]).some(o=>Number(o.value)===Number(pref.actionId)))
       action.value=String(pref.actionId);
-  }catch(e){console.warn('[FoxPlanet R20] DP music UI sync',e);}
+  }catch(e){console.warn('[FoxPlanet] DP music UI sync',e);}
   try{
     const player=scene.dpNativeMusic;
     if(player&&typeof player.playSequenceId==='function'){
@@ -82,9 +82,9 @@ function syncCurrentDpMusic(){
       const info=typeof player.getCurrentActionInfo==='function'?player.getCurrentActionInfo():null;
       const curAction=info&&Number.isInteger(Number(info.actionId))?Number(info.actionId):0;
       if(active&&(curSeq!==Number(pref.sequenceId)||curAction!==Number(pref.actionId)))
-        Promise.resolve(player.playSequenceId(Number(pref.sequenceId),Number(pref.actionId))).catch(e=>console.warn('[FoxPlanet R20] DP map music correction',e));
+        Promise.resolve(player.playSequenceId(Number(pref.sequenceId),Number(pref.actionId))).catch(e=>console.warn('[FoxPlanet] DP map music correction',e));
     }
-  }catch(e){console.warn('[FoxPlanet R20] DP map music correction',e);}
+  }catch(e){console.warn('[FoxPlanet] DP map music correction',e);}
   return true;
 }
 
@@ -101,7 +101,7 @@ function patchSceneTransitions(){
     }catch(_){ }
     return old.apply(this,arguments);
   };
-  console.info('[FoxPlanet R20] DP scene-transition audio cleanup installed');
+  console.info('[FoxPlanet] DP scene-transition audio cleanup installed');
   return true;
 }
 

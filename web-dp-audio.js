@@ -99,19 +99,19 @@ function scheduleHeavy(ctx,action,notes,duration,generation,offset){
     const logical=clamp(o+Math.max(0,ctx.currentTime-passStart),o,duration),target=Math.min(duration,logical+HORIZON);
     if(target<=state.through+.25)return;
     const from=state.through,to=Math.min(duration,Math.max(target,from+STEP));this.__pfpR21PumpBusy=true;
-    try{await predecodeRecords(this,ctx,action,records,from,to,o);if(generation!==this.generation||this.__pfpR21ChunkState!==state)return;made+=scheduleRange(from,to,false);state.through=to;}catch(e){console.warn('[FoxPlanet R21] DP chunk predecode/schedule',e);}finally{this.__pfpR21PumpBusy=false;}
+    try{await predecodeRecords(this,ctx,action,records,from,to,o);if(generation!==this.generation||this.__pfpR21ChunkState!==state)return;made+=scheduleRange(from,to,false);state.through=to;}catch(e){console.warn('[FoxPlanet] DP chunk predecode/schedule',e);}finally{this.__pfpR21PumpBusy=false;}
   };
   this.__pfpR21PumpTimer=setInterval(pump,750);
   if(this.mutePollTimer!=null)clearInterval(this.mutePollTimer);
   this.mutePollTimer=setInterval(()=>{if(generation!==this.generation||this.masterGain!==gain)return;const m=!!(window.musicState&&window.musicState.muted)||!!window.__dpSfxMusicDuck,now=ctx.currentTime;gain.gain.cancelScheduledValues(now);gain.gain.setTargetAtTime(m?0:this.baseMasterGain*this.volumeScale,now,.1);},150);
   if(this.restartTimer!=null)clearTimeout(this.restartTimer);
   const remain=Math.max(1,duration-o+.25);this.restartTimer=setTimeout(()=>{if(generation===this.generation&&this.loopEnabled&&this.currentLogicalTrack!=null){this.stopScheduledAudio();this.schedulePass(ctx,action,notes,duration,generation,0);}},Math.max(1000,Math.floor(1000*remain)));
-  console.info('[FoxPlanet R21] streaming dense DP sequence '+action.sequenceId+'; initially scheduled '+made+' notes through '+through.toFixed(1)+'s instead of building the whole song at once.');
+  console.info('[FoxPlanet] streaming dense DP sequence '+action.sequenceId+'; initially scheduled '+made+' notes through '+through.toFixed(1)+'s instead of building the whole song at once.');
 }
 
 function stopAll(reason){
   const list=Array.from(PLAYERS);for(const p of list){try{p.stop();}catch(_){}clearChunkState(p);}PLAYERS.clear();
-  if(list.length)console.info('[FoxPlanet R21] stopped '+list.length+' old DP music player(s) before '+reason+'.');
+  if(list.length)console.info('[FoxPlanet] stopped '+list.length+' old DP music player(s) before '+reason+'.');
 }
 function patch(){
   const C=window.__pfpDPNativeMusicClass,p=C&&C.prototype;if(!p)return false;if(p.__pfpWebDpAudioR21)return true;p.__pfpWebDpAudioR21=true;
@@ -120,13 +120,13 @@ function patch(){
     if(!HEAVY_SEQUENCES.has(Number(action&&action.sequenceId)))return oldPre.apply(this,arguments);
     const peak=action.actionId===0?rawPeak(notes):0,records=prepareRecords(this,action,notes,peak),firstEnd=Math.min(this.currentDuration>0?this.currentDuration:1e9,18);
     await predecodeRecords(this,ctx,action,records,0,firstEnd,0);
-    console.info('[FoxPlanet R21] predecoded only the opening window for dense DP sequence '+action.sequenceId+'.');
+    console.info('[FoxPlanet] predecoded only the opening window for dense DP sequence '+action.sequenceId+'.');
   };
   p.schedulePassFixed=function(ctx,action,notes,duration,generation,offset){if(HEAVY_SEQUENCES.has(Number(action&&action.sequenceId)))return scheduleHeavy.call(this,ctx,action,notes,duration,generation,offset||0);return oldFixed.apply(this,arguments);};
   p.stopScheduledAudio=function(){clearChunkState(this);return oldScheduledStop.apply(this,arguments);};
   p.stop=function(){clearChunkState(this);const r=oldStop.apply(this,arguments);PLAYERS.delete(this);return r;};
   p.schedulePass=function(){PLAYERS.add(this);return oldSchedule.apply(this,arguments);};
-  console.info('[FoxPlanet R21] dense DP tracks now use look-ahead streaming; hard transition cleanup armed.');
+  console.info('[FoxPlanet] dense DP tracks now use look-ahead streaming; hard transition cleanup armed.');
   return true;
 }
 function patchSceneLoader(){const app=window.main;if(!app||typeof app._loadSceneDesc!=='function'||app.__pfpDpAudioR21ScenePatch)return false;app.__pfpDpAudioR21ScenePatch=true;const old=app._loadSceneDesc;app._loadSceneDesc=function(){stopAll('scene load');return old.apply(this,arguments);};return true;}
