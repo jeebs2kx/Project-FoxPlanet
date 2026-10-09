@@ -280,7 +280,7 @@ body[data-landing="1"] .landing-game-card { max-height:132px !important; }
       var p=typeof h.queryPermission==='function'?await h.queryPermission({mode:'read'}):'prompt';
       if(p==='granted') await mountDirectoryHandle(h,true);
       else modalStatus('Your previous GameData folder is remembered. Click EXISTING GAMEDATA FOLDER once to reconnect it.');
-    }catch(e){console.warn('[FoxPlanet web] saved folder restore',e);}
+    }catch(e){console.warn('[FoxPlanet] saved folder restore',e);}
     finally{restoring=false;}
   }
 
@@ -424,9 +424,9 @@ body[data-landing="1"] .landing-game-card { max-height:132px !important; }
         if(gt.state.data&&gt.state.data._pathBase===pb&&!gt.state.data.__browserRaw)return true;
         gt.state.data=data;gt.state.atlas=data.__atlas||[];gt.state.tintCache&&gt.state.tintCache.clear();
         gt.state.dataPromise=null;
-        console.info('[FoxPlanet web] Raw GameText ready:',pb,data.files.length,'files');
+        console.info('[FoxPlanet] Raw GameText ready:',pb,data.files.length,'files');
         return true;
-      }catch(e){console.warn('[FoxPlanet web] raw GameText fallback',e);return false;}
+      }catch(e){console.warn('[FoxPlanet] raw GameText fallback',e);return false;}
     })();
     rawBuilds[pb]=promise;
     if(!st.dataPromise)st.dataPromise=promise;

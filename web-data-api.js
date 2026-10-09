@@ -75,7 +75,7 @@ window.fetch=async function(input,init){let u;try{u=input instanceof Request?new
   if(/\/Project-FoxPlanet\/api\/sfa-audio\/list-samples$/i.test(path)&&method==='GET')return jsonResponse({ok:true,entries:[],banks:[]});
   if(/\/Project-FoxPlanet\/api\/sfa-audio\/sequence-sfx$/i.test(path)&&method==='GET')return jsonResponse({ok:false,message:'Sequence SFX lookup is unavailable in the static browser build.'});
   if(/\/Project-FoxPlanet\/api\/sfa-audio\/render-one$/i.test(path))return jsonResponse({ok:false,message:'Amuse music rendering is desktop-only. Voice streams do not need Amuse.'},501);
- }catch(e){console.warn('[FoxPlanet R11 web adapter]',e);return jsonResponse({ok:false,message:e&&e.message?e.message:String(e)},500);}
+ }catch(e){console.warn('[FoxPlanet]',e);return jsonResponse({ok:false,message:e&&e.message?e.message:String(e)},500);}
  return nativeFetch(input,init);
 };
 window.__PFP_R11={nativeFetch,readBytes,bytesResponse,mountedKeys,sequenceDataResponse,resetCaches:function(){caches.ownership.clear();caches.catalog.clear();caches.providers.clear();caches.streams.clear();caches.defs=null;}};
