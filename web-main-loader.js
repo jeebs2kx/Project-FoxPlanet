@@ -68,7 +68,7 @@ function kioskPanel(){
   if(panel)panel.dataset.pfpCurrentPatcher='1';
 }
 async function boot(){
-  const joined=(await Promise.all(PARTS.map(p=>text(p+'?v=097')))).join('');
+  const joined=(await Promise.all(PARTS.map(p=>text(p+'?v=097i')))).join('');
   const data=untar(await gunzip(b64(joined)));
   const early=data.get('pfp-updated-early-converter.js');
   const main=data.get('main-6b7e7ae7257abae7800d-095-dpeye2.js');
